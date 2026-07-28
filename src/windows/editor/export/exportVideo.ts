@@ -30,8 +30,10 @@ import {
   planFrameTimes,
   seekTo,
   waitUntil,
+  yieldToMain,
 } from "./exportCompositor";
 import { openSequentialMedia } from "./sequentialMedia";
+import { shouldYieldNow } from "./exportYield";
 import { AdaptiveEncodeQueue } from "./encodeBackpressure";
 import { ExportSink } from "./exportSink";
 import { openExportAudioTrack } from "./exportAudioTrack";
@@ -451,7 +453,9 @@ async function renderVideoToSink(
     let decodeMs = 0;
     let composeMs = 0;
     let captureMs = 0;
+    let yields = 0;
     const loopStart = performance.now();
+    let lastYieldAt = loopStart;
 
     for (const t of frameTimes) {
       const decodeStart = performance.now();
@@ -487,6 +491,20 @@ async function renderVideoToSink(
       timestamp += frameDuration;
       framesDone += 1;
       progress(framesDone);
+
+      // Hand the main thread back if we have held it too long. The frame clock
+      // is precomputed (`planFrameTimes`), so pausing here cannot change which
+      // source frame lands in which output frame — only whether the window
+      // repaints while it happens. Timing buckets are already closed above, so
+      // no yield latency is charged to decode/composite/capture.
+      const decision = shouldYieldNow(performance.now(), lastYieldAt);
+      if (decision.shouldYield) {
+        yields += 1;
+        await yieldToMain();
+        // Measured after the await: the timer's own latency should not count
+        // toward the next interval.
+        lastYieldAt = performance.now();
+      }
     }
     await encodeQueue.drain();
     await audioPump;
@@ -499,7 +517,8 @@ async function renderVideoToSink(
         `decode ${(decodeMs / framesDone).toFixed(1)}ms/frame, ` +
         `composite ${(composeMs / framesDone).toFixed(1)}ms/frame, ` +
         `capture ${(captureMs / framesDone).toFixed(1)}ms/frame, ` +
-        `encodeWait ${q.emaEncodeWaitMs.toFixed(1)}ms/frame, depth=${q.depth}` +
+        `encodeWait ${q.emaEncodeWaitMs.toFixed(1)}ms/frame, depth=${q.depth}, ` +
+        `yields=${yields}` +
         (uploads
           ? `, uploads=${uploads.uploads} skipped=${uploads.skipped}`
           : ""),
