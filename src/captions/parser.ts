@@ -13,7 +13,6 @@ function isFiniteNumber(value: unknown): value is number {
 function isWhisperControlToken(text: string): boolean {
 	const t = text.trim();
 	if (!t) return true;
-	// Newer whisper-cli emits [_BEG_], [_TT_440], [_EOT_], etc.
 	if (/^\[[^\]]+\]$/.test(t)) return true;
 	return /^_?(BEG|EOT|END|PAD|TT)_?$/i.test(t);
 }

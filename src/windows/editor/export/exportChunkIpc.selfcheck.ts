@@ -1,13 +1,4 @@
-/**
- * Runnable check for the export-chunk IPC payload shape. Run:
- *   node --experimental-strip-types src/windows/editor/export/exportChunkIpc.selfcheck.ts
- *
- * Mirrors Tauri's `scripts/process-ipc-message-fn.js`: a payload is sent as raw
- * bytes ONLY when the whole message is an ArrayBuffer / typed array / Array.
- * Anything else is JSON, and a nested Uint8Array becomes one decimal number per
- * byte. Regressing `writeExportChunk` back to an object payload would silently
- * reintroduce ~1.1 s of main-thread stringify per 16 MiB of exported video.
- */
+/** Selfcheck: export-chunk IPC uses raw bytes, not JSON. */
 
 export {}; // module scope — keeps top-level helpers out of the global namespace
 

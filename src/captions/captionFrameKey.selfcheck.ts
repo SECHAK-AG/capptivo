@@ -1,15 +1,5 @@
-/**
- * Runnable check for the caption layer's content key. Run:
- *   node_modules/.bin/jiti src/captions/captionFrameKey.selfcheck.ts
- *
- * (jiti rather than `--experimental-strip-types`, because this module's imports
- * are extensionless and only a bundler-style resolver follows them.)
- *
- * The GPU compositor repaints and re-uploads the caption texture only when this
- * key changes, so it has to be stable *within* a highlighted word and change on
- * every input that alters the drawn pixels. Too sticky and captions freeze; too
- * loose and we are back to an 8 MB upload every frame.
- */
+/** Selfcheck: caption layer content key stability. */
+
 import { captionFrameKey } from "./drawCaptions.ts";
 import { DEFAULT_CAPTION_SETTINGS } from "./settings.ts";
 import type { CaptionCue } from "./types.ts";

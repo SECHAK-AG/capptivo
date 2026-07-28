@@ -1,7 +1,5 @@
 /**
- * Composition + export sizing constants, ported from the web editor's
- * `constants/editor.ts`. These are the numbers that make desktop exports match
- * the web output. (Phase 1 consolidates these into the shared engine package.)
+ * Composition + export sizing constants (ported from web editor).
  */
 
 import type { ScreenContentCropNorm, ShadowPass } from "@/engine";
@@ -13,18 +11,7 @@ export const EXPORT_COMPOSITION = {
   devicePadding: 120,
 } as const;
 
-/**
- * The recording's drop-shadow, as the web editor stacks it: one broad ambient
- * pass for the spread plus two tighter ones to darken the contact edge. The
- * gradient between them is the whole point — a single pass, at any blur, only
- * ever reads as a flat dark halo around the frame.
- *
- * Every pass is *centred* on the recording. Turning the intensity up has to
- * grow the shadow outwards in every direction; an offset would slide the
- * frame's halo downwards instead, which is not what the slider means.
- *
- * Sigmas are authored against a 1080px short edge and scale from there.
- */
+/** Recording drop-shadow stack — multi-pass ambient + contact edge. */
 const RECORDING_SHADOW_LAYERS: readonly { sigma: number; opacity: number }[] = [
   { sigma: 48, opacity: 0.7 },
   { sigma: 16, opacity: 0.5 },
@@ -37,14 +24,7 @@ const SHADOW_REFERENCE_EDGE = 1080;
 /** Ceiling on a single pass, so the top of the slider stays a shadow. */
 const MAX_SHADOW_PASS_OPACITY = 0.85;
 
-/**
- * The recording's shadow stack for `intensity` (the 0–200 slider) on a stage
- * whose short edge is `shortEdge` px.
- *
- * Spread tracks the slider linearly so the shadow keeps growing outwards;
- * opacity saturates past the midpoint so the far end reads as a larger, softer
- * shadow rather than a black box.
- */
+/** Recording shadow passes for `intensity` (0–200 slider) at `shortEdge` px. */
 export function recordingShadowPasses(
   intensity: number,
   shortEdge: number,
@@ -166,11 +146,8 @@ export function isAspectRatioPresetId(
 }
 
 /**
- * The single source of truth for the composition stage size. `recording`
- * (Match) follows the **full** source dims; any other preset pins the stage
- * to that ratio's canvas. Screen content crop must NOT resize the stage —
- * it only changes the inset recording rect + texture sampling. Preview,
- * inspectors, and export all resolve through here.
+ * Single source of truth for composition stage size.
+ * Crop affects inset/sampling only — not stage dimensions.
  */
 export function resolveStageSize(
   presetId: AspectRatioPresetId,

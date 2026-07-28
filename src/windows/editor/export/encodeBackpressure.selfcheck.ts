@@ -1,7 +1,5 @@
-/**
- * Runnable check for encode backpressure math. Run:
- *   node --experimental-strip-types src/windows/editor/export/encodeBackpressure.selfcheck.ts
- */
+/** Selfcheck: encode backpressure math. */
+
 import {
   adaptEncodeDepth,
   clampEncodeDepth,

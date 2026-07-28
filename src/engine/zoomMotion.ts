@@ -6,9 +6,7 @@ import {
 } from "./smartFollowCursor.ts";
 
 /**
- * System cursor shape recorded per sample (ground truth from the OS). Ids
- * match the recorder's `CursorShape` serde names and the per-theme glyph
- * files under `public/cursors/` — all three must stay in sync.
+ * OS cursor shape ids — must match recorder serde and `public/cursors/` glyph files.
  */
 export const CURSOR_SHAPE_IDS = [
   "default",
@@ -87,23 +85,12 @@ export type ZoomFragment = {
   targetScale: number;
   easeIn: number;
   easeOut: number;
-  /**
-   * Follow-cursor only: follow speed / inertia (1–20). Higher = slower, heavier
-   * pan (weaker spring). Ignored for fixed-rect.
-   */
+  /** Follow-cursor pan inertia (1–20); higher = slower. Ignored for fixed-rect. */
   damping: number;
-  /**
-   * Normalized 0–1 rectangle relative to the screen recording.
-   */
   fixedRect?: FixedZoomRect;
-  /**
-   * When true (default), the face cam eases smaller while this fragment is
-   * active so the zoomed content stays in focus, then returns to full size.
-   */
+  /** When true (default), face cam eases smaller during this fragment. */
   shrinkFaceCamDuringZoom?: boolean;
-  /**
-   * Target face-cam scale at full zoom (0.35–1). 1 = no shrink; lower = smaller PiP.
-   */
+  /** Face-cam scale at full zoom (0.35–1). */
   faceCamZoomPresenceScale?: number;
 };
 
@@ -191,8 +178,7 @@ export function clampScreenContentCropNorm(
 }
 
 /**
- * Maps full-file normalized coords into the user crop [0,1]², for zoom / cursor
- * (Photoshop-style crop, then zoom still runs inside the cropped “window”).
+ * Map full-file NDC into user crop space (zoom/cursor run inside the cropped window).
  */
 export function createFullNormToContentNdcFromCrop(
   crop: ScreenContentCropNorm,
@@ -237,10 +223,7 @@ export function contentRectPixelsFromCrop(
   };
 }
 
-/**
- * Sample rate for offline zoom pan keyframe baking (preview + export share this).
- * Higher than output fps so ease/follow motion stays smooth when sampled at 24–60.
- */
+/** Offline zoom keyframe sample rate (preview + export). */
 export const ZOOM_MOTION_SAMPLE_FPS = 120;
 
 function clamp(value: number, min: number, max: number): number {
@@ -305,17 +288,10 @@ export function computeZoomEnvelope(
   const safeEaseIn = clamp(fragment.easeIn, 0, total / 2);
   const safeEaseOut = clamp(fragment.easeOut, 0, total / 2);
 
-  // EaseIn: fast-start, soft-land.
-  // easeInOutCubic's slow wind-up held the camera at centre for too long and
-  // read as "zoom centre, then pan".
   if (safeEaseIn > 0 && local < safeEaseIn) {
     return easeOutCubic(local / safeEaseIn);
   }
 
-  // EaseOut: fast-start, slow-settle de-zoom. Non-zero initial slope means
-  // the camera leaves the plateau the moment easeOut begins — no perceived
-  // "freeze" at full zoom — and the zero terminal slope still lands softly
-  // at scale = 1.
   if (safeEaseOut > 0 && local > total - safeEaseOut) {
     const progress = clamp((local - (total - safeEaseOut)) / safeEaseOut, 0, 1);
     return 1 - easeOutCubic(progress);
@@ -340,8 +316,6 @@ export function sampleCursorAtTime(
     return { x: last.x, y: last.y };
   }
 
-  // Binary search: last sample at or before `time` (tracks hold thousands of
-  // samples and this runs several times per rendered frame).
   let lo = 0;
   let hi = samples.length - 1;
   while (lo < hi) {
@@ -400,16 +374,9 @@ export const ZOOM_FOLLOW = {
   STIFFNESS: 9.2,
   DAMPING: 0.9,
   MAX_VELOCITY: 3.4,
-  /**
-   * Base time constant (seconds) for follow-cursor pan easing when
-   * `fragment.damping === 4`. Actual τ = this × (damping / 4); higher damping
-   * → slower follow. Used to derive spring stiffness (not first-order anymore).
-   */
+  /** Base follow τ at damping=4; actual τ = this × (damping / 4). */
   FOLLOW_CENTER_TAU_SEC: 0.55,
-  /**
-   * Follow-cursor spring damping ratio ζ (>1 overdamped: no wobble / “bubble”).
-   * Kept just above 1 so pans settle without reverse “hard brake” wobble.
-   */
+  /** Overdamped spring ζ for follow-cursor pan. */
   FOLLOW_SPRING_ZETA: 1.05,
 } as const;
 
@@ -454,11 +421,7 @@ export function getZoomTarget(
 }
 
 /**
- * Keep the zoom center inside the visible crop for `scale`.
- * At 1× the only valid center is the frame midpoint — returning the raw target
- * here would translate the scene and show black outside the recording.
- * Near an edge at higher scales the cursor stays off-center rather than
- * pulling the camera past the recording bounds.
+ * Keep zoom center inside visible crop for `scale`; at 1× forces frame midpoint.
  */
 export function clampTargetForScale(
   target: { x: number; y: number },
@@ -489,16 +452,7 @@ export function getSceneZoomTargetScale(fragment: ZoomFragment): number {
   return Math.max(1, fragment.targetScale ?? 1);
 }
 
-/**
- * Render scale for zoom.
- *
- * - `fixed-rect`: hyperbolic ramp `S / (S - (S-1)·env)` — linear shrink of
- *   the visible view rect. Paired with {@link computeSceneZoomRenderCenter},
- *   the focus trajectory on screen stays monotonic (no mid-zoom push away
- *   from centre then snap back = "two motions").
- * - `follow-cursor`: linear `1 + (S-1)·env` so it stays in sync with the
- *   keyframe sampler's `clampTargetForScale` timeline.
- */
+/** Render scale: hyperbolic ramp for fixed-rect, linear for follow-cursor. */
 export function computeSceneZoomScale(
   activeZoom: ZoomFragment | null | undefined,
   envelope: number,
@@ -543,14 +497,7 @@ export function computeSceneZoomPivotNdc(
   return { x: pan.x, y: pan.y };
 }
 
-/**
- * Focal for zoom at the current envelope/scale.
- *
- * Fixed-rect lerps stage centre → rect centre with `env` (snapping focal to
- * the rect the instant env>0 reads as pan-then-zoom). Follow-cursor uses the
- * keyframe pan as-is — the sampler already couples pan to scale on ease-in;
- * re-lerping would pull mid-zoom back toward centre.
- */
+/** Focal for zoom: fixed-rect lerps centre→rect; follow-cursor uses keyframe pan. */
 export function computeSceneZoomRenderCenter(
   activeZoom: ZoomFragment | null | undefined,
   pan: { x: number; y: number },
@@ -583,9 +530,7 @@ export function computeSceneZoomRenderCenter(
   return clampTargetForScale(raw, s);
 }
 
-/**
- * Apply scale/focal overrides on top of baked keyframe pan/scale.
- */
+/** Apply scale/focal overrides on baked keyframe pan/scale. */
 export function resolveSceneZoomView(
   activeZoom: ZoomFragment | null | undefined,
   sourceTime: number,
@@ -681,8 +626,6 @@ export function computeZoomKeyframes(
   const duration = fragment.end - fragment.start;
   const frameCount = Math.ceil(duration * fps);
 
-  // Start at frame centre. At 1× `clampTargetForScale` forces centre anyway —
-  // seeding the raw focus here would translate the frame and flash black void.
   let motionState: ZoomMotionState = { x: 0.5, y: 0.5, vx: 0, vy: 0 };
 
   const fixedTargetScale =
@@ -703,14 +646,8 @@ export function computeZoomKeyframes(
         })
       : null;
   const followSpringStiffness = followSpringStiffnessFromFragment(fragment);
-  // Position captured at the moment easeOut begins. During the dezoom we
-  // ignore the live cursor and lerp this anchor toward (0.5, 0.5) on the
-  // envelope timeline (see `easeOutPan` below), so pan and scale glide
-  // back together in a single smooth motion.
   let easeOutAnchor: { x: number; y: number } | null = null;
 
-  // Ease-in seed: cursor at fragment start (fixed). Chasing the live cursor
-  // while the clamp window opens with scale causes back/forth flicker.
   const easeInSeed =
     fragment.mode === "follow-cursor" && smartFollowPlanner
       ? sampleMappedPointsAtTime(smartFollowPlanner.samples, fragment.start)
@@ -721,14 +658,7 @@ export function computeZoomKeyframes(
   const easeOutStartT =
     safeEaseOut > 0 ? fragment.end - safeEaseOut : fragment.end;
 
-  /**
-   * EaseOut pan: linearly interpolate from the anchor (envelope = 1) to the
-   * unzoomed centre (envelope = 0). Both pan and scale then run on a single
-   * timeline, so the camera glides back in one smooth motion instead of
-   * sitting still while scale drops and then snapping to centre at the end.
-   * The lerp is provably inside the valid pan range for every intermediate
-   * scale; `clampTargetForScale` is kept as a defensive no-op safety net.
-   */
+  /** Lerp pan anchor → centre on the same envelope timeline as scale. */
   const easeOutPan = (
     anchor: { x: number; y: number },
     envelope: number,
@@ -760,8 +690,6 @@ export function computeZoomKeyframes(
       const cy = cursor.y;
 
       if (inEaseOut) {
-        // Capture plateau-end position once, then lerp toward centre on the
-        // same envelope timeline as scale (single smooth de-zoom motion).
         if (!easeOutAnchor) {
           easeOutAnchor = { x: motionState.x, y: motionState.y };
         }
@@ -772,9 +700,6 @@ export function computeZoomKeyframes(
           y: motionState.y,
         });
       } else if (envelope < 1) {
-        // Ease-in: open the clamp window toward the start-time seed (not the
-        // live cursor). Live chase here flickers whenever the pointer moves
-        // while scale is still ramping.
         const seed = easeInSeed ?? { x: cx, y: cy };
         const panned = clampTargetForScale(seed, zoomScale);
         motionState = { x: panned.x, y: panned.y, vx: 0, vy: 0 };
@@ -783,7 +708,6 @@ export function computeZoomKeyframes(
           y: motionState.y,
         });
       } else if (smartFollowRuntime) {
-        // Plateau: safe-zone focus + spring pan (see smartFollowCursor).
         const stepped = stepSmartFollowCursor({
           planner: smartFollowPlanner,
           runtime: smartFollowRuntime,
@@ -807,9 +731,6 @@ export function computeZoomKeyframes(
         y: clamp(fragment.fixedRect.y + fragment.fixedRect.height / 2, 0, 1),
       };
       const fixedCenter = toContent(rawFixed);
-      // Outside easeOut the camera tracks the fixed centre, clamped to the
-      // valid crop for the *current* scale — at 1× that forces centre (no
-      // black void), and as S grows the window opens toward the focus.
       if (inEaseOut) {
         if (!easeOutAnchor) {
           easeOutAnchor = { x: motionState.x, y: motionState.y };
@@ -821,10 +742,6 @@ export function computeZoomKeyframes(
         motionState = { x: clamped.x, y: clamped.y, vx: 0, vy: 0 };
       }
     }
-    // No cursor data: motionState is held unchanged.
-
-    // Final safety net: every sample must keep the recording/stage filling the
-    // frame. Near-edge focus stays off-center rather than revealing black void.
     const safe = clampTargetForScale(
       { x: motionState.x, y: motionState.y },
       zoomScale,

@@ -1,12 +1,6 @@
 /**
- * Shared export compositor. Decoded pixels come from a `CompositorMedia` pair:
- * either sequential frame surfaces (`sequentialMedia.ts`, the fast path) or
- * blob-URL-backed `<video>` elements (`loadElementMedia`, the seek fallback —
- * same-origin `blob:` via `mediaBlobUrl.ts` because `media://` is rejected by
- * WebGL/WebGPU texture upload on WKWebView even with CORS headers).
- *
- * Frame pixels are produced by the shared Pixi `FrameCompositor` so preview
- * and export stay WYSIWYG.
+ * Shared export compositor. Decoded pixels from `CompositorMedia` (sequential
+ * surfaces or blob-backed `<video>`). Preview and export share `FrameCompositor`.
  */
 
 import {
@@ -60,31 +54,17 @@ export type CompositorMedia = {
 };
 
 export type CompositorOptions = {
-  /**
-   * Keep the output canvas CPU-resident for `getImageData` (GIF quantization).
-   * MP4/WebM never read pixels back — leaving this off keeps compositing and
-   * the encoder hand-off on the GPU (export-performance-audit.md §3).
-   */
+  /** CPU-resident canvas for `getImageData` (GIF). */
   cpuReadback?: boolean;
-  /**
-   * Set false to force a DOM-backed canvas. Only the MediaRecorder fallback
-   * needs this — it calls `captureStream()`, which an OffscreenCanvas has not.
-   */
+  /** Force DOM canvas — MediaRecorder needs `captureStream()`. */
   offscreen?: boolean;
 };
 
-/**
- * Long edge the preview stage composites at (see `computeStageDimensionsForVideo`).
- * The look values the user tunes — face-cam size, device padding, corner radius,
- * caption font size — are absolute pixels calibrated against this resolution, so
- * the export MUST composite at the same reference and downscale, or those sizes
- * would balloon on a smaller output canvas (e.g. an 800px GIF).
- */
+/** Preview reference long edge — look values are calibrated at this resolution. */
 const COMPOSITION_REFERENCE_LONG_EDGE = 1920;
 
 async function loadVideo(src: string): Promise<HTMLVideoElement> {
   const video = document.createElement("video");
-  // Blob URLs are same-origin; leave crossOrigin unset to avoid CORS mode quirks.
   video.src = src;
   video.muted = true;
   video.playsInline = true;
@@ -93,8 +73,7 @@ async function loadVideo(src: string): Promise<HTMLVideoElement> {
   return video;
 }
 
-/** Load screen (+ camera) as blob-backed `<video>` elements — the legacy
- * decode path, still used by the seek-based fallback and MediaRecorder. */
+/** Blob-backed `<video>` elements — seek fallback and MediaRecorder path. */
 export async function loadElementMedia(
   screenUrl: string,
   cameraUrl: string | null,
@@ -154,10 +133,6 @@ export async function createExportCompositorFromMedia(
   height: number,
   options: CompositorOptions = {},
 ): Promise<ExportCompositor> {
-  // Composite at the preview's reference resolution and let the compositor
-  // downscale to the output. Keeps look values (face-cam, padding, captions)
-  // calibrated at the same absolute pixels as the preview — and on the GPU
-  // path the downscale never leaves the GPU.
   const longEdge = Math.max(width, height);
   const superscale =
     longEdge >= COMPOSITION_REFERENCE_LONG_EDGE
@@ -174,13 +149,9 @@ export async function createExportCompositorFromMedia(
       outputWidth: width,
       outputHeight: height,
       cpuReadback: options.cpuReadback,
-      // The encoder captures the canvas after `compose()` returns.
       preserveDrawingBuffer: true,
-      // Export runs flat out; it must not be paced by the display refresh.
       offscreen: options.offscreen !== false,
-      // Silent DOM fallback would cap export at ~display refresh — fail loud.
       requireOffscreen: options.offscreen !== false,
-      // Fixed output size: MSAA + per-upload mipmap regen are pure cost.
       antialias: false,
       mipmaps: false,
       profile: true,
@@ -192,11 +163,26 @@ export async function createExportCompositorFromMedia(
 
   const { video, camera } = media;
 
-  const store = useEditorStore.getState();
+  // Pin editor state at export start — mid-export edits must not land in the file.
+  const {
+    sourceAspect,
+    backgroundImage,
+    look,
+    zoomFragments,
+    recordingMetadata,
+    screenContentCrop,
+    cursorSettings,
+    faceCam,
+    captions,
+    captionSettings,
+    aspectRatioPresetId,
+    backgroundType,
+    sourceVideoSize,
+    segments: storeSegments,
+  } = useEditorStore.getState();
+
   const segments: TrimSegment[] =
-    store.segments.length > 0
-      ? store.segments
-      : createFullSegment(media.duration);
+    storeSegments.length > 0 ? storeSegments : createFullSegment(media.duration);
   const kept = totalKeptDuration(segments);
   if (kept <= 0) {
     frame.dispose();
@@ -204,23 +190,11 @@ export async function createExportCompositorFromMedia(
     throw new Error("nothing to export — all content is trimmed");
   }
 
-  const drawAt = (sourceTime: number) => {
-    const {
-      sourceAspect,
-      backgroundImage,
-      look,
-      zoomFragments,
-      recordingMetadata,
-      screenContentCrop,
-      cursorSettings,
-      faceCam,
-      captions,
-      captionSettings,
-      aspectRatioPresetId,
-      backgroundType,
-      sourceVideoSize,
-    } = useEditorStore.getState();
+  const cursorLoopReturn = cursorSettings.loopCursor
+    ? computeCursorLoopReturn(segments, media.duration)
+    : null;
 
+  const drawAt = (sourceTime: number) => {
     const zoom = getZoomPanAtTime(
       zoomFragments,
       recordingMetadata,
@@ -241,17 +215,13 @@ export async function createExportCompositorFromMedia(
         aspectRatioPresetId,
         backgroundType,
         sourceVideoSize,
-        // Baked keyframes go straight to the camera: they are already
-        // recording-rect NDC, enveloped and clamped.
         zoomScale: zoom.scale,
         zoomFocus: { x: zoom.x, y: zoom.y },
         ...resolveZoomReactiveState(active, sourceTime),
         screenContentCrop,
         cursorTime: sourceTime,
         cursorSettings,
-        cursorLoopReturn: cursorSettings.loopCursor
-          ? computeCursorLoopReturn(segments, media.duration)
-          : null,
+        cursorLoopReturn,
         recordingMetadata,
         faceCam,
       },
@@ -284,16 +254,8 @@ export async function createExportCompositorFromMedia(
 }
 
 /**
- * The deterministic frame clock: one source timestamp per output frame, in
- * ascending order across the kept segments. Both export paths (sequential
- * decode and per-frame seeks) and both formats (MP4/WebM and GIF) sample the
- * source at exactly these times, so frame selection — and therefore output —
- * is identical regardless of decode strategy.
- *
- * Samples the **center** of each 1/fps slot (not the leading edge). Exact
- * `t=0` often has no decodable sample yet on fMP4 / WebCodecs (`null` → blank
- * surface → black export with only the cursor). Mid-slot matches what a
- * primed `<video>` seek tends to paint for the first frame.
+ * Deterministic frame clock: one source timestamp per output frame.
+ * Samples the center of each 1/fps slot (avoids blank first frame on fMP4).
  */
 export function planFrameTimes(segments: TrimSegment[], fps: number): number[] {
   const times: number[] = [];

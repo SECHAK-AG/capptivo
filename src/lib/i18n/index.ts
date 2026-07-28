@@ -1,7 +1,4 @@
-/**
- * Tiny typed i18n. No runtime dependency: `translate()` looks a key up in the
- * active locale, falls back to English, and does optional `{name}` interpolation.
- */
+/** Tiny typed i18n with English fallback and `{name}` interpolation. */
 import { en, type TranslationKey } from "./en";
 import { fr } from "./fr";
 

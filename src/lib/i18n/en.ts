@@ -1,7 +1,4 @@
-/**
- * English — the source of truth for translation keys. `TranslationKey` is derived
- * from this object, so every other locale is type-checked to provide the same keys.
- */
+/** English — source of truth for `TranslationKey`. */
 export const en = {
   "app.name": "Capptivo",
   "app.untitled": "Untitled recording",

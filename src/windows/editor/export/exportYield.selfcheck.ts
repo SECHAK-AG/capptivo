@@ -1,12 +1,4 @@
-/**
- * Runnable check for export loop yield pacing. Run:
- *   node --experimental-strip-types src/windows/editor/export/exportYield.selfcheck.ts
- *
- * The policy is the whole point: too rare and the window freezes for the length
- * of the export, too frequent and every frame pays a timer round-trip. The loop
- * simulation at the end pins the rate, so changing
- * `EXPORT_YIELD_INTERVAL_MS` fails here rather than silently in production.
- */
+/** Selfcheck: export loop yield pacing. */
 
 import {
   EXPORT_YIELD_INTERVAL_MS,

@@ -1,10 +1,4 @@
-/**
- * Face-cam file capture inside the camera bubble WebView.
- *
- * On `camera://capture-start` we re-open getUserMedia (a stream opened before
- * ScreenCaptureKit often goes black). Preview stays in this same window at the
- * same size/position — no HUD handoff.
- */
+/** Face-cam file capture in the camera bubble WebView. */
 
 import { emit, listen } from "@tauri-apps/api/event";
 import { commands } from "@/ipc/bindings";
@@ -23,13 +17,7 @@ type PreviewApi = {
 let api: PreviewApi | null = null;
 let recorder: MediaRecorder | null = null;
 let subscribed = false;
-/**
- * Serializes chunk writes to the Rust sink. `Blob.arrayBuffer()` is async, so
- * writing each `ondataavailable` chunk fire-and-forget lets them land on disk
- * out of order and corrupts the streamed WebM — the file then fails to decode
- * in the editor and the face-cam disappears. Chaining keeps them in order and
- * gives us a single promise to await on flush.
- */
+/** Serializes chunk writes so async `arrayBuffer()` can't reorder WebM chunks on disk. */
 let writeChain: Promise<void> = Promise.resolve();
 
 function enqueueChunk(blob: Blob): void {
@@ -66,7 +54,6 @@ async function startCapture(projectId: string) {
     return;
   }
 
-  // Fresh stream after SCK starts — pre-SCK tracks go black in this WebView.
   const stream = await api.reopen(deviceId);
   const video = api.getVideo();
   if (!stream || !video) {
@@ -121,8 +108,6 @@ async function flushCapture() {
     }
   });
   recorder = null;
-  // Wait for every queued chunk (including the final one from stop()) to be
-  // written in order before closing the file — no fixed-sleep guesswork.
   await writeChain;
   await commands.finishCameraFile().catch(() => null);
   await emit(CAPTURE_FLUSHED, null);

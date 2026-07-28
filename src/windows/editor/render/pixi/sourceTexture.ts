@@ -1,23 +1,6 @@
 /**
- * Binds a decoded image — an `HTMLVideoElement`, a `VideoFrame` straight out of
- * WebCodecs, or a canvas — to a single long-lived Pixi texture, plus a cropped
- * view of it for zoom/pan.
- *
- * Two things matter here:
- *
- * 1. **The GPU texture is created once and re-uploaded in place.** Decoding
- *    hands us a brand-new `VideoFrame` object every frame; allocating a texture
- *    per frame would thrash the GPU allocator. Swapping the source's `resource`
- *    keeps the same texture and turns each frame into a `texSubImage2D` /
- *    `copyExternalImageToTexture` — no CPU round trip through a canvas.
- * 2. **Identical samples skip the upload.** `VideoFrame` identity equality
- *    covers the export path. Preview `<video>` elements use the RVFC stamp from
- *    `videoFrameTrack` (presentedFrames + seek generation) so VFR captures and
- *    paused look-tweaks do not re-upload unchanged pixels.
- * 3. **Minification is mipmapped only when opted in.** Recordings often
- *    out-resolve the stage; mipmaps kill shimmer, but regenerating the chain on
- *    every upload dominates compose. Export and preview leave them off — turn
- *    on only when interactive shimmer is worth the cost.
+ * Binds decoded images to a long-lived Pixi texture with crop support.
+ * Re-uploads in place; skips identical samples (VideoFrame identity / RVFC stamp).
  */
 
 import {
@@ -40,10 +23,7 @@ export type DecodedImage = HTMLVideoElement | HTMLCanvasElement | VideoFrame;
 export type DecodedSize = { width: number; height: number };
 
 export type SourceTextureOptions = {
-  /**
-   * Generate mipmaps when the source out-resolves the stage. Opt-in — regen
-   * cost on every upload usually exceeds the shimmer win for preview/export.
-   */
+  /** Generate mipmaps when source out-resolves the stage (opt-in). */
   mipmaps?: boolean;
 };
 
@@ -57,13 +37,7 @@ function isVideoFrame(value: unknown): value is VideoFrame {
 /** `HTMLMediaElement.HAVE_CURRENT_DATA` — pixels exist for the current position. */
 const HAVE_CURRENT_DATA = 2;
 
-/**
- * Whether uploading this element would actually move pixels to the GPU.
- *
- * `videoWidth` turns non-zero at `HAVE_METADATA`, one readyState *before* the
- * first sample is decoded, so an element can be bindable while still having
- * nothing to draw.
- */
+/** Whether this element has decodable pixels (not just metadata). */
 function hasDecodedPixels(video: HTMLVideoElement): boolean {
   return video.readyState >= HAVE_CURRENT_DATA;
 }
@@ -84,10 +58,7 @@ function sizeOf(image: DecodedImage): DecodedSize {
   return { width: image.width, height: image.height };
 }
 
-/**
- * Whether an immutable frame reference must be uploaded given what is already
- * on the GPU. Same object → skip; different object → upload.
- */
+/** True when `image` is a different immutable frame than `boundTo`. */
 export function immutableFrameNeedsUpload(
   boundTo: unknown,
   image: unknown,
@@ -95,14 +66,7 @@ export function immutableFrameNeedsUpload(
   return boundTo !== image;
 }
 
-/**
- * Whether `bind` must upload pixels for `image` given what is already on the GPU.
- *
- * `VideoFrame` pixels are immutable — identity equality means a skip.
- * `HTMLVideoElement` pixels mutate in place — use the RVFC stamp when the
- * caller has started `trackVideoFrames`; untracked elements always upload.
- * Canvases always upload (pixels mutate under a stable reference).
- */
+/** Whether `bind` must upload given what is already on the GPU. */
 export function needsGpuUpload(
   boundTo: DecodedImage | null,
   image: DecodedImage,
@@ -129,8 +93,7 @@ export class SourceTexture {
   private readonly mipmaps: boolean;
 
   /**
-   * @param stageLongEdge Longest stage edge this texture is composited into —
-   * only used to decide whether mipmaps are worth generating when enabled.
+   * @param stageLongEdge Longest stage edge — used for mipmap threshold when enabled.
    */
   constructor(
     label: string,
@@ -152,11 +115,7 @@ export class SourceTexture {
     this.skipped = 0;
   }
 
-  /**
-   * Point at this frame's decoded pixels, uploading them to the GPU when they
-   * actually changed. Returns the source size, or `null` when there is nothing
-   * decodable yet.
-   */
+  /** Upload when pixels changed; returns source size or `null`. */
   bind(image: DecodedImage | null): DecodedSize | null {
     if (!image) {
       this.release();
@@ -172,9 +131,6 @@ export class SourceTexture {
       this.source !== null &&
       this.size.width === size.width &&
       this.size.height === size.height &&
-      // Elements and canvases are stable objects we keep pointing at; a
-      // VideoFrame is a fresh object each *distinct* sample, so size+kind
-      // gates texture reuse while identity gates the upload below.
       (isVideoFrame(image)
         ? isVideoFrame(this.boundTo)
         : this.boundTo === image);
@@ -196,7 +152,6 @@ export class SourceTexture {
     }
 
     if (isVideoFrame(image)) {
-      // Same texture, new frame: swap the upload resource in place.
       this.source!.resource = image;
     }
 
@@ -206,10 +161,7 @@ export class SourceTexture {
     return size;
   }
 
-  /**
-   * A texture showing `rect` (in source pixels) of the bound image. The
-   * returned texture is reused across frames — callers must not destroy it.
-   */
+  /** Cropped view of the bound image; reused across frames — do not destroy. */
   crop(rect: Rectangle): Texture {
     const base = this.base;
     if (!base)
@@ -234,9 +186,6 @@ export class SourceTexture {
       frame.height !== rect.height
     ) {
       frame.copyFrom(rect);
-      // `update()`, not `updateUvs()`: the sprite only re-packs its batched
-      // vertices when the texture emits, so skipping the event leaves the zoom
-      // crop one frame stale (or frozen entirely).
       this.cropped.update();
     }
     return this.cropped;
@@ -249,12 +198,6 @@ export class SourceTexture {
   private rememberBound(image: DecodedImage): void {
     this.boundTo = image;
     if (isVideoElement(image)) {
-      // Only claim an upload once the element really had pixels. A bind at
-      // HAVE_METADATA uploads an empty texture; recording a stamp for it would
-      // let the RVFC gate skip every later upload and leave that blank texture
-      // frozen on the stage (background and face-cam keep drawing, so the
-      // screen layer simply vanishes). A null stamp forces the next compose to
-      // upload for real — `loadeddata` / `seeked` already schedule one.
       const stamp = hasDecodedPixels(image) ? videoFrameStamp(image) : null;
       this.boundVideoStamp = stamp
         ? {
@@ -271,11 +214,6 @@ export class SourceTexture {
     image: DecodedImage,
     size: DecodedSize,
   ): VideoSource | CanvasSource | ImageSource {
-    // Mipmaps prevent the shimmer bilinear leaves when a retina capture is
-    // minified onto a smaller stage. They are not free: Pixi regenerates the
-    // whole chain on every upload, which is a render pass per level — so this
-    // shows up in the profiler's `screenUpload` phase and is the first thing
-    // to check when compositing is slow.
     const minification = Math.max(size.width, size.height) / this.stageLongEdge;
     const autoGenerateMipmaps =
       this.mipmaps && minification > MIPMAP_MINIFICATION_THRESHOLD;
@@ -285,9 +223,6 @@ export class SourceTexture {
     );
 
     if (isVideoElement(image)) {
-      // Pixi's VideoSource defaults to autoPlay + rAF-driven updates. Both are
-      // wrong here: playback is owned by the editor's clock, and the export
-      // path has no rAF at all — frames are pulled explicitly by `bind()`.
       const source = new VideoSource({
         resource: image,
         autoPlay: false,
@@ -307,7 +242,6 @@ export class SourceTexture {
         height: size.height,
         label: this.label,
         autoGenerateMipmaps,
-        // Frames are swapped every tick; never let the GC unload underneath us.
         autoGarbageCollect: false,
       });
     }
@@ -327,16 +261,7 @@ export class SourceTexture {
     this.base?.destroy(false);
     this.base = null;
     if (this.source) {
-      // The decoded sample is never ours to tear down — detach it so Pixi's
-      // destroy() is a pure GPU teardown:
-      //
-      // - A VideoFrame belongs to the decoder and may already be closed.
-      // - A <video> belongs to React. VideoSource.destroy() pauses it, sets
-      //   `src = ""` and calls load() — that fires MEDIA_ERR_SRC_NOT_SUPPORTED
-      //   and permanently kills playback, because React never re-assigns an
-      //   unchanged `src` prop. Any compositor remount would black the stage.
-      //   We build these with `autoLoad: false`, so VideoSource never attached
-      //   the listeners its destroy() removes: detaching costs us nothing.
+      // Detach decoded samples before destroy — React owns `<video>` elements.
       if (this.source instanceof VideoSource) {
         this.source.autoUpdate = false;
         this.source.resource = null as unknown as HTMLVideoElement;

@@ -1,8 +1,6 @@
 /**
- * Export: composite the timeline to MP4/WebM (MediaRecorder) or GIF (gifenc).
- *
- * Export media is loaded as blob: URLs so the canvas is not tainted by media://.
- * That lets GIF read pixels; MP4 still uses captureStream + MediaRecorder.
+ * Export: composite timeline to MP4/WebM (WebCodecs) or GIF.
+ * Media loads as blob: URLs so the canvas stays untainted for GPU readback.
  */
 
 import { save } from "@tauri-apps/plugin-dialog";
@@ -88,8 +86,6 @@ export async function exportProject(
   const { project, screenUrl, sourceVideoSize } = store;
   if (!project || !screenUrl || !sourceVideoSize) return;
 
-  // Same stage resolution the preview composites at — the ratio picker is the
-  // single source of output size.
   const stage = resolveStageSize(
     store.aspectRatioPresetId,
     sourceVideoSize,
@@ -102,9 +98,6 @@ export async function exportProject(
   store.setExporting(true);
   store.setExportError(null);
 
-  // Pick the destination up front: the encoder streams straight into this file
-  // as frames are produced, so peak memory is one chunk rather than the whole
-  // encoded video. Cancelling here also skips all render work.
   let path: string | null = null;
   try {
     store.setExportStatus("Choose where to save…");
@@ -121,13 +114,9 @@ export async function exportProject(
 
   store.setExportStatus(resolved.format === "gif" ? "Rendering GIF…" : "Rendering your file.");
   let sink: ExportSink | null = null;
-  // Prepared audio track (trimmed/enhanced) built while seekable-ensure runs —
-  // when mediabunny can open it, packets mux into the container during encode
-  // and the post-export FFmpeg attach is skipped.
   let audioPrep: Promise<PreparedExportAudio | null> | null = null;
   let audioAbsPath: string | null = null;
   try {
-    // Kick audio prepare before ensureSeekable so FFmpeg overlaps that work.
     if (resolved.format !== "gif") {
       const outName = `capptivo-export-audio-${crypto.randomUUID()}.${
         resolved.container === "webm" ? "webm" : "m4a"
@@ -138,17 +127,7 @@ export async function exportProject(
       });
     }
 
-    // Older recordings were written as fragmented MP4, which WebKit's export
-    // seek path (used when WebCodecs can't decode the source codec) can't seek
-    // past its first fragment — freezing the export. Guarantee a seekable
-    // progressive source before rendering; a fast no-op once migrated.
-    console.info(`[export] ensureSeekableRecording(${project.id})…`);
-    const t0 = performance.now();
     await commands.ensureSeekableRecording(project.id);
-    console.info(
-      `[export] ensureSeekableRecording done in ${(performance.now() - t0).toFixed(0)}ms ` +
-        `screenUrl=${screenUrl}`,
-    );
     sink = await ExportSink.open(path);
 
     if (resolved.format === "gif") {
@@ -167,8 +146,6 @@ export async function exportProject(
       const saved = await sink.finish();
       sink = null;
 
-      // In-container mux succeeded → skip the rewrite. Otherwise fall back to
-      // FFmpeg attach (or the classic one-shot mux if prepare also failed).
       if (!audioMuxed) {
         if (prepared) {
           store.setExportStatus("Adding audio…");
@@ -195,8 +172,6 @@ export async function exportProject(
     await sink?.abort(e);
     useEditorStore.getState().setExportError(describeError(e));
   } finally {
-    // Prepare may still be in flight if we failed before awaiting it — wait and
-    // delete so capptivo-export-audio-* never accumulates in the project dir.
     if (!audioAbsPath && audioPrep) {
       const leftover = await audioPrep.catch(() => null);
       audioAbsPath = leftover?.absPath ?? null;
@@ -211,11 +186,7 @@ export async function exportProject(
   }
 }
 
-/**
- * Mux the recorded audio into the just-saved (video-only) export, trimmed to the
- * same kept segments the video uses. Rust runs FFmpeg (`-c:v copy`, so no video
- * re-encode) and no-ops for silent recordings.
- */
+/** Mux recorded audio into the saved video (FFmpeg, `-c:v copy`). */
 async function muxRecordedAudio(
   videoPath: string,
   preset: ExportAudioEnhance,
@@ -239,11 +210,7 @@ async function muxRecordedAudio(
   });
 }
 
-/**
- * Trim (+ optional enhance) the recorded audio to a sidecar file in the project
- * directory (so the WebView can read it over `media://`). Returns absolute path
- * + media URL, or `null` when there is no audio.
- */
+/** Trim/enhance audio to a sidecar file; returns paths or `null` if silent. */
 type PreparedExportAudio = { absPath: string; mediaUrl: string };
 
 async function prepareExportAudioTrack(
@@ -275,12 +242,7 @@ async function prepareExportAudioTrack(
   return { absPath, mediaUrl: mediaUrl(project.id, outName) };
 }
 
-/**
- * Progress writes go through the store, which re-renders the export UI. At 60
- * fps over a few minutes that is tens of thousands of React renders competing
- * with the encode loop for the main thread, for a bar that moves in percent.
- * Report only when the rounded percentage actually changes.
- */
+/** Throttle progress updates to rounded-percent changes only. */
 function throttledProgress(totalFrames: number): (framesDone: number) => void {
   let lastPercent = -1;
   return (framesDone) => {
@@ -297,7 +259,7 @@ function codecCandidates(container: "mp4" | "webm"): VideoCodec[] {
   return container === "webm" ? ["vp9", "av1", "vp8"] : ["avc", "hevc"];
 }
 
-/** Keyframe spacing: fewer I-frames → less encoder work at the same bitrate. */
+/** Keyframe spacing — fewer I-frames at the same bitrate. */
 const EXPORT_KEYFRAME_INTERVAL_SEC = 4;
 
 type VideoEncodeTuning = {
@@ -306,12 +268,7 @@ type VideoEncodeTuning = {
   hardwareAcceleration: NonNullable<VideoEncodingAdditionalOptions["hardwareAcceleration"]>;
 };
 
-/**
- * Pick the fastest supported encoder config without changing the caller's
- * bitrate / resolution. Prefers hardware, then tries `realtime` before
- * `quality`. Backpressure in the export loop keeps the encoder fed so
- * realtime does not need to drop frames to keep up.
- */
+/** Pick fastest supported encoder config (hardware + realtime preferred). */
 async function pickVideoEncodeTuning(
   codecs: VideoCodec[],
   width: number,
@@ -349,21 +306,8 @@ async function pickVideoEncodeTuning(
 }
 
 /**
- * Deterministic export: decode each source frame, composite it, and encode it
- * via WebCodecs (mediabunny). Unlike the realtime MediaRecorder path this does
- * not depend on the machine keeping up with playback — it renders exactly
- * `fps` frames per second regardless of how long each composite takes, so the
- * output is always smooth at the chosen frame rate with no dropped frames or
- * flicker.
- *
- * Decoding is sequential (each source packet decoded once — see
- * `sequentialMedia.ts`); if that path can't initialize, per-frame `<video>`
- * seeks are the fallback with identical frame selection. Falls back to
- * MediaRecorder if the browser can't encode via WebCodecs at all.
- *
- * Encode queue depth is adaptive (`AdaptiveEncodeQueue`): seeded by output
- * megapixels, then nudged from composite vs encode timing so the encoder stays
- * fed without unbounded in-flight frames.
+ * Deterministic WebCodecs export: decode each frame, composite, encode at fixed fps.
+ * Sequential decode when available; per-frame seek fallback; MediaRecorder last resort.
  */
 async function renderVideoToSink(
   sink: ExportSink,
@@ -380,8 +324,6 @@ async function renderVideoToSink(
       : null;
 
   if (!tuning) {
-    // Old webview without WebCodecs: keep the realtime capture path working.
-    // In-container audio mux needs the mediabunny Output; fall back to post-mux.
     await renderVideoViaMediaRecorder(sink, screenUrl, cameraUrl, pickMime(container).mime, params);
     return false;
   }
@@ -397,11 +339,7 @@ async function renderVideoToSink(
     format:
       container === "webm"
         ? new WebMOutputFormat()
-        // `fastStart: false` writes metadata at the end — the least-memory,
-        // stream-friendly layout. Paired with the positioned sink it never
-        // buffers the whole file (`"in-memory"` would).
         : new Mp4OutputFormat({ fastStart: false }),
-    // Pipe each produced chunk straight to disk; 16 MiB batches keep IPC cheap.
     target: new StreamTarget(sink.writable(), { chunked: true }),
   });
 
@@ -432,8 +370,6 @@ async function renderVideoToSink(
 
     const frameDuration = 1 / fps;
     const frameTimes = planFrameTimes(segments, fps);
-    // Pixi uploads a decoded `VideoFrame` directly (canvas paint only for
-    // rotated samples — see `frameSurface`).
     const reader =
       sequential?.begin(frameTimes, { mode: "video-frame" }) ?? null;
     const encodeQueue = new AdaptiveEncodeQueue(width, height, fps);
@@ -464,8 +400,6 @@ async function renderVideoToSink(
       } else {
         await seekTo(video, t);
         if (camera) await seekTo(camera, t).catch(() => undefined);
-        // Cheap freeze detector: a seek that lands far from the target means the
-        // element stopped honoring seeks (the fragmented-MP4 clamp signature).
         if (Math.abs(video.currentTime - t) > 0.1 && driftLogs < 10) {
           driftLogs += 1;
           console.warn(
@@ -481,28 +415,17 @@ async function renderVideoToSink(
       decodeMs += composeStart - decodeStart;
       composeMs += frameComposeMs;
 
-      // `add()` snapshots the surface into a VideoFrame synchronously — on a
-      // GPU-backed surface that is a real copy, so it gets its own bucket
-      // rather than hiding inside "encode wait".
       const encoded = source.add(timestamp, frameDuration);
       captureMs += performance.now() - captureStart;
-      // Awaiting happens inside the queue only when depth is hit.
       await encodeQueue.push(encoded, frameComposeMs);
       timestamp += frameDuration;
       framesDone += 1;
       progress(framesDone);
 
-      // Hand the main thread back if we have held it too long. The frame clock
-      // is precomputed (`planFrameTimes`), so pausing here cannot change which
-      // source frame lands in which output frame — only whether the window
-      // repaints while it happens. Timing buckets are already closed above, so
-      // no yield latency is charged to decode/composite/capture.
       const decision = shouldYieldNow(performance.now(), lastYieldAt);
       if (decision.shouldYield) {
         yields += 1;
         await yieldToMain();
-        // Measured after the await: the timer's own latency should not count
-        // toward the next interval.
         lastYieldAt = performance.now();
       }
     }
@@ -532,7 +455,6 @@ async function renderVideoToSink(
     }
     return audioMuxed;
   } catch (e) {
-    // Release the encoder on failure; finalize() is what normally closes it.
     if (output.state === "started") await output.cancel().catch(() => undefined);
     throw e;
   } finally {
@@ -550,8 +472,6 @@ async function renderVideoViaMediaRecorder(
   params: ResolvedExportParams,
 ): Promise<void> {
   const { width, height, fps, bitrate } = params;
-  // `captureStream` is a DOM-canvas API, so this path opts out of the
-  // offscreen surface the WebCodecs loop uses.
   const session = await createExportCompositor(screenUrl, cameraUrl, width, height, {
     offscreen: false,
   });
@@ -563,7 +483,6 @@ async function renderVideoViaMediaRecorder(
 
   try {
     const TIMESLICE_MS = 250;
-    // fps=0 + requestFrame: WebKit often muxes 0 packets with timed captureStream.
     const stream = canvas.captureStream(0);
     const track = stream.getVideoTracks()[0] as CanvasCaptureTrack | undefined;
     const recorder = new MediaRecorder(
@@ -572,8 +491,6 @@ async function renderVideoViaMediaRecorder(
         ? { mimeType: mime, videoBitsPerSecond: bitrate }
         : { videoBitsPerSecond: bitrate },
     );
-    // MediaRecorder emits sequential blobs; append each to disk in order as it
-    // arrives (serialized via the chain) so we never hold the whole file.
     let writeChain: Promise<void> = Promise.resolve();
     recorder.ondataavailable = (e) => {
       if (e.data.size === 0) return;
@@ -596,8 +513,6 @@ async function renderVideoViaMediaRecorder(
       const t = video.currentTime;
       if (camera && Number.isFinite(camera.duration) && camera.duration > 0) {
         const target = Math.min(t, Math.max(0, camera.duration - 0.001));
-        // Only hard-seek on large drift — re-seeking a playing element every
-        // frame stutters the face-cam. Small drift resolves as it plays.
         if (Math.abs(camera.currentTime - target) > 0.25) camera.currentTime = target;
       }
       drawAt(t);
@@ -614,7 +529,7 @@ async function renderVideoViaMediaRecorder(
       raf = requestAnimationFrame(draw);
     };
 
-    // Prime one painted frame before the recorder starts.
+    // Prime one frame before recording starts.
     drawAt(segments[0]?.start ?? 0);
     track?.requestFrame?.();
     recorder.start(TIMESLICE_MS);
@@ -638,7 +553,7 @@ async function renderVideoViaMediaRecorder(
     if (recorder.state === "recording") recorder.requestData();
     recorder.stop();
     await stopped;
-    await writeChain; // flush any writes still queued from the final blobs
+    await writeChain;
 
     if (sink.bytesWritten < 256) {
       throw new Error("export produced an empty video — try again or use a longer clip");

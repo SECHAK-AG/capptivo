@@ -1,7 +1,4 @@
-/**
- * One-shot camera TCC prompt for the recorder WebView.
- * Stops tracks immediately — the face-cam bubble owns the real preview stream.
- */
+/** One-shot camera TCC prompt — stops tracks immediately; preview lives in the bubble window. */
 export async function probeCameraPermission(): Promise<boolean> {
   if (!navigator.mediaDevices?.getUserMedia) return false;
   try {

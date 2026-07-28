@@ -1,10 +1,4 @@
-/**
- * Runnable check for GIF quantize ordered-drain queue. Run:
- *   node --experimental-strip-types src/windows/editor/export/gifQuantizePool.selfcheck.ts
- *
- * Workers need a DOM; this only covers the ordering/backpressure helper that
- * keeps writeFrame in submission order when quantization completes out of order.
- */
+/** Selfcheck: GIF quantize ordered-drain queue. */
 
 import { OrderedPromiseQueue } from "./gifQuantizePool.ts";
 

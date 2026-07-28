@@ -1,6 +1,4 @@
-/**
- * Flush helper for the camera bubble WebView (used by the recorder store).
- */
+/** Flush helper for the camera bubble WebView. */
 
 import { listen } from "@tauri-apps/api/event";
 import { commands } from "@/ipc/bindings";
@@ -17,9 +15,6 @@ export async function flushCameraCaptureWithTimeout(ms = 4000): Promise<void> {
         resolve();
       };
       const timer = window.setTimeout(finish, ms);
-      // Register the listener *before* asking the camera window to flush, so a
-      // fast flush can't emit "flushed" before we're listening and strand us on
-      // the full timeout.
       void listen("camera://capture-flushed", finish).then((un) => {
         unlisten = un;
         if (settled) {

@@ -1,10 +1,5 @@
 /**
- * Follow-cursor camera for zoom fragments.
- *
- * Logical focus uses a safe-zone recenter (only moves when the cursor leaves
- * an inner region of the zoomed view). A spring softens the rendered pan
- * toward that focus — never the reverse: safe-zone is evaluated against the
- * committed focus, not the lagging spring position.
+ * Follow-cursor zoom: safe-zone recenter on committed focus, spring on rendered pan.
  */
 import type {
   RecordingMetadata,
@@ -150,15 +145,7 @@ export function recenterFocusWhenCursorLeavesSafeZone(
   return clampTargetForScale({ x: nextX, y: nextY }, scale);
 }
 
-/**
- * First index whose `t >= time`, or `length` when every sample precedes it.
- *
- * Cursor tracks hold one sample per 60 Hz tick for the whole recording — tens
- * of thousands on a long one — and a planner is rebuilt for every fragment
- * touched by a zoom or crop edit. Scanning the track linearly made that
- * O(recording), so a pointer drag re-walked every sample per event. Ascending
- * `t` is already relied on by `sampleCursorAtTime`.
- */
+/** Binary search: first index with `t >= time`. */
 function lowerBoundByTime(samples: readonly { t: number }[], time: number): number {
   let lo = 0;
   let hi = samples.length;
@@ -204,8 +191,6 @@ export function createSmartFollowPlanner(
   const rangeStart = fragment.start - pad;
   const rangeEnd = fragment.end + pad;
 
-  // Only the window the fragment can actually read is mapped: seek to its
-  // first sample, then walk until the range closes.
   const raw = metadata.cursorSamples;
   const samples: MappedPoint[] = [];
   for (let i = lowerBoundByTime(raw, rangeStart); i < raw.length; i += 1) {
@@ -220,8 +205,6 @@ export function createSmartFollowPlanner(
   }
 
   if (samples.length === 0) {
-    // The fragment sits outside the track entirely — seed it with the nearest
-    // recorded position so the camera has something to hold.
     const index = lowerBoundByTime(raw, fragment.start);
     const fallback = index < raw.length ? raw[index] : raw[raw.length - 1];
     const mapped = toContent({ x: fallback.x, y: fallback.y });
@@ -298,8 +281,6 @@ function stepSpringMotion(
   let newX = clamp(state.x + newVx * safeDt, 0, 1);
   let newY = clamp(state.y + newVy * safeDt, 0, 1);
 
-  // Overdamped springs shouldn't reverse past the target when it moves every
-  // sample (ease curves / relocating focus) — that reads as a hard brake.
   if (zeta >= 1) {
     if ((state.x <= target.x && newX > target.x) || (state.x >= target.x && newX < target.x)) {
       newX = target.x;
@@ -343,7 +324,6 @@ export function stepSmartFollowCursor(input: SmartFollowStepInput): {
   const innerFraction = config.safeZoneInnerFraction;
   const click = findActiveClick(planner.clicks, time, config.clickHoldSec);
 
-  // Logical focus: click bias, else safe-zone recenter vs committed focus.
   const panTarget = click
     ? clampTargetForScale({ x: click.x, y: click.y }, scale)
     : recenterFocusWhenCursorLeavesSafeZone(

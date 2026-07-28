@@ -1,8 +1,4 @@
-/**
- * App settings (appearance + language) exposed through one context. The provider
- * keeps the resolved theme in sync with the OS when the mode is `system`, persists
- * both preferences, and reflects the language on <html lang>.
- */
+/** App settings context — theme, language, persistence, and `<html lang>`. */
 import {
   createContext,
   useCallback,
@@ -50,7 +46,6 @@ export function SettingsProvider({ children }: { children: ReactNode }) {
   const [resolvedTheme, setResolvedTheme] = useState<ResolvedTheme>(() => resolveTheme(theme));
   const [language, setLanguageState] = useState<Language>(getStoredLanguage);
 
-  // Apply + persist theme whenever the mode changes.
   useEffect(() => {
     const resolved = resolveTheme(theme);
     setResolvedTheme(resolved);
@@ -58,7 +53,6 @@ export function SettingsProvider({ children }: { children: ReactNode }) {
     storeTheme(theme);
   }, [theme]);
 
-  // Track OS appearance while following the system.
   useEffect(() => {
     if (theme !== "system" || typeof window === "undefined" || !window.matchMedia) return;
     const media = window.matchMedia("(prefers-color-scheme: dark)");
@@ -71,7 +65,6 @@ export function SettingsProvider({ children }: { children: ReactNode }) {
     return () => media.removeEventListener("change", onChange);
   }, [theme]);
 
-  // Persist + reflect the language on <html lang> (covers the initial value too).
   useEffect(() => {
     storeLanguage(language);
     if (typeof document !== "undefined") document.documentElement.lang = language;

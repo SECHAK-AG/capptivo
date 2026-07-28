@@ -1,20 +1,6 @@
 /**
  * Same-origin media URLs for GPU compositing.
- *
- * WKWebView treats `media://` as cross-origin even with CORS headers, so
- * WebGL `texImage2D` and WebGPU `copyExternalImageToTexture` both throw
- * SecurityError when uploading `<video>` frames. Same-origin `blob:` URLs
- * work (already used for export).
- *
- * Assembled from bounded Range reads so the Rust `media://` handler never
- * holds a multi-GB file in one `Vec` (see media_protocol.rs).
- *
- * Those reads run **concurrently**. Each window is a full Tauri IPC round-trip
- * (disk read on the Rust side, response copied into the WebView), so reading
- * them one at a time left both the disk and the IPC channel idle waiting on
- * latency rather than bandwidth — and nothing can paint until the last one
- * lands. Windows are written back by index, never appended, so completion
- * order cannot affect the assembled bytes.
+ * `media://` is cross-origin on WKWebView; assembled via bounded Range reads.
  */
 
 /** Window size for ranged reads. */
@@ -30,14 +16,7 @@ export const MEDIA_FETCH_CONCURRENCY = 4;
 const MIN_MEDIA_BYTES = 64;
 
 /**
- * Above this, the editor waits for the 1280-long-edge preview proxy rather than
- * copying the original into the JS heap.
- *
- * The original is only ever a stopgap until the transcode lands: on a long
- * recording that stopgap is multi-gigabyte, races the transcode for the same
- * file, and is discarded the moment the proxy arrives. ~256 MiB is a couple of
- * minutes of screen capture, so short recordings still open instantly against
- * the original.
+ * Above this, wait for the preview proxy instead of copying the original into JS heap.
  */
 export const MEDIA_DIRECT_PREVIEW_LIMIT = 256 * 1024 * 1024;
 
@@ -75,7 +54,6 @@ export async function toBlobMediaUrl(
   let concurrency: number;
   switch (probe.kind) {
     case "whole":
-      // Server answered the probe with the entire body — nothing left to read.
       parts = [probe.body];
       concurrency = 1;
       break;
@@ -84,7 +62,6 @@ export async function toBlobMediaUrl(
       concurrency = Math.min(MEDIA_FETCH_CONCURRENCY, parts.length);
       break;
     case "unknown":
-      // No total to plan windows from; walk them until EOF as we always did.
       parts = await readSequentially(url, signal);
       concurrency = 1;
       break;
@@ -109,24 +86,12 @@ export async function toBlobMediaUrl(
   return { src, revoke: () => URL.revokeObjectURL(src) };
 }
 
-/**
- * What a one-byte probe told us about the resource.
- *
- * `ranged` is the path every real `media://` response takes; the other two
- * exist so a server that answers a Range with the whole body, or without a
- * `Content-Range`, still loads rather than failing.
- */
 type MediaProbe =
   | { kind: "whole"; contentType: string; body: ArrayBuffer }
   | { kind: "ranged"; contentType: string; total: number }
   | { kind: "unknown"; contentType: string };
 
-/**
- * Learn the resource's size from a single one-byte ranged read, so the windows
- * can be planned up front and issued in parallel instead of discovered one at a
- * time. `src-tauri/src/media_protocol.rs` exposes `Content-Range` via
- * `Access-Control-Expose-Headers`, which is what makes this readable here.
- */
+/** Probe size via one-byte ranged read (`Content-Range` from Rust handler). */
 async function probeMedia(
   url: string,
   signal: AbortSignal | undefined,
@@ -147,7 +112,6 @@ async function probeMedia(
   }
 
   const total = totalFromContentRange(res);
-  // Drain the one-byte body so the response is not left half-read.
   await res.arrayBuffer();
   return total === null
     ? { kind: "unknown", contentType }
@@ -160,14 +124,7 @@ function totalFromContentRange(res: Response): number | null {
   return Number.isFinite(total) && total > 0 ? total : null;
 }
 
-/**
- * Byte size of a media resource, from the same one-byte ranged read the blob
- * assembler uses — so a caller can decide *whether* to materialize something
- * without paying to materialize it.
- *
- * Returns `null` when the server reported no total; callers must then decide
- * without a size rather than treat the resource as absent.
- */
+/** Byte size without materializing; `null` when server reports no total. */
 export async function probeMediaSize(
   url: string,
   options: ToBlobMediaUrlOptions = {},
@@ -183,14 +140,7 @@ export async function probeMediaSize(
   }
 }
 
-/**
- * Read `total` bytes as fixed windows, `MEDIA_FETCH_CONCURRENCY` at a time.
- *
- * Workers pull the next un-started window from a shared cursor and write it to
- * its own slot, so a window that lands early never displaces one that lands
- * late. The byte-count check at the end is what turns a short or dropped
- * response into a loud failure instead of a subtly truncated recording.
- */
+/** Read `total` bytes as fixed windows, `MEDIA_FETCH_CONCURRENCY` at a time. */
 async function readWindowsConcurrently(
   url: string,
   total: number,
@@ -233,11 +183,7 @@ async function readWindowsConcurrently(
   return parts as ArrayBuffer[];
 }
 
-/**
- * Fallback for a server that does not report a total: walk windows forward
- * until one comes back short or unsatisfiable. Serial by necessity — without a
- * size there is no next offset to request until the current window has landed.
- */
+/** Fallback when server does not report a total — serial window walk. */
 async function readSequentially(
   url: string,
   signal: AbortSignal | undefined,

@@ -1,17 +1,6 @@
 /**
- * The editor camera: one transform that moves everything anchored to the
- * recording.
- *
- * Zoom used to be two mechanisms — a source-texture crop for the video, and
- * separate arithmetic that re-derived where the cursor should land. Two
- * mechanisms have to agree, and they drifted: the cursor sat tens of pixels
- * from the pixel it pointed at, worsening with scale and with distance from the
- * zoom centre. There is no formula to keep in sync here. Video, cursor and
- * shadow are children of one container; the camera moves the container.
- *
- * `focus` is normalized to the **recording rect** — the same space
- * `zoomMotion` bakes its keyframes in, and the same space the cursor overlay is
- * placed in. That is the only coordinate space in the zoom path.
+ * Editor camera: one transform moves video, cursor, and shadow together.
+ * `focus` is normalized 0–1 inside the recording rect (same space as zoom keyframes).
  */
 
 export type CameraRect = {
@@ -69,11 +58,7 @@ export function computeCameraTransform(
   };
 }
 
-/**
- * Where a stage point ends up once the camera has moved. Only the geometry
- * self-check needs this — the renderer gets it for free from the scene graph,
- * which is the entire point of having a camera container.
- */
+/** Map a stage point through the camera transform (geometry self-checks). */
 export function applyCameraTransform(
   transform: CameraTransform,
   point: { x: number; y: number },

@@ -124,9 +124,6 @@ export function resolveFaceCamLayout(
 } | null {
   if (videoWidth <= 0 || videoHeight <= 0) return null;
 
-  // The PiP keeps a downward offset — it reads as a card lifted off the stage,
-  // unlike the recording, whose shadow is centred. `shadowBlur` in the tuning
-  // constants is a `ctx.shadowBlur` radius, which is a Gaussian of half that.
   const intensityFactor = Math.max(0, options.shadowIntensity / 35);
   const baseSigma = FACE_CAM_COMPOSITION.shadowBlur / 2;
   const softSigma = Math.max(4, baseSigma * (0.7 + intensityFactor * 0.7));
@@ -396,9 +393,7 @@ export function getCompositionLayout(
 }
 
 /**
- * Reduce background/device padding while zoom is active so the content fills
- * more of the composition without snapping. Mirrors the web editor's
- * `getZoomReactiveDevicePadding` so both editors produce identical frames.
+ * Reduce device padding while zoomed (matches web editor `getZoomReactiveDevicePadding`).
  */
 export const ZOOM_PADDING_REDUCTION_STRENGTH = 0.9;
 export const ZOOM_PADDING_MIN_RATIO = 0.08;
@@ -422,10 +417,7 @@ export function getZoomReactiveDevicePadding(
   return Math.max(minPadding, Math.min(safeBasePadding, reducedPadding));
 }
 
-/**
- * Face-cam scale for the current zoom envelope. Uses the same eased envelope as
- * the zoom motion so the PiP shrinks and grows in sync with the zoom.
- */
+/** Face-cam scale from the zoom envelope (synced with zoom motion). */
 export function computeFaceCamZoomPresenceScale(
   zoomEnvelope: number,
   minScaleAtFullZoom: number,
@@ -445,10 +437,7 @@ export function computeFaceCamZoomPresenceScale(
   return 1 - (1 - minScale) * env;
 }
 
-// Cached blurred + darkened background — Canvas-2D `filter` blur is expensive
-// and not reliably GPU-accelerated in WKWebView, yet the inputs (image, blur,
-// darkness, size) change only on a slider drag. Render once into an offscreen
-// canvas keyed by those inputs, then blit it each frame.
+// Cached blurred background — inputs change only on slider drag.
 let bgCanvas: HTMLCanvasElement | null = null;
 let bgPadCanvas: HTMLCanvasElement | null = null;
 let bgBlurCanvas: HTMLCanvasElement | null = null;
@@ -509,8 +498,7 @@ function ensureCanvas(
   return c;
 }
 
-// The CPU pass costs O(buffer area), so cap its resolution harder than the
-// native path — the blurred result is upscaled anyway and stays smooth.
+// ponytail: CPU blur capped harder than native — result is upscaled anyway.
 const CPU_BLUR_MAX_DIM = 1024;
 
 function renderBackgroundToCache(
@@ -534,11 +522,6 @@ function renderBackgroundToCache(
   if (safeBlur <= 0) {
     ctx.drawImage(image, 0, 0, w, h);
   } else {
-    // Draw into a padded buffer, edge-extend, blur, then crop back to w×h —
-    // the geometry maps 1:1 so the blur never reads as a zoom. (The old
-    // `drawImage(..., -bleed, -bleed, w+2bleed, h+2bleed)` scaled the image
-    // up by 6×blur px, which is exactly the zoom-slider look.) Large radii
-    // run the whole pass downscaled: same look, far fewer pixels × kernel.
     const nativeBlur = nativeCanvasBlurWorks();
     let scale = backgroundBlurScale(safeBlur);
     if (!nativeBlur) scale = Math.min(scale, CPU_BLUR_MAX_DIM / Math.max(w, h));
@@ -574,8 +557,6 @@ function renderBackgroundToCache(
       bctx.drawImage(bgPadCanvas, 0, 0);
       bctx.filter = "none";
     } else {
-      // CSS `blur(N)` is a Gaussian with standard deviation N (Filter
-      // Effects spec), so the CPU pass matches the native path's strength.
       const frame = pctx.getImageData(0, 0, pw, ph);
       gaussianBlurRgba(frame.data, pw, ph, sBlur);
       bctx.putImageData(frame, 0, 0);

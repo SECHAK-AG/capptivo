@@ -1,7 +1,5 @@
-/**
- * Runnable check for blur pad + downscale math. Run:
- *   node --experimental-strip-types src/engine/backgroundBlur.selfcheck.ts
- */
+/** Selfcheck: blur pad and downscale math. */
+
 import { backgroundBlurPad, backgroundBlurScale } from "./backgroundBlurPad.ts";
 import { boxSizesForGaussian, gaussianBlurRgba } from "./gaussianBlur.ts";
 

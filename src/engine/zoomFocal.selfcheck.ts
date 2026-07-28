@@ -1,12 +1,5 @@
-/**
- * Runnable check for zoom clamp + scene fixed-rect motion. Run:
- *   node --experimental-strip-types src/engine/zoomFocal.selfcheck.ts
- *
- * - At 1× pan is forced to centre (no black void)
- * - Fixed-rect keyframes open the clamp window toward the focus with scale
- * - Scene fixed-rect uses hyperbolic scale + env-lerped focal (one motion)
- * - Follow-cursor ease-in couples pan to the start-time seed (no live chase)
- */
+/** Selfcheck: zoom clamp and fixed-rect motion. */
+
 import {
   clampTargetForScale,
   computeSceneZoomRenderCenter,

@@ -111,7 +111,10 @@ pub fn resume_recording(state: State<AppState>) -> AppResult<()> {
 }
 
 /// Open a camera file sink under the current project (`camera.webm` / `camera.mp4`).
-#[tauri::command]
+///
+/// `(async)` — see [`write_camera_chunk`] for why this family stays off the
+/// app's main thread.
+#[tauri::command(async)]
 pub fn begin_camera_file(
     state: State<AppState>,
     project_id: String,
@@ -139,7 +142,19 @@ pub fn begin_camera_file(
 /// *entire* invoke payload because that is the only shape Tauri transfers as
 /// `application/octet-stream` — a `Uint8Array` nested in an object is
 /// JSON-encoded as one decimal number per byte.
-#[tauri::command]
+///
+/// `(async)` runs the body on the Tauri worker pool. A `#[tauri::command]` that
+/// is neither `async fn` nor marked `(async)` executes *inline on the app's main
+/// thread*, and one `write_all` per MediaRecorder timeslice on that thread is
+/// jank the user sees **while recording**.
+///
+/// Chunk order survives the move because the caller serializes it:
+/// `src/windows/camera/cameraCapture.ts` chains every write through a single
+/// `writeChain` promise, so the next invoke is never issued until the previous
+/// one has resolved. That chain is load-bearing for a different reason too
+/// (`Blob.arrayBuffer()` is async), and its comment says so — if it ever goes
+/// away, this command must go back to being synchronous.
+#[tauri::command(async)]
 pub fn write_camera_chunk(
     state: State<AppState>,
     request: tauri::ipc::Request<'_>,
@@ -158,21 +173,28 @@ pub fn write_camera_chunk(
 }
 
 #[tauri::command]
-pub fn finish_camera_file(state: State<AppState>) -> AppResult<Option<String>> {
+pub async fn finish_camera_file(state: State<'_, AppState>) -> AppResult<Option<String>> {
+    // Take the sink out under the lock and drop the guard before awaiting — a
+    // `parking_lot` guard is not `Send` and must not cross the await.
     let Some(sink) = state.camera_sink.lock().take() else {
         return Ok(None);
     };
-    sink.file.sync_all()?;
-    let name = sink
-        .path
-        .file_name()
-        .and_then(|s| s.to_str())
-        .unwrap_or("camera.webm")
-        .to_string();
-    Ok(Some(name))
+
+    tauri::async_runtime::spawn_blocking(move || {
+        sink.file.sync_all()?;
+        let name = sink
+            .path
+            .file_name()
+            .and_then(|s| s.to_str())
+            .unwrap_or("camera.webm")
+            .to_string();
+        Ok(Some(name))
+    })
+    .await
+    .map_err(|e| AppError::Other(format!("camera finish task failed: {e}")))?
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn begin_mic_file(
     state: State<AppState>,
     project_id: String,
@@ -198,7 +220,11 @@ pub fn begin_mic_file(
 
 /// Append the request's raw body to the open mic file. Same raw-payload rule as
 /// [`write_camera_chunk`] — append-only, no headers.
-#[tauri::command]
+///
+/// `(async)` for the same reason, and safe for the same reason:
+/// `src/windows/recorder/micCapture.ts` serializes these writes through its own
+/// `writeChain`, so they cannot land out of order.
+#[tauri::command(async)]
 pub fn write_mic_chunk(
     state: State<AppState>,
     request: tauri::ipc::Request<'_>,
@@ -216,19 +242,26 @@ pub fn write_mic_chunk(
     Ok(())
 }
 
+/// Close the narration sink, returning its file name. Same fsync-on-the-blocking-pool
+/// reasoning as [`finish_camera_file`].
 #[tauri::command]
-pub fn finish_mic_file(state: State<AppState>) -> AppResult<Option<String>> {
+pub async fn finish_mic_file(state: State<'_, AppState>) -> AppResult<Option<String>> {
     let Some(sink) = state.mic_sink.lock().take() else {
         return Ok(None);
     };
-    sink.file.sync_all()?;
-    let name = sink
-        .path
-        .file_name()
-        .and_then(|s| s.to_str())
-        .unwrap_or("mic.webm")
-        .to_string();
-    Ok(Some(name))
+
+    tauri::async_runtime::spawn_blocking(move || {
+        sink.file.sync_all()?;
+        let name = sink
+            .path
+            .file_name()
+            .and_then(|s| s.to_str())
+            .unwrap_or("mic.webm")
+            .to_string();
+        Ok(Some(name))
+    })
+    .await
+    .map_err(|e| AppError::Other(format!("mic finish task failed: {e}")))?
 }
 
 /// Stop capture, finalize the project on disk, open the editor, and return the

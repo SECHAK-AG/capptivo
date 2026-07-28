@@ -1,9 +1,4 @@
-/**
- * Recorder popover — floating setup bar, countdown, or HUD.
- * Window size is driven by `setRecorderLayout` so chrome always hugs content.
- * Face-cam stays in its own bubble window (same place/size while recording).
- * Screen Recording is prompted by the OS — no Capptivo permissions card.
- */
+/** Recorder popover — setup bar, countdown, or in-record HUD. */
 
 import { useEffect, useRef, useState } from "react";
 import { GripVertical, Highlighter, X } from "lucide-react";
@@ -28,19 +23,31 @@ export function RecorderApp() {
     void init();
   }, [init]);
 
+  useEffect(() => {
+    if (!import.meta.env.DEV) return;
+    const projectId = import.meta.env.VITE_GATE_PROJECT_ID;
+    const loopbackBase = import.meta.env.VITE_GATE_LOOPBACK;
+    if (!projectId || !loopbackBase) return;
+    void (async () => {
+      const { runMediaOriginGate } = await import("../editor/mediaOriginProbe");
+      const { mediaUrl } = await import("@/lib/platform");
+      await runMediaOriginGate(
+        (file) => mediaUrl(projectId, file),
+        loopbackBase,
+        projectId,
+      );
+    })();
+  }, []);
+
   const live = status === "recording" || status === "paused" || status === "finalizing";
 
   useEffect(() => {
-    // Prefer countdown while it's active so the badge stays centered through start().
     if (counting) void commands.setRecorderLayout("countdown");
     else if (live) void commands.setRecorderLayout("hud");
     else if (lastError) void commands.setRecorderLayout("alert");
     else void commands.setRecorderLayout("setup");
   }, [live, counting, lastError]);
 
-  // Annotations are opt-in per take via the HUD pen toggle — never auto-open.
-  // Only auto-hide when the take ends, so a bar left open can't linger into
-  // the next take or the editor.
   useEffect(() => {
     const inkLive = status === "recording" || status === "paused";
     if (!inkLive && wasLiveRef.current) {
@@ -87,7 +94,6 @@ function RecordingHud() {
 
   return (
     <div className="inline-flex h-12 w-fit max-w-full items-center gap-1.5 rounded-2xl border border-border bg-card p-1.5">
-      {/* Drag grip + timer only — interactive controls stay outside the region. */}
       <div
         data-tauri-drag-region
         className="flex h-9 cursor-grab items-center gap-2 rounded-xl px-1.5 active:cursor-grabbing"

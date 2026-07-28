@@ -4,5 +4,5 @@ import "../../styles.css";
 
 document.documentElement.classList.add("annotation-shell");
 
-// No StrictMode — engine attaches window listeners; double-mount would leak.
+// No StrictMode — double-mount would leak listeners / stop getUserMedia.
 ReactDOM.createRoot(document.getElementById("root")!).render(<AnnotationApp />);

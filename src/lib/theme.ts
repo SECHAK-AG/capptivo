@@ -1,8 +1,4 @@
-/**
- * Appearance preference — `light` / `dark` / `system`. Pure helpers (no React) so
- * the editor window can apply the resolved theme to <html> before React mounts,
- * avoiding a flash of the wrong theme.
- */
+/** Appearance preference helpers — usable before React mounts. */
 
 export type ThemeMode = "light" | "dark" | "system";
 export type ResolvedTheme = "light" | "dark";

@@ -1,8 +1,4 @@
-/**
- * Floating recorder setup bar — shadcn DropdownMenu for device/settings pickers
- * (anchored to triggers, animated, proper item spacing).
- * Capture fps/quality stay fixed in the store; export owns output fps/encoding.
- */
+/** Floating recorder setup bar (source, devices, camera/mic, settings). */
 
 import {
   forwardRef,
@@ -44,7 +40,6 @@ import type { CaptureSource } from "../../ipc/types";
 import { useRecorderStore, type CaptureMode } from "./store";
 import { usePlatformCapabilities } from "./usePlatformCapabilities";
 
-/** Shared control height — everything in the bar shares this rhythm. */
 const CTRL = "h-9";
 
 const MENU_CONTENT =
@@ -92,8 +87,6 @@ export function RecorderToolbar({ onRecord }: { onRecord: () => void }) {
     await applyRecorderLayout(sourceOpen, false);
   };
 
-  // Each mode carries its own notion of "picked something": a crop rect for
-  // area, a plugged-in phone for device, a source id for the rest.
   const canRecord =
     captureMode === "area"
       ? !!areaSelection
@@ -115,8 +108,6 @@ export function RecorderToolbar({ onRecord }: { onRecord: () => void }) {
     const el = barRef.current;
     if (!el) return;
     const sync = () => {
-      // Prefer scrollWidth so a too-narrow window doesn't report a clipped size
-      // and lock the bar into a forever-half-cut Record button.
       const width =
         Math.ceil(Math.max(el.scrollWidth, el.getBoundingClientRect().width)) + 2;
       void commands.setRecorderBarWidth(width);
@@ -286,14 +277,9 @@ function CaptureModeMenu({
   );
 }
 
-/** How often the device list re-polls while its menu is open (ms). */
 const DEVICE_POLL_MS = 2000;
 
-/**
- * Attached iPhones / iPads. Unlike displays and windows these appear and vanish
- * with the cable, so the list polls while open — plugging the phone in *after*
- * opening the menu is the common case, and a stale empty list reads as a bug.
- */
+/** USB iPhone/iPad picker — polls while open because devices plug in/out. */
 function DeviceMenu({
   open,
   onOpenChange,
@@ -410,7 +396,6 @@ function CameraMenu({
 
   useEffect(() => {
     if (!open) return;
-    // Only probes getUserMedia when the list is empty (TCC not granted yet).
     void ensureCameraDevices();
   }, [open, ensureCameraDevices]);
 
@@ -486,7 +471,6 @@ function MicMenu({
 
   useEffect(() => {
     if (!open) return;
-    // Probe only when empty — avoids ducking other apps on every menu open.
     void ensureMicrophoneDevices();
   }, [open, ensureMicrophoneDevices]);
 
@@ -598,7 +582,6 @@ function AudioMenu({
   );
 }
 
-/** Settings gear — language for now; more options land here later. */
 function SettingsMenu({
   open,
   onOpenChange,
@@ -863,7 +846,6 @@ const DeviceTrigger = forwardRef<
 ));
 DeviceTrigger.displayName = "DeviceTrigger";
 
-/** Compact trigger text — full names stay in the dropdown. */
 function shortenLabel(label: string, max: number): string {
   const t = label.trim();
   if (t.length <= max) return t;

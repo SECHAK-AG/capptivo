@@ -116,7 +116,6 @@ export function stepSpringValue(
     omega,
   );
 
-  // Overdamped carry-over can overshoot a moving target — clamp to target.
   if (zeta >= 1) {
     const crossed =
       (state.value <= target && current > target) ||
@@ -163,7 +162,6 @@ export function getCursorSpringConfig(smoothness: number): SpringConfig {
       restSpeed: 0.001,
     };
   }
-  // Barely overdamped (ζ ≈ 1.05) — soft landings, no click wobble.
   return {
     stiffness: 760 - s * 480,
     damping: 36 + s * 28,
@@ -346,7 +344,6 @@ export class CursorMotionState {
       const prevX = this.x;
       const prevY = this.y;
       this.snapTo(target.x, target.y, timeSec);
-      // Keep a tiny trail continuity on freeze frames only when moving gently.
       if (!opts.nearClick && !seeked && opts.motionBlur > 0.05) {
         this.pushTrail(prevX, prevY, cursorTrailLength(opts.motionBlur));
       }

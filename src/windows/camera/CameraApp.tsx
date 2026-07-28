@@ -1,7 +1,4 @@
-/**
- * Face-cam bubble — same window for setup preview and in-record preview.
- * Capture writes `camera.webm` from this WebView (see `cameraCapture.ts`).
- */
+/** Face-cam bubble — setup preview and in-record capture (`cameraCapture.ts`). */
 
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
@@ -9,7 +6,6 @@ import { listen } from "@tauri-apps/api/event";
 import { bindCameraCaptureApi, ensureCameraCaptureSubscribed } from "./cameraCapture";
 
 const DEVICE_EVENT = "camera://device";
-/** Recorder mic getUserMedia stole the session — force a fresh preview stream. */
 const REVIVE_EVENT = "camera://revive";
 
 function deviceFromUrl(): string | null {
@@ -21,7 +17,6 @@ function streamIsLive(stream: MediaStream | null, video: HTMLVideoElement | null
   if (!stream?.active) return false;
   const track = stream.getVideoTracks()[0];
   if (!track || track.readyState !== "live") return false;
-  // Stolen/ended sessions sometimes stay "live" but produce no frames.
   if (video && video.videoWidth === 0 && video.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA) {
     return false;
   }
@@ -68,8 +63,6 @@ export function CameraApp() {
           video.srcObject = stream;
           await video.play().catch(() => undefined);
         }
-        // Recorder-side mic getUserMedia can tear down this AVCapture session on
-        // macOS — recover without waiting for the user to toggle the camera.
         for (const track of stream.getVideoTracks()) {
           track.addEventListener(
             "ended",
@@ -119,7 +112,6 @@ export function CameraApp() {
   useEffect(() => {
     let alive = true;
     const unlistenDevice = listen<string>(DEVICE_EVENT, (e) => {
-      // Soft reopen: no-op if frames are still flowing (avoids flicker).
       if (alive && e.payload) void reopen(e.payload);
     });
     const unlistenRevive = listen(REVIVE_EVENT, () => {

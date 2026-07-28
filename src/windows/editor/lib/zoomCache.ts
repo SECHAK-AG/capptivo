@@ -1,42 +1,9 @@
 /**
- * Module-level zoom keyframe cache — rebuilt only when fragments/metadata/crop
- * change, so the rAF compositor just interpolates (no spring integration per
- * frame).
- *
- * Invalidation is signal-based: every store mutator that touches fragments,
- * metadata, or crop calls `invalidateZoomKeyframesCache()`, which bumps a
- * monotonic version. `getZoomPanAtTime` compares that integer instead of
- * rebuilding a fingerprint string on every rendered frame — no per-frame
- * allocation, no GC pressure during playback or export. That signal is also
- * what lets a version match skip the reconcile outright: no new crop or
- * metadata can reach this module without having bumped it first.
- *
- * Two properties keep an edit cheap:
- *
- * 1. **Reuse is granular.** The store updates `zoomFragments` immutably
- *    (`.map`/spread), so an untouched fragment keeps its object identity across
- *    edits — and keeps its cached keyframes with it. Metadata, or a crop that
- *    actually moved, feeds every fragment's integration and drops the lot.
- * 2. **Integration is lazy.** Reconciling only prunes; keyframes are computed
- *    when a fragment is genuinely asked for. This is what makes dragging a crop
- *    handle survivable — the crop changes on every pointer event, and the
- *    preview needs the motion of at most the one fragment under the playhead.
- *    Eagerly re-integrating every fragment was costing whole frames per event
- *    on a long recording.
- *
- * Crop is compared by value rather than by reference, so a re-render that hands
- * over an equal-but-new crop object does not throw the cache away.
- *
- * This module — not `resolveZoomPanAtTime` — is the editor's entry point for
- * zoom motion. That function's own lazy branch cannot see the crop mapping and
- * would silently produce an unmapped (wrong) focus whenever a screen-content
- * crop is set, so new callers must come through here.
+ * Zoom keyframe cache — rebuilt on invalidation, lazy per-fragment integration.
+ * Editor entry point for zoom motion (handles crop mapping).
  */
 
-// Imported from the module rather than the `@/engine` barrel so the selfcheck
-// can run this file under `node --experimental-strip-types`: the barrel pulls
-// in DOM-dependent engine modules, and the alias needs a bundler. Everything
-// used here lives in `zoomMotion` anyway.
+// Direct import for selfcheck under `node --experimental-strip-types` (barrel pulls DOM).
 import {
   computeZoomKeyframes,
   createFullNormToContentNdcFromCrop,
@@ -72,10 +39,7 @@ function cropEquals(
   );
 }
 
-/**
- * Drop the cache entries this (fragments, metadata, crop) combination
- * invalidates. Deliberately computes nothing — see the laziness note above.
- */
+/** Prune stale entries; does not integrate keyframes (lazy). */
 function reconcile(
   fragments: ZoomFragment[],
   metadata: RecordingMetadata | null,
@@ -96,8 +60,6 @@ function reconcile(
     nextFragments.set(fragment.id, fragment);
   }
 
-  // Deleted fragments fall away with the old map, so the cache can never grow
-  // past what the timeline holds.
   cache = next;
   builtFragments = nextFragments;
   if (!sameCrop) {
@@ -110,11 +72,7 @@ function reconcile(
   builtVersion = version;
 }
 
-/**
- * Pan/scale of the camera at `time`: integrates the covering fragment's springs
- * on first use, then reuses them until something invalidates the cache. Returns
- * the neutral camera when no fragment covers `time`.
- */
+/** Pan/scale at `time`; neutral camera when no fragment covers `time`. */
 export function getZoomPanAtTime(
   fragments: ZoomFragment[],
   metadata: RecordingMetadata | null,
@@ -128,8 +86,6 @@ export function getZoomPanAtTime(
 
   let keyframes = cache.get(active.id);
   if (!keyframes || keyframes.length === 0) {
-    // An `undefined` fps keeps the engine's 120 Hz sampling default. Preview
-    // and export must bake at the same rate or their motion diverges.
     keyframes = computeZoomKeyframes(
       active,
       metadata,

@@ -1,9 +1,5 @@
 /**
- * CPU Gaussian blur for RGBA pixel buffers — fallback for webviews where the
- * Canvas-2D `filter` property parses but renders as a no-op (WKWebView).
- * Three chained box blurs converge on a true Gaussian (central limit
- * theorem), and each pass is O(pixels) via a sliding window, so cost is
- * independent of radius.
+ * CPU Gaussian blur for RGBA buffers (WKWebView `filter` no-op fallback).
  */
 
 /** Odd box widths whose successive passes approximate a Gaussian of `sigma`. */
@@ -22,11 +18,7 @@ export function boxSizesForGaussian(sigma: number, passes = 3): number[] {
   return Array.from({ length: passes }, (_, i) => (i < m ? lower : upper));
 }
 
-/**
- * One clamped horizontal box-blur pass, `src` → `dst`. Each row is swept once
- * with the four channel accumulators held in locals — per-channel row walks
- * would read the row four times over.
- */
+/** Horizontal box-blur pass with clamped edges. */
 function boxBlurH(
   src: Float32Array,
   dst: Float32Array,
@@ -72,11 +64,7 @@ function boxBlurH(
   }
 }
 
-/**
- * One clamped vertical box-blur pass, `src` → `dst`. Slides a whole row of
- * accumulators down the image so every read/write is sequential — a per-column
- * walk would stride `width*4` floats per sample and thrash the cache.
- */
+/** Vertical box-blur pass (row-major for cache locality). */
 function boxBlurV(
   src: Float32Array,
   dst: Float32Array,

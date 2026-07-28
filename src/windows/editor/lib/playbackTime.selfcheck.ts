@@ -1,7 +1,5 @@
-/**
- * Runnable check for the playback UI clock gate. Run:
- *   node --experimental-strip-types src/windows/editor/lib/playbackTime.selfcheck.ts
- */
+/** Selfcheck: playback UI clock gate. */
+
 import {
   PLAYBACK_UI_INTERVAL_MS,
   playbackUiDue,

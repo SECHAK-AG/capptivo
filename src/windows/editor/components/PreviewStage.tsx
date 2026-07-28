@@ -85,8 +85,6 @@ export function PreviewStage({
     const ac = new AbortController();
     setOriginalIsSmall(null);
     void probeMediaSize(screenUrl, { signal: ac.signal })
-      // An unreported size must not block the preview — fall back to opening
-      // against the original, which is what happened before this gate existed.
       .then((size) => {
         if (!ac.signal.aborted) {
           setOriginalIsSmall(size === null || size <= MEDIA_DIRECT_PREVIEW_LIMIT);
@@ -98,16 +96,8 @@ export function PreviewStage({
     return () => ac.abort();
   }, [screenUrl]);
 
-  // Scrub/play against the lightweight proxy when it exists; the exporter still
-  // reads the original (`screenUrl`) directly. While a transcode is running,
-  // only fall back to the original when it is small enough to copy into the
-  // heap — on a long recording that copy is multi-gigabyte, races the transcode
-  // for the same file, and is thrown away the moment the proxy lands.
-  // `=== false` (not `!`) so an in-flight probe keeps the old behaviour.
   const waitingForProxy = proxyPending && originalIsSmall === false;
   const previewUrl = proxyUrl ?? (waitingForProxy ? null : screenUrl);
-  // media:// is cross-origin on WKWebView — GPU upload throws SecurityError.
-  // Same-origin blob: URLs are required for compositing local media.
   const playbackUrl = useSameOriginMediaUrl(previewUrl);
   const playbackCameraUrl = useSameOriginMediaUrl(cameraUrl);
   const isPlaying = useEditorStore((s) => s.isPlaying);
@@ -135,8 +125,6 @@ export function PreviewStage({
     let remounting = false;
     let recoverAttempts = 0;
 
-    // Preview never asks for an offscreen surface (that's an export-only
-    // optimization), so the compositor always hands back a DOM canvas here.
     const mountCanvas = (canvas: FrameCompositorSurface) => {
       if (!(canvas instanceof HTMLCanvasElement)) {
         throw new Error("preview compositor produced a non-DOM surface");
@@ -158,11 +146,7 @@ export function PreviewStage({
       width: stageRef.current.width,
       height: stageRef.current.height,
       preserveDrawingBuffer: false,
-      // Per-upload mip regen dominates preview compose; bilinear is fine at
-      // stage size (export already runs without mipmaps).
       mipmaps: false,
-      // WebGL first for preview: WebGPU on WKWebView throws
-      // `program.layout[groupIndex]` null and blacks the stage.
       gpuPreference: ["webgl", "webgpu"] as const,
     });
 
@@ -182,7 +166,6 @@ export function PreviewStage({
             return;
           }
           attachCompositor(comp);
-          // Force a paint even if a prior rAF was coalesced away during remount.
           if (paintRaf) cancelAnimationFrame(paintRaf);
           paintRaf = requestAnimationFrame(() => {
             paintRaf = 0;
@@ -238,8 +221,6 @@ export function PreviewStage({
       try {
         comp.compose(
           {
-            // The compositor owns its bitmap; `width`/`height` are the
-            // composition reference the look values are calibrated against.
             width: stageRef.current.width,
             height: stageRef.current.height,
             video,
@@ -250,8 +231,6 @@ export function PreviewStage({
             aspectRatioPresetId,
             backgroundType,
             sourceVideoSize,
-            // Baked keyframes go straight to the camera: they are already
-            // recording-rect NDC, enveloped and clamped.
             zoomScale: zoom.scale,
             zoomFocus: { x: zoom.x, y: zoom.y },
             ...resolveZoomReactiveState(active, t),
@@ -273,8 +252,6 @@ export function PreviewStage({
         );
         recoverAttempts = 0;
       } catch (e) {
-        // GPU context can be poisoned (e.g. old shadow-canvas resize bug).
-        // Remount once so the user is not stuck on a black stage.
         console.error("[preview] compose failed — remounting compositor", e);
         recoverCompositor();
       }
@@ -309,8 +286,6 @@ export function PreviewStage({
         loopCancel = null;
         return;
       }
-      // Re-resolve each tick: the element is stable, but RVFC may appear only
-      // after the media has a source.
       const sched = playFrameScheduler(videoRef.current);
       loopCancel = sched.cancel;
       loopRaf = sched.request(loop);
@@ -350,8 +325,6 @@ export function PreviewStage({
           return;
         }
         attachCompositor(comp);
-        // Pixi VideoSource used to autoplay; belt-and-suspenders if anything
-        // else nudged the element while we were mounting.
         const v = videoRef.current;
         if (!playing && v && !v.paused) v.pause();
         if (playing) startLoop();
@@ -362,14 +335,8 @@ export function PreviewStage({
       });
 
     /**
-     * The store fields `paint()` actually reads. Every other mutation —
-     * inspector panel, selection, volume, and above all the ~100 export
-     * progress writes — cannot change a pixel, and repainting for them costs a
-     * full video texture upload plus a scene render (see plans/018).
-     *
-     * Reference equality is the right test: the store replaces these objects
-     * on change rather than mutating them, so a deep compare would be pure
-     * cost. Anything added to `paint()`'s reads MUST be added here too.
+     * Fields `paint()` reads — skip repaints for unrelated store mutations.
+     * Reference equality; anything added to `paint()` must be listed here.
      */
     type FramePaintState = Parameters<
       Parameters<typeof useEditorStore.subscribe>[0]
@@ -428,8 +395,6 @@ export function PreviewStage({
     requestPaintRef.current();
   }, [stage.width, stage.height]);
 
-  // Re-binds whenever the element is replaced (the `key` below remounts it on
-  // every source change), so frame tracking is never left on a dead element.
   useEffect(() => {
     const video = videoRef.current;
     if (!video) return;
@@ -528,17 +493,10 @@ export function PreviewStage({
             ) : null}
             <video
               ref={videoRef}
-              // A fresh element per source, exactly like the face cam below.
-              // Re-pointing a WKWebView media element that has already loaded a
-              // blob at a second blob errors with MEDIA_ERR_SRC_NOT_SUPPORTED
-              // *after* it reports dimensions — which is why the recording shows
-              // for a frame and then vanishes the moment the preview proxy
-              // finishes transcoding and swaps in.
+              // Fresh element per source — WKWebView errors on blob src reuse after proxy swap.
               key={playbackUrl ?? "no-source"}
               src={playbackUrl ?? undefined}
               className="hidden"
-              // Blob URLs are same-origin; leave crossOrigin unset (CORS mode
-              // on media:// is what taints WKWebView GPU uploads).
               playsInline
               preload="auto"
               onLoadedMetadata={(e) => {
@@ -566,8 +524,6 @@ export function PreviewStage({
                 publishPlaybackTime(e.currentTarget.currentTime)
               }
               onEnded={() => useEditorStore.getState().setPlaying(false)}
-              // A dead source is otherwise invisible: the compositor just hides
-              // the screen layer and the stage reads as a plain black preview.
               onError={(e) =>
                 console.error(
                   "[preview] screen media failed to load",

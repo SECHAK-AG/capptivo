@@ -1,18 +1,7 @@
 import type { CaptionCuePayload, CaptionWordPayload } from "./types";
 import { buildCaptionTextFromWords } from "./parser";
 
-/**
- * Silence-aware caption re-segmentation.
- *
- * Whisper breaks speech on its own internal boundaries, not on real pauses, so cues can
- * cover silence and continuous speech gets chopped arbitrarily. We re-segment against
- * ground-truth silence from ffmpeg `silencedetect` instead:
- *   ffmpeg silencedetect (stderr) -> parseSilenceIntervals -> resegmentCuesBySilence
- *
- * A phrase only breaks at a long pause (>= splitSilenceMs) or at silence touching the
- * transcript edges (leading/trailing trim). Short pauses are absorbed; speech not separated
- * by a long pause is merged; a region with no speech is dropped (drops hallucinations).
- */
+/** Silence-aware caption re-segmentation using ffmpeg `silencedetect` intervals. */
 
 /** ffmpeg `silencedetect` noise floor. Quieter than this counts as silence. */
 export const SILENCE_NOISE_DB = -30;
@@ -51,12 +40,7 @@ interface CaptionPiece extends Span {
 	words?: CaptionWordPayload[];
 }
 
-/**
- * Parse ffmpeg `silencedetect` stderr into ordered, non-overlapping silence intervals.
- * Lines look like:
- *   [silencedetect @ 0x..] silence_start: 12.34
- *   [silencedetect @ 0x..] silence_end: 15.67 | silence_duration: 3.33
- */
+/** Parse ffmpeg `silencedetect` stderr into ordered silence intervals. */
 export function parseSilenceIntervals(stderr: string): SilenceInterval[] {
 	const intervals: SilenceInterval[] = [];
 	let pendingStartMs: number | null = null;
@@ -78,7 +62,6 @@ export function parseSilenceIntervals(stderr: string): SilenceInterval[] {
 		}
 	}
 
-	// A trailing silence_start with no matching end runs to the end of the audio.
 	if (pendingStartMs !== null) {
 		intervals.push({ startMs: pendingStartMs, endMs: Number.POSITIVE_INFINITY });
 	}
@@ -134,11 +117,7 @@ function joinText(existing: string, addition: string): string {
 		.join(" ");
 }
 
-/**
- * Distribute a cue's plain text across the regions it overlaps, proportionally to how much
- * of the cue's duration falls in each region. Used only when a single Whisper cue straddles
- * a long pause (rare) and has no word timing.
- */
+/** Distribute cue text across overlapping regions proportionally by duration. */
 function splitTextProportionally(text: string, overlaps: Span[]): string[] {
 	const tokens = text.trim().split(/\s+/).filter(Boolean);
 	if (tokens.length === 0) {
@@ -192,11 +171,7 @@ export function padSpans(spans: Span[], edgePadMs: number): void {
 	}
 }
 
-/**
- * Re-segment Whisper cues against detected silence into phrases that only break on long
- * pauses. Returns sorted, non-overlapping cues with fresh ids. If no silence is detected
- * the cues are merged into a single trimmed phrase (continuous speech).
- */
+/** Re-segment cues on long pauses from detected silence; merges continuous speech when none found. */
 export function resegmentCuesBySilence(
 	cues: CaptionCuePayload[],
 	silences: SilenceInterval[],
@@ -219,8 +194,6 @@ export function resegmentCuesBySilence(
 		transcriptStartMs,
 	);
 
-	// Boundaries = long pauses, plus any silence touching the transcript edges (so leading
-	// and trailing silence is always trimmed even if short).
 	const boundaries: Span[] = silences
 		.map((silence) => ({
 			startMs: Math.max(silence.startMs, transcriptStartMs),

@@ -1,8 +1,4 @@
-/**
- * Cursor overlay for preview + export.
- * SVGs are rasterized once at high resolution — never drawn as tiny CSS-scaled
- * filtered SVGs (that is why they looked soft before).
- */
+/** Cursor overlay for preview + export. SVGs rasterized once at high resolution. */
 
 import type { CursorShapeId, ScreenContentCropNorm } from "./zoomMotion";
 import {
@@ -44,7 +40,6 @@ export type CursorSettings = {
   clickEffect: CursorClickEffectId;
 };
 
-/** Default cursor overlay settings. */
 export const DEFAULT_CURSOR_SETTINGS: CursorSettings = {
   showCursor: true,
   loopCursor: true,
@@ -70,19 +65,7 @@ export type CursorAsset = {
   anchorY: number;
 };
 
-/**
- * Cursor theme packs. Each pack ships every replayable glyph under
- * `public/cursors/<theme>/`, and each glyph declares its hotspot as a
- * *fraction of its own SVG viewBox* — the pixel the OS treats as the click
- * point (arrow tip, I-beam center, fingertip). The hotspot is authored into
- * the asset set; `trimToContent` remaps it into the trimmed raster, so a
- * glyph redrawn with different padding cannot silently move its tip.
- *
- * Naming convention inside a pack: plain compass names (`resize-ew`) are the
- * window-edge resize style; `-alt` variants are the classic black-arrow
- * style. `scripts/check-cursor-hotspots.mjs` asserts every declared hotspot
- * still lands on its artwork.
- */
+/** Theme packs under `public/cursors/<theme>/`; hotspots are viewBox fractions remapped by `trimToContent`. */
 type CursorTheme = "macos" | "tahoe";
 
 /** File each recorded shape replays with, identical across theme packs. */
@@ -145,10 +128,7 @@ const THEME_HOTSPOTS: Record<
 /** The one style without a theme pack: a single minimal arrow glyph. */
 const FIGMA_ARROW = { url: "/cursors/minimal.svg", x: 0.1, y: 0.05 };
 
-/**
- * Which theme pack a picker style replays from. "figma" has no pack of its
- * own — its arrow is the minimal glyph and contextual shapes borrow tahoe.
- */
+/** Picker style → theme pack ("figma" borrows tahoe for contextual shapes). */
 const STYLE_THEME: Record<CursorStyleId, { theme: CursorTheme; invert: boolean }> = {
   macos: { theme: "macos", invert: false },
   tahoe: { theme: "tahoe", invert: false },
@@ -234,7 +214,6 @@ export function parseCursorSettings(raw: unknown): CursorSettings {
 }
 
 export function cursorPreviewGlyphPx(_style: CursorStyleId): number {
-  // Rasters are content-trimmed, so every style previews at the same glyph box.
   return CURSOR_PREVIEW_GLYPH_PX;
 }
 
@@ -258,14 +237,7 @@ function canvasToImage(canvas: HTMLCanvasElement): Promise<HTMLImageElement> {
   });
 }
 
-/**
- * Crop a rasterized cursor to its visible pixels and remap the hotspot into
- * the cropped space. Cursor SVGs are authored on wildly different canvases —
- * tight-cropped arrows (618×958 tahoe) vs 32px design grids where the glyph
- * fills half the box (hands/text) — so normalizing every asset to its own
- * content bounding box is what lets ONE sizing rule (`baseH`) draw all of
- * them at the same visual size, with no per-style fudge multipliers.
- */
+/** Crop to visible pixels and remap hotspot so one `baseH` sizes every glyph. */
 function trimToContent(
   canvas: HTMLCanvasElement,
   ctx: CanvasRenderingContext2D,
@@ -288,7 +260,7 @@ function trimToContent(
       }
     }
   }
-  if (maxX < 0) return { canvas, anchorX, anchorY }; // fully transparent — keep as-is
+  if (maxX < 0) return { canvas, anchorX, anchorY };
 
   const pad = 1;
   minX = Math.max(0, minX - pad);
@@ -301,7 +273,6 @@ function trimToContent(
   const out = document.createElement("canvas");
   out.width = w;
   out.height = h;
-  // 1:1 sub-rect copy — no resample, so the raster stays as sharp as drawn.
   out.getContext("2d")!.drawImage(canvas, minX, minY, w, h, 0, 0, w, h);
   return {
     canvas: out,
@@ -310,10 +281,7 @@ function trimToContent(
   };
 }
 
-/**
- * Draw SVG (or any image) into a fixed-height bitmap. Forces a sharp raster for
- * WebKit/Chrome — CSS-scaling huge filtered SVGs looks muddy.
- */
+/** Rasterize SVG/image to a fixed-height bitmap. */
 async function rasterizeToAsset(
   source: CanvasImageSource & {
     width?: number;
@@ -362,7 +330,6 @@ async function rasterizeToAsset(
 }
 
 async function loadSvgAsImage(url: string): Promise<HTMLImageElement> {
-  // Explicit dimensions help WKWebView pick a crisp SVG raster size.
   const img = await loadImage(url);
   if (img.naturalWidth > 0 && img.naturalHeight > 0) return img;
   return img;
@@ -389,12 +356,7 @@ function loadShapeAsset(
   return promise;
 }
 
-/**
- * Contextual cursor for a recorded shape, in the picked style's own theme —
- * the recorded system state (pointing hand over links, I-beam over text,
- * resize arrows at edges…) overrides the arrow for as long as it lasts.
- * Synchronous: returns null (and starts the load) until rasterized.
- */
+/** Contextual glyph for a recorded shape; null until rasterized (load started). */
 function ensureShapeAsset(
   style: CursorStyleId,
   shape: CursorShapeId,
@@ -407,7 +369,6 @@ function ensureShapeAsset(
 }
 
 export function preloadCursorAssets(): void {
-  // Arrows first — the style picker previews need them immediately.
   for (const style of CURSOR_STYLE_IDS) {
     void loadShapeAsset(style, "default");
   }
@@ -418,21 +379,10 @@ export function preloadCursorAssets(): void {
   }
 }
 
-/**
- * Click press effect — the cursor eases slightly smaller on mouse-down, STAYS
- * pressed for as long as the button is held (so drags/grabs read as held), and
- * springs back on release. Driven by the recorded down→up intervals, so it is
- * a pure function of (track, time): scrubbing and export render identically.
- */
+/** Click press scale from recorded down→up intervals. */
 const PRESS_IN_S = 0.09;
 const PRESS_OUT_S = 0.18;
-/**
- * Every recorded click holds the pressed pose at least this long. A ~10 ms
- * trackpad tap otherwise barely starts the press-in curve while the release
- * curve assumes full depth was reached — which rendered as a pop instead of a
- * bounce. Holding through the full press-in also makes the two curves meet
- * continuously.
- */
+/** Minimum hold so short taps reach full press depth before release. */
 const PRESS_MIN_HOLD_S = PRESS_IN_S;
 
 function cursorPressScale(
@@ -442,8 +392,6 @@ function cursorPressScale(
 ): number {
   if (shrink <= 0.001 || !intervals || intervals.length === 0) return 1;
 
-  // Last interval starting at or before `time` — the only one that can affect
-  // it (either still held, or in its release tail).
   let lo = 0;
   let hi = intervals.length - 1;
   let idx = -1;
@@ -461,21 +409,15 @@ function cursorPressScale(
   const press = intervals[idx];
   const end = Math.max(press.end, press.start + PRESS_MIN_HOLD_S);
   if (time <= end) {
-    // Pressing in: quick ease down, then hold at the pressed size.
     return 1 - shrink * smoothstep01((time - press.start) / PRESS_IN_S);
   }
-  // Released: spring back up over a slightly longer, softer ease.
   return 1 - shrink * (1 - smoothstep01((time - end) / PRESS_OUT_S));
 }
 
-/** Instant swaps between cursor shapes read as glitches — blend briefly instead. */
+/** Brief crossfade on cursor shape changes. */
 const SHAPE_CROSSFADE_S = 0.14;
 
-/**
- * Recorded shape at `time` plus the transition it is in, for a short
- * crossfade on shape changes. Pure function of the track — preview and
- * export render identical frames. `progress` is 1 once settled.
- */
+/** Recorded shape + crossfade progress at `time` (1 = settled). */
 function sampleCursorShapeTransition(
   metadata: RecordingMetadata,
   time: number,
@@ -486,7 +428,6 @@ function sampleCursorShapeTransition(
     return { shape: first, prevShape: first, progress: 1 };
   }
 
-  // Binary search: last sample at or before `time`.
   let lo = 0;
   let hi = samples.length - 1;
   while (lo < hi) {
@@ -496,8 +437,6 @@ function sampleCursorShapeTransition(
   }
   const shape = samples[lo].shape ?? "default";
 
-  // Find where this shape's run began — but only within the crossfade window,
-  // so the backward scan is bounded (~9 samples at 60 Hz), not O(run length).
   const windowStart = time - SHAPE_CROSSFADE_S;
   let runStart = lo;
   while (
@@ -512,10 +451,6 @@ function sampleCursorShapeTransition(
     const changedAt = samples[runStart].t;
     const prevShape = samples[runStart - 1].shape ?? "default";
     if (prevShape !== shape && changedAt > windowStart) {
-      // A fade must COMPLETE by the end of the track: recordings typically end
-      // on a shape change (hovering/clicking the stop button), and a fade that
-      // outlives the last sample would freeze the final frame as a permanent
-      // two-cursor blend. Shorten the fade to whatever track time remains.
       const trackEnd = samples[samples.length - 1].t;
       const fadeSpan = Math.min(SHAPE_CROSSFADE_S, trackEnd - changedAt);
       if (fadeSpan > 1e-3) {
@@ -551,10 +486,8 @@ export function cursorStylePreviewUrl(style: CursorStyleId): string | null {
 }
 
 /**
- * Loop cursor position — for seamlessly loopable videos (social/demo clips):
- * over the last {@link CURSOR_LOOP_RETURN_S} of the *final* video the cursor
- * glides from its recorded position back to where it sits on the first frame,
- * so frame N loops into frame 0 without a pointer jump.
+ * Last {@link CURSOR_LOOP_RETURN_S} of the final video: glide cursor back to
+ * the first frame for seamless loops.
  */
 export const CURSOR_LOOP_RETURN_S = 0.75;
 
@@ -566,11 +499,7 @@ export type CursorLoopReturn = {
   windowEnd: number;
 };
 
-/**
- * Derive the glide window from the trim segments so it lands at the end of the
- * final video, not the end of the raw recording. Returns null when there is
- * nothing meaningful to return across (e.g. sub-frame final segment).
- */
+/** Glide window from trim segments; null when nothing meaningful to return across. */
 export function computeCursorLoopReturn(
   segments: readonly TrimSegment[],
   fallbackDuration: number,
@@ -582,8 +511,6 @@ export function computeCursorLoopReturn(
   const lastStart = last?.start ?? 0;
   if (!Number.isFinite(end) || end <= targetTime) return null;
 
-  // Keep the window inside the last kept segment — a glide spanning a trim gap
-  // would visibly jump when playback skips the gap.
   const window = Math.min(CURSOR_LOOP_RETURN_S, end - lastStart);
   if (window <= 1e-3) return null;
   return { targetTime, windowStart: end - window, windowEnd: end };
@@ -598,36 +525,11 @@ function loopReturnBlend(loopReturn: CursorLoopReturn, t: number): number {
   );
 }
 
-/**
- * Smooth cursor movement — shaky/rapid recorded motion becomes a glide.
- *
- * The recorded track is resampled onto a uniform 60 Hz grid once, then blurred
- * with a *centered* Gaussian. A symmetric kernel is zero-phase: the smoothed
- * cursor never lags behind the real one (a causal low-pass would trail it —
- * exactly the "not following my movements" feel). Because the whole track is
- * known ahead of time, offline smoothing like this is strictly better than
- * anything a live tool can do.
- *
- * The result is cached per (track, strength) and sampled O(1) per frame.
- */
+/** Offline centered Gaussian smooth of the cursor track; cached per (track, strength). */
 const SMOOTH_RESAMPLE_HZ = 60;
-/** Kernel σ at full strength, in seconds. ~3σ of support ≈ 0.4s of motion. */
+/** Kernel σ at full strength, in seconds. */
 const SMOOTH_MAX_SIGMA_S = 0.13;
-/**
- * Hard bound on how far smoothing may move the glyph off the recorded sample,
- * in full-screen normalized units (≈4px on a 1745px-wide recording).
- *
- * A symmetric Gaussian adds no lag, but it *cuts corners*: it averages in where
- * the cursor was coming from, so it undershoots wherever the track bends. The
- * sharpest bend in any track is arriving at a button and stopping — i.e. every
- * click. Unbounded, σ=0.065s undershoots a normal click by ~23px at 1×, and the
- * camera multiplies that by the zoom scale, so a zoomed click lands visibly
- * outside the thing being clicked.
- *
- * Tremor — the jitter smoothing exists to remove — is well under this bound, so
- * clamping costs nothing where smoothing earns its keep and guarantees the
- * cursor points at the pixel it recorded everywhere else.
- */
+/** Max deviation from raw sample (NDC); corners on clicks stay on-target. */
 const MAX_SMOOTH_DEVIATION = 0.0025;
 
 type SmoothedCursorTrack = {
@@ -657,7 +559,6 @@ function buildSmoothedTrack(
   const xs = new Float32Array(n);
   const ys = new Float32Array(n);
 
-  // Uniform resample via a single forward walk (samples are time-sorted).
   let j = 0;
   for (let i = 0; i < n; i += 1) {
     const t = t0 + i * dt;
@@ -670,7 +571,7 @@ function buildSmoothedTrack(
     ys[i] = a.y + (b.y - a.y) * p;
   }
 
-  const sigma = strength * SMOOTH_MAX_SIGMA_S * SMOOTH_RESAMPLE_HZ; // in samples
+  const sigma = strength * SMOOTH_MAX_SIGMA_S * SMOOTH_RESAMPLE_HZ;
   const radius = Math.max(1, Math.round(sigma * 3));
   const kernel = new Float32Array(radius * 2 + 1);
   let sum = 0;
@@ -681,7 +582,6 @@ function buildSmoothedTrack(
   }
   for (let k = 0; k < kernel.length; k += 1) kernel[k] /= sum;
 
-  // Edge handling: clamp-to-edge, so the endpoints stay anchored in place.
   const sx = new Float32Array(n);
   const sy = new Float32Array(n);
   for (let i = 0; i < n; i += 1) {
@@ -700,11 +600,7 @@ function buildSmoothedTrack(
   return { t0, dt, xs: sx, ys: sy };
 }
 
-/**
- * Smoothed position at `time`; falls back to the raw track at low strength.
- * Never further than {@link MAX_SMOOTH_DEVIATION} from the recorded sample —
- * exported so `cursorOverlay.selfcheck` can hold that bound.
- */
+/** Smoothed position at `time`; clamped to {@link MAX_SMOOTH_DEVIATION} from raw. */
 export function sampleSmoothedCursorAtTime(
   metadata: RecordingMetadata,
   time: number,
@@ -739,12 +635,7 @@ export function sampleSmoothedCursorAtTime(
   return raw ? clampToRawSample(smoothed, raw) : smoothed;
 }
 
-/**
- * Pull `smoothed` back onto the disc of radius {@link MAX_SMOOTH_DEVIATION}
- * around the recorded sample. Radial (not per-axis) so the correction never
- * changes the direction of the offset — a clamped glyph still sits on the line
- * between where smoothing put it and the pixel it points at.
- */
+/** Radial clamp around the recorded sample (preserves offset direction). */
 function clampToRawSample(
   smoothed: { x: number; y: number },
   raw: { x: number; y: number },
@@ -763,8 +654,6 @@ function mapCursorToContentNdc(
   crop: ScreenContentCropNorm | null | undefined,
   _smoothness = 0,
 ): { x: number; y: number } | null {
-  // Spring chase (PixiCursorOverlay) owns feel; this path stays raw so clicks
-  // and seeks can snap to the recorded tip without Gaussian corner-cutting.
   const p = sampleCursorAtTime(metadata, time);
   if (!p) return null;
   if (!crop) return { x: clamp(p.x, 0, 1), y: clamp(p.y, 0, 1) };
@@ -785,16 +674,14 @@ function swayOffset(
 }
 
 /**
- * Auto-hide for the static cursor. The full track is known ahead of time, so
- * unlike live tools the fade-in can *anticipate* movement: the cursor is fully
- * visible again the moment it starts moving, never popping in mid-motion.
+ * Auto-hide when idle; fade-in anticipates movement because the full track is known.
  */
-const IDLE_DELAY_S = 1.5; // stillness tolerated before the fade-out starts
+const IDLE_DELAY_S = 1.5;
 const IDLE_FADE_OUT_S = 0.5;
 const IDLE_FADE_IN_S = 0.35;
-/** Movement below this (normalized screen units) from the rest point is jitter. */
+/** Movement below this (NDC) from rest counts as jitter. */
 const IDLE_MOVE_EPSILON = 0.004;
-/** Skip windows that would blink: require some fully-hidden time to bother. */
+/** Require this much fully-hidden time before emitting a hide window. */
 const IDLE_MIN_HIDDEN_S = 0.4;
 
 /** `fadeOutStart` → invisible → visible again exactly at `fadeInEnd`. */
@@ -822,8 +709,6 @@ function computeCursorHideWindows(
     }
   };
 
-  // Activity = drifting further than epsilon from the current rest point, or a
-  // click (a click means the cursor matters right there, even if stationary).
   let anchorX = samples[0].x;
   let anchorY = samples[0].y;
   let lastActivity = samples[0].t;
@@ -848,7 +733,6 @@ function computeCursorHideWindows(
     }
   }
 
-  // Still at the end of the track → hide and stay hidden.
   const trackEnd = samples[samples.length - 1].t;
   if (trackEnd - lastActivity >= IDLE_DELAY_S + IDLE_FADE_OUT_S) {
     windows.push({
@@ -874,7 +758,6 @@ function cursorIdleOpacity(metadata: RecordingMetadata, time: number): number {
   }
   if (windows.length === 0) return 1;
 
-  // Binary search: last window whose fade-out has begun at `time`.
   let lo = 0;
   let hi = windows.length - 1;
   let idx = -1;
@@ -906,39 +789,19 @@ export type CursorOverlayDrawInput = {
   loopReturn?: CursorLoopReturn | null;
 };
 
-/**
- * A resolved cursor overlay for one frame: where it lands on the stage, and how
- * to paint it.
- *
- * The GPU compositor uses `bounds` to paint the cursor into a small canvas
- * (a few hundred pixels square) instead of a stage-sized one — the overlay is
- * the only layer whose pixels genuinely change every frame, so the size of that
- * per-frame texture upload is a first-order cost at 60 fps.
- */
+/** Resolved cursor overlay for one frame: bounds, content key, draw/placement. */
 export type CursorOverlayFrame = {
-  /** Stage-space AABB covering every glyph this frame paints, in CSS pixels. */
+  /** Stage-space AABB in CSS pixels. */
   bounds: { x: number; y: number; width: number; height: number };
-  /**
-   * Identifies the *pixels* inside `bounds`, independent of where the AABB sits
-   * on the stage. Pure translation of the whole cluster keeps this key stable so
-   * the GPU layer can move the sprite without repainting.
-   */
+  /** Pixel identity inside `bounds` — stable under pure translation for GPU reuse. */
   contentKey: string;
-  /** Paint into `ctx`, whose origin is the stage origin (translate first). */
+  /** Paint into `ctx` (stage origin). */
   draw: (ctx: CanvasRenderingContext2D) => void;
-  /**
-   * Tip placements in unzoomed recording-rect space. Prefer this over `draw`
-   * when the compositor can parent Pixi sprites under the camera — that path
-   * cannot double-apply zoom the way a supersampled canvas layer can.
-   */
+  /** Tip placements in unzoomed recording-rect space (parent under camera). */
   placement: CursorPlacementFrame;
 };
 
-/**
- * Cursor tip placements in *unzoomed* recording-rect space — the same space the
- * camera zooms. The compositor parents sprites under the camera and sets each
- * stamp's position to `x,y`; zoom is never multiplied in here.
- */
+/** Cursor stamps in unzoomed recording-rect space. */
 export type CursorPlacementFrame = {
   height: number;
   stamps: Array<{
@@ -952,15 +815,7 @@ export type CursorPlacementFrame = {
 };
 
 /**
- * Dev-only crosshair at the *raw* recorded sample — no smoothing, no glyph, no
- * hotspot. It is the ground truth the glyph is supposed to sit on, drawn through
- * the identical camera transform, so one paused frame separates the two failure
- * modes that look identical on screen:
- *
- * - crosshair on the target, glyph off it  → glyph-side (hotspot / smoothing)
- * - crosshair off the target               → position-side (mapping / capture)
- *
- * Toggle from devtools: `__cursorDebug(true)`. Off in production builds.
+ * Dev-only raw-sample crosshair (`__cursorDebug(true)`). Off in production.
  */
 let cursorDebugOverlay = false;
 
@@ -979,7 +834,6 @@ function drawDebugCrosshair(
   ctx.save();
   ctx.globalAlpha = 1;
   ctx.lineWidth = 2;
-  // Magenta on a white halo so it reads over any recording content.
   for (const [color, width] of [
     ["rgba(255,255,255,0.9)", 4],
     ["rgba(255,0,220,1)", 2],
@@ -1023,8 +877,7 @@ export function resolveCursorOverlay(
       )
     : null;
 
-  /** Recorded position at `t`, blended toward the first frame's position inside
-   *  the loop-return window so the last frame matches the first exactly. */
+  /** Position at `t`, blended toward first frame inside loop-return window. */
   const resolvePos = (t: number): { x: number; y: number } | null => {
     const p = mapCursorToContentNdc(metadata, t, crop, settings.smoothness);
     if (!p || !loopReturn || !loopTarget) return p;
@@ -1040,15 +893,13 @@ export function resolveCursorOverlay(
     ? cursorIdleOpacity(metadata, trackTime)
     : 1;
   if (settings.hideStaticCursor && loopReturn) {
-    // A seamless loop needs matching *visibility* too: blend toward the
-    // opacity the cursor has on the first frame so it can't pop on wrap.
     const blend = loopReturnBlend(loopReturn, trackTime);
     if (blend > 0) {
       const targetOpacity = cursorIdleOpacity(metadata, loopReturn.targetTime);
       idleOpacity = idleOpacity + (targetOpacity - idleOpacity) * blend;
     }
   }
-  if (idleOpacity <= 0.001) return null; // fully faded — skip all draw work
+  if (idleOpacity <= 0.001) return null;
 
   const base = resolvePos(trackTime);
   if (!base) return null;
@@ -1059,10 +910,6 @@ export function resolveCursorOverlay(
     y: clamp(base.y + sway.dy, 0, 1),
   };
 
-  // Recorded system state overrides the picked arrow style while it lasts
-  // (pointing hand, I-beam, resize arrows, grab…), drawn from the same theme
-  // pack as the picked style. Falls back to the arrow until the contextual
-  // glyph is rasterized. Shape changes crossfade briefly.
   const transition = sampleCursorShapeTransition(metadata, trackTime);
   const assetForShape = (s: CursorShapeId): CursorAsset =>
     (s !== "default" ? ensureShapeAsset(settings.style, s) : null) ?? asset;
@@ -1077,7 +924,6 @@ export function resolveCursorOverlay(
     0.55,
     Math.min(videoRect.width, videoRect.height) / 1080,
   );
-  // Rasters are content-trimmed, so one height rule sizes every cursor equally.
   const baseH = 28 * viewportScale * settings.size;
 
   const pressScale = cursorPressScale(
@@ -1089,7 +935,6 @@ export function resolveCursorOverlay(
   const trailSteps = settings.motionBlur > 0.05 ? 3 : 0;
   const dt = 0.018 * settings.motionBlur;
 
-  /** One glyph placement: hotspot on the stage + which asset(s) go there. */
   type Stamp = { x: number; y: number; alpha: number; rotate: number };
   const stamps: Stamp[] = [];
   for (let i = trailSteps; i >= 0; i -= 1) {
@@ -1109,7 +954,6 @@ export function resolveCursorOverlay(
   }
   if (stamps.length === 0) return null;
 
-  // Pixi path: one sprite per trail stamp (+ optional crossfade of the head).
   const placementStamps: CursorPlacementFrame["stamps"] = [];
   for (let i = 0; i < stamps.length; i += 1) {
     const s = stamps[i]!;
@@ -1151,8 +995,6 @@ export function resolveCursorOverlay(
     return { w: baseH * aspect, h: baseH };
   };
 
-  // Conservative AABB: every glyph is drawn around its hotspot, so a radius of
-  // hypot(w, h) covers it under any sway rotation (press only shrinks).
   const glyphs = prevAsset ? [activeAsset, prevAsset] : [activeAsset];
   const radius =
     Math.max(...glyphs.map((a) => Math.hypot(glyphSize(a).w, glyphSize(a).h))) +
@@ -1168,8 +1010,6 @@ export function resolveCursorOverlay(
     maxY = Math.max(maxY, s.y + radius);
   }
 
-  // Ground truth for the debug crosshair: the recorded sample, unsmoothed and
-  // unclamped, mapped through the same content→rect transform as the glyph.
   const rawNdc = cursorDebugOverlay
     ? mapCursorToContentNdc(metadata, trackTime, crop, 0)
     : null;
@@ -1194,7 +1034,6 @@ export function resolveCursorOverlay(
       ctx.drawImage(a.image, -w * a.anchorX, -h * a.anchorY, w, h);
     };
 
-    // `stamps` is ordered oldest trail → current, matching the paint order.
     for (let i = 0; i < stamps.length; i += 1) {
       const s = stamps[i]!;
       const isHead = i === stamps.length - 1;
@@ -1203,11 +1042,8 @@ export function resolveCursorOverlay(
       ctx.imageSmoothingQuality = "high";
       ctx.translate(s.x, s.y);
       ctx.rotate(s.rotate);
-      // Press shrinks around the hotspot, so the cursor squeezes into the
-      // exact point being clicked instead of drifting off it.
       if (pressScale !== 1) ctx.scale(pressScale, pressScale);
       if (isHead && prevAsset) {
-        // Mid shape-change: blend old → new glyph (trail keeps the new one).
         drawGlyph(prevAsset, s.alpha * (1 - fadeIn));
         drawGlyph(activeAsset, s.alpha * fadeIn);
       } else {
@@ -1219,9 +1055,6 @@ export function resolveCursorOverlay(
     if (rawPoint) drawDebugCrosshair(ctx, rawPoint);
   };
 
-  // Relative stamp geometry + visual state — not wall-clock time. A cursor that
-  // only translates keeps this key, so the compositor repositions without a
-  // canvas repaint / GPU upload.
   const contentKey = [
     settings.style,
     transition.shape,
@@ -1236,9 +1069,6 @@ export function resolveCursorOverlay(
       (s) =>
         `${(s.x - minX).toFixed(1)},${(s.y - minY).toFixed(1)},${s.alpha.toFixed(2)},${s.rotate.toFixed(3)}`,
     ),
-    // The crosshair's offset within the layer is exactly the error being
-    // measured, so it has to key the bitmap — otherwise a move-only frame
-    // would reuse a bitmap baked at a different divergence.
     rawPoint
       ? `dbg:${(rawPoint.x - minX).toFixed(1)},${(rawPoint.y - minY).toFixed(1)}`
       : "",

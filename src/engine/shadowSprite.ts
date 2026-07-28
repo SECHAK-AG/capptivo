@@ -1,22 +1,6 @@
 /**
- * Baked drop-shadow sprites for the rounded rects in the composition (the
- * recording frame, the face-cam PiP).
- *
- * A shadow here is a **stack of blurred silhouettes** of the rect it sits
- * behind — the Canvas-2D translation of a multi-layer CSS `box-shadow`, and
- * the reason the falloff reads as a gradient: one broad ambient pass carries
- * the spread, tighter passes darken the contact edge. A single pass, whatever
- * its blur, only ever reads as a flat dark halo.
- *
- * Nothing paints the rect itself. The passes are silhouettes that are *only*
- * blurred, so the sprite has no opaque core that a sub-pixel mismatch with the
- * video on top of it could expose as a hard black edge.
- *
- * Blur is expensive and a shadow depends on nothing that changes per frame —
- * rect size, corner radius, intensity — so callers bake once behind a key and
- * blit the sprite every frame. Bakes still run every frame of a slider drag,
- * which is why the sprite is rendered at reduced resolution: blurred output
- * carries no detail finer than its sigma, so the upscale is invisible.
+ * Baked drop-shadow sprites for rounded rects (recording frame, face-cam PiP).
+ * Multi-pass blurred silhouettes; bake once, blit each frame.
  */
 
 import { nativeCanvasBlurWorks } from "./canvasBlur";
@@ -73,13 +57,7 @@ function sizeCanvas(
   return canvas;
 }
 
-/**
- * Bake `passes` behind a `w`×`h` rounded rect of radius `r` into an offscreen
- * canvas. The rect sits at `(pad, pad)` in stage px, so blit the sprite at
- * `(rectX - pad, rectY - pad)` sized `width`×`height`.
- *
- * Reuses `into` when passed (resized in place).
- */
+/** Bake shadow passes behind a `w`×`h` rounded rect; blit at `(rectX - pad, rectY - pad)`. */
 export function renderRoundedRectShadowSprite(
   into: HTMLCanvasElement | null,
   w: number,
@@ -87,8 +65,6 @@ export function renderRoundedRectShadowSprite(
   r: number,
   passes: readonly ShadowPass[],
 ): ShadowSprite {
-  // Tightest first: the fallback path blurs one silhouette progressively, and
-  // stacking black-on-black with `source-over` commutes, so the order is free.
   const live = passes
     .filter((p) => p.opacity > 0 && p.sigma >= 0)
     .sort((a, b) => a.sigma - b.sigma);
@@ -100,7 +76,6 @@ export function renderRoundedRectShadowSprite(
   }
   pad = Math.ceil(pad);
 
-  // Sorted ascending, so the first pass is the one that sets the detail floor.
   const tightest = live.length > 0 ? live[0].sigma : 0;
 
   const boxWidth = w + pad * 2;
@@ -132,9 +107,6 @@ export function renderRoundedRectShadowSprite(
   ctx.clearRect(0, 0, bakedWidth, bakedHeight);
   if (live.length === 0) return sprite;
 
-  // Geometry is written straight in device px rather than through a canvas
-  // transform: `filter` lengths live in canvas space and ignore the CTM, so
-  // scaling every number by hand is the only unambiguous form.
   const rectX = pad * scale;
   const rectY = pad * scale;
   const rectW = w * scale;
@@ -167,18 +139,11 @@ export function renderRoundedRectShadowSprite(
   const scratchCtx = scratch.getContext("2d", READBACK_CONTEXT);
   if (!scratchCtx) return sprite;
 
-  // One opaque silhouette serves every pass: blur is linear, so blurring at
-  // full strength and blitting at `opacity` is the same picture the native
-  // path draws by filling at `opacity` and blurring that. It is also why the
-  // silhouette has to be black — `gaussianBlurRgba` blurs un-premultiplied
-  // channels, which only leaves colour untouched when there is none.
   scratchCtx.clearRect(0, 0, bakedWidth, bakedHeight);
   scratchCtx.fillStyle = "#000";
   roundedRectPath(scratchCtx, rectX, rectY, rectW, rectH, rectR);
   scratchCtx.fill();
 
-  // Chaining Gaussians of sigma a then b is a Gaussian of sqrt(a² + b²), so
-  // each pass pays only for the spread it adds over the pass before it.
   const frame = scratchCtx.getImageData(0, 0, bakedWidth, bakedHeight);
   let blurred = 0;
   for (const p of live) {

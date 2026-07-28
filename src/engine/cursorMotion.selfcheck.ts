@@ -1,7 +1,5 @@
-/**
- * Runnable check for cursor spring chase + click freeze. Run:
- *   node --experimental-strip-types src/engine/cursorMotion.selfcheck.ts
- */
+/** Selfcheck: cursor spring chase and click freeze. */
+
 import {
   CURSOR_CLICK_FREEZE_S,
   CursorMotionState,

@@ -1,10 +1,4 @@
-/**
- * Full-screen drag-to-select overlay. Coordinates are window-local logical
- * points — Rust maps them to display:{id} + crop for scap.
- *
- * macOS: transparent WKWebView only receives mouse events on non-transparent
- * pixels — keep a full-screen hit layer (see CAPTURE_BG), not pointer-events-none.
- */
+/** Full-screen drag-to-select overlay; coordinates are window-local logical points. */
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { listen } from "@tauri-apps/api/event";

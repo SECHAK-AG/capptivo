@@ -1,7 +1,7 @@
 //! Project commands — thin adapters over [`ProjectStore`]. These back the
 //! editor host and the recordings library window.
 
-use crate::error::AppResult;
+use crate::error::{AppError, AppResult};
 use crate::project::{proxy, Project, ProjectSummary};
 use crate::state::AppState;
 use crate::windows;
@@ -103,17 +103,17 @@ pub fn ensure_proxy(
     })
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn list_projects(state: State<AppState>) -> AppResult<Vec<ProjectSummary>> {
     state.store.list()
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn load_project(state: State<AppState>, id: String) -> AppResult<Project> {
     state.store.load(&id)
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn save_editor_state(
     state: State<AppState>,
     id: String,
@@ -122,7 +122,7 @@ pub fn save_editor_state(
     state.store.save_editor_state(&id, editor_state)
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn rename_project(state: State<AppState>, id: String, title: Option<String>) -> AppResult<()> {
     state.store.rename(&id, title)
 }
@@ -134,8 +134,9 @@ pub fn delete_project(app: AppHandle, state: State<AppState>, id: String) -> App
     state.store.delete(&id)
 }
 
-/// One-shot poster backfill for projects recorded before thumbnails existed.
 #[tauri::command]
-pub fn ensure_thumbnail(state: State<AppState>, id: String) -> AppResult<Option<String>> {
-    state.store.ensure_thumbnail(&id)
+pub async fn ensure_thumbnail(app: AppHandle, id: String) -> AppResult<Option<String>> {
+    tauri::async_runtime::spawn_blocking(move || app.state::<AppState>().store.ensure_thumbnail(&id))
+        .await
+        .map_err(|e| AppError::Other(format!("thumbnail task failed: {e}")))?
 }

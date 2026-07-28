@@ -1,9 +1,4 @@
-/**
- * Platform capabilities, fetched once from Rust and cached for the process
- * lifetime (they cannot change while the app runs). Until the fetch resolves,
- * `null` — callers should render the optimistic (macOS-parity) UI and only
- * *remove* affordances once flags arrive, so nothing flashes in.
- */
+/** Platform capabilities from Rust — cached for the process lifetime. */
 
 import { useEffect, useState } from "react";
 

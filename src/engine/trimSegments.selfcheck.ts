@@ -1,7 +1,5 @@
-/**
- * Runnable check for trim-gap helpers. Run:
- *   node --experimental-strip-types src/engine/trimSegments.selfcheck.ts
- */
+/** Selfcheck: trim-gap helpers. */
+
 import {
   addTrimGap,
   computeTrimGaps,

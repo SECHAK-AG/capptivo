@@ -1,7 +1,4 @@
-/**
- * Typed listeners for the `recorder://…` events emitted by Rust. The frontend
- * store subscribes to these; Rust is the source of truth for recorder state (§6).
- */
+/** Typed listeners for Rust `recorder://…` events. */
 
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import type { RecorderState } from "./types";
@@ -13,9 +10,6 @@ export const RecorderChannels = {
   error: "recorder://error",
 } as const;
 
-// Rust emits the serialized `RecorderEvent` enum, externally tagged with the
-// variant name in camelCase (`#[serde(rename_all = "camelCase")]`):
-// `{ stateChanged: { state } }`, `{ elapsed: { seconds } }`, etc.
 type StateChangedPayload = { stateChanged: { state: RecorderState } };
 type ElapsedPayload = { elapsed: { seconds: number } };
 type LevelPayload = { level: { micDb: number } };

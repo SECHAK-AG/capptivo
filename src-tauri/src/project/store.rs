@@ -9,18 +9,39 @@ use crate::cursor::CursorTrack;
 use crate::error::{AppError, AppResult};
 use crate::recorder::types::RecorderConfig;
 use crate::recorder::RecordingArtifacts;
+use parking_lot::Mutex;
 use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 
 pub struct ProjectStore {
     root: PathBuf,
+    /// Serializes the read-modify-write sequences on `project.json`.
+    ///
+    /// `save_editor_state`, `rename` and `ensure_thumbnail` each load the
+    /// manifest, change one field, and write it back. Those used to be
+    /// implicitly serialized by the fact that their commands ran on the app's
+    /// single main thread; they now execute on a worker pool, so two overlapping
+    /// calls could interleave and the later write would clobber the earlier
+    /// one's field — a rename landing mid-`save_editor_state` silently reverts
+    /// the title.
+    ///
+    /// It also covers a second race: [`write_json_atomic`] stages through a
+    /// fixed `project.tmp`, so two concurrent writers to the same project would
+    /// fight over that one staging file.
+    ///
+    /// Go through [`Self::update_project`] rather than taking this directly —
+    /// one lock site is one place to get it right.
+    manifest_write: Mutex<()>,
 }
 
 impl ProjectStore {
     /// `root` is the app data dir (e.g. `~/Library/Application Support/Capptivo`).
     pub fn new(root: PathBuf) -> Self {
-        Self { root }
+        Self {
+            root,
+            manifest_write: Mutex::new(()),
+        }
     }
 
     fn projects_dir(&self) -> PathBuf {
@@ -132,16 +153,25 @@ impl ProjectStore {
         Ok(project)
     }
 
-    pub fn save_editor_state(&self, id: &str, state: serde_json::Value) -> AppResult<()> {
+    /// Load `project.json`, apply `mutate`, write it back — holding
+    /// [`Self::manifest_write`] for the whole sequence.
+    ///
+    /// Every partial update to a manifest must come through here. A caller that
+    /// hand-rolls load → mutate → write reintroduces the lost-update race the
+    /// lock exists to close.
+    fn update_project(&self, id: &str, mutate: impl FnOnce(&mut Project)) -> AppResult<()> {
+        let _guard = self.manifest_write.lock();
         let mut project = self.load(id)?;
-        project.editor_state = Some(state);
+        mutate(&mut project);
         self.write_project(&project)
     }
 
+    pub fn save_editor_state(&self, id: &str, state: serde_json::Value) -> AppResult<()> {
+        self.update_project(id, move |project| project.editor_state = Some(state))
+    }
+
     pub fn rename(&self, id: &str, title: Option<String>) -> AppResult<()> {
-        let mut project = self.load(id)?;
-        project.title = title;
-        self.write_project(&project)
+        self.update_project(id, move |project| project.title = title)
     }
 
     pub fn delete(&self, id: &str) -> AppResult<()> {
@@ -164,12 +194,16 @@ impl ProjectStore {
         if !screen.is_file() {
             return Ok(None);
         }
+        // Deliberately outside the manifest lock: this is a whole FFmpeg run and
+        // holding the lock across it would block every editor autosave for its
+        // duration.
         super::thumbnail::extract_from_mp4(&screen, &thumb)?;
-        // Persist the path on the manifest so other clients see it.
-        if let Ok(mut project) = self.load(id) {
+        // Persist the path on the manifest so other clients see it. Best-effort:
+        // the poster is on disk either way, and `list()` prefers the file over
+        // this field precisely so a failure here is cosmetic.
+        let _ = self.update_project(id, |project| {
             project.files.thumbnail = Some(super::thumbnail::THUMBNAIL_FILE.to_string());
-            let _ = self.write_project(&project);
-        }
+        });
         Ok(Some(super::thumbnail::THUMBNAIL_FILE.to_string()))
     }
 
@@ -284,4 +318,112 @@ fn migrate(value: &mut serde_json::Value) {
         .unwrap_or(1) as u32;
     // Future: `if version < 2 { migrate_v1_to_v2(value); }`
     let _ = version;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::recorder::types::{QualityPreset, RecorderConfig};
+    use std::sync::Arc;
+
+    /// A store rooted in a fresh temp directory, plus one project with a
+    /// manifest already on disk. The caller deletes `root` when done.
+    fn store_with_project() -> (ProjectStore, String, PathBuf) {
+        let root = std::env::temp_dir()
+            .join(format!("capptivo-store-test-{}", uuid::Uuid::new_v4().simple()));
+        let store = ProjectStore::new(root.clone());
+        let (id, _dir) = store.create().expect("create project dir");
+        let config = RecorderConfig {
+            source_id: "display:test".into(),
+            crop: None,
+            fps: 30,
+            show_cursor: true,
+            capture_system_audio: false,
+            capture_microphone: false,
+            quality: QualityPreset::default(),
+        };
+        store
+            .write_recording_stub(&id, &config)
+            .expect("write manifest stub");
+        (store, id, root)
+    }
+
+    /// `save_editor_state` and `rename` are load → mutate → write sequences.
+    /// Their commands used to be serialized by running on the app's single main
+    /// thread; they now execute on a worker pool, so `ProjectStore` has to
+    /// serialize them itself.
+    ///
+    /// Two failures are possible without `manifest_write`, and this exercises
+    /// both: a lost update (one writer's field reverted by the other's stale
+    /// read) and a torn manifest (both writers stage through the same fixed
+    /// `project.tmp`, so a reader can parse a half-written file).
+    #[test]
+    fn concurrent_manifest_writes_do_not_clobber() {
+        let (store, id, root) = store_with_project();
+        let store = Arc::new(store);
+
+        const THREADS_PER_KIND: usize = 4;
+        const ITERATIONS: usize = 40;
+
+        let mut handles = Vec::new();
+        for t in 0..THREADS_PER_KIND {
+            let store = Arc::clone(&store);
+            let id = id.clone();
+            handles.push(std::thread::spawn(move || -> Result<(), String> {
+                for i in 0..ITERATIONS {
+                    let value = serde_json::json!({ "thread": t, "iteration": i });
+                    store
+                        .save_editor_state(&id, value)
+                        .map_err(|e| format!("save_editor_state failed: {e}"))?;
+                }
+                Ok(())
+            }));
+        }
+        for t in 0..THREADS_PER_KIND {
+            let store = Arc::clone(&store);
+            let id = id.clone();
+            handles.push(std::thread::spawn(move || -> Result<(), String> {
+                for i in 0..ITERATIONS {
+                    store
+                        .rename(&id, Some(format!("title-{t}-{i}")))
+                        .map_err(|e| format!("rename failed: {e}"))?;
+                }
+                Ok(())
+            }));
+        }
+
+        let errors: Vec<String> = handles
+            .into_iter()
+            .filter_map(|h| h.join().expect("worker panicked").err())
+            .collect();
+
+        let project = store.load(&id);
+        let _ = fs::remove_dir_all(&root);
+
+        assert!(errors.is_empty(), "manifest writes raced: {errors:?}");
+
+        let project = project.expect("manifest still parses after concurrent writes");
+        assert!(
+            project.editor_state.is_some(),
+            "editor state was clobbered by a concurrent rename",
+        );
+        assert!(
+            project.title.is_some(),
+            "title was clobbered by a concurrent editor-state save",
+        );
+    }
+
+    /// The lock is taken once per update. `update_project` calls `load`, which
+    /// must **not** take it — a reentrant acquisition on a non-reentrant mutex
+    /// deadlocks, and this test hangs rather than fails if that regresses.
+    #[test]
+    fn update_project_does_not_deadlock_on_its_own_read() {
+        let (store, id, root) = store_with_project();
+        let result = store.rename(&id, Some("once".into()));
+        let reloaded = store.load(&id);
+        let _ = fs::remove_dir_all(&root);
+
+        result.expect("rename");
+        assert_eq!(reloaded.expect("load").title.as_deref(), Some("once"));
+    }
 }

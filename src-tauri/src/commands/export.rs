@@ -149,7 +149,13 @@ pub async fn ensure_seekable_recording(
 }
 
 /// Open a file sink at `path` and return an opaque handle for the chunk writes.
-#[tauri::command]
+///
+/// `(async)` runs the body on the Tauri worker pool. A `#[tauri::command]` that
+/// is neither `async fn` nor marked `(async)` executes *inline on the app's main
+/// thread* — the one pumping the run loop and repainting every window — and
+/// `File::create` on a slow or network volume is not something that thread
+/// should be waiting on.
+#[tauri::command(async)]
 pub fn begin_export(state: State<AppState>, path: String) -> AppResult<u64> {
     let file = std::fs::File::create(&path)?;
     let mut next = state.next_export_id.lock();
@@ -187,7 +193,17 @@ fn export_header(request: &tauri::ipc::Request<'_>, name: &str) -> AppResult<u64
 /// (mediabunny's `StreamTarget`) emit chunks out of order — e.g. seeking back
 /// to patch an `mdat` box size — so writes are positioned, not append-only.
 /// Sequential producers (GIF, `MediaRecorder`) simply pass a running offset.
-#[tauri::command]
+///
+/// `(async)` is load-bearing: a 16 MiB positioned write on the app's main thread
+/// stalls every window for the length of the disk write, once per chunk, for the
+/// whole export — and it sits directly in the export loop's critical path,
+/// because `ExportSink.writable()` awaits each write before the encoder is
+/// allowed to produce the next chunk.
+///
+/// Moving off the main thread does not reorder anything: `ExportSink.writable()`
+/// hands mediabunny a `WritableStream`, and the spec invokes `write` for the
+/// next chunk only once the previous promise has settled.
+#[tauri::command(async)]
 pub fn write_export_chunk(
     state: State<AppState>,
     request: tauri::ipc::Request<'_>,
@@ -210,19 +226,34 @@ pub fn write_export_chunk(
 }
 
 /// Flush and close the sink, returning the final file path.
+///
+/// `sync_all()` is an fsync of the entire exported video — seconds on a long
+/// export — so it goes on the blocking pool rather than the main thread. This is
+/// what the "Saving…" step used to freeze the whole app on.
 #[tauri::command]
-pub fn finish_export(state: State<AppState>, handle: u64) -> AppResult<String> {
+pub async fn finish_export(state: State<'_, AppState>, handle: u64) -> AppResult<String> {
+    // The guard must not survive into the `.await` below: a `parking_lot` guard
+    // is not `Send`, so holding it across the await would not compile — and the
+    // map lock has no business being held for the length of an fsync anyway.
     let sink = state
         .exports
         .lock()
         .remove(&handle)
         .ok_or_else(|| AppError::Other(format!("unknown export handle {handle}")))?;
-    sink.file.sync_all()?;
-    Ok(sink.path.to_string_lossy().into_owned())
+
+    tauri::async_runtime::spawn_blocking(move || {
+        sink.file.sync_all()?;
+        Ok(sink.path.to_string_lossy().into_owned())
+    })
+    .await
+    .map_err(|e| AppError::Other(format!("export finish task failed: {e}")))?
 }
 
 /// Abort an export: close and delete the partial file.
-#[tauri::command]
+///
+/// `(async)` — deleting a partial multi-GB export is filesystem work that does
+/// not belong on the app's main thread.
+#[tauri::command(async)]
 pub fn abort_export(state: State<AppState>, handle: u64, reason: String) -> AppResult<()> {
     if let Some(sink) = state.exports.lock().remove(&handle) {
         tracing::info!(handle, %reason, "export aborted");

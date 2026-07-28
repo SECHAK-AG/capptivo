@@ -1,9 +1,4 @@
-/**
- * TypeScript mirrors of the Rust IPC types (`src-tauri/src/**`). Hand-kept for
- * now; the migration plan swaps this for `tauri-specta`-generated bindings so the
- * two can never drift (§3). Keep field names in sync with the `#[serde(rename_all
- * = "camelCase")]` structs.
- */
+/** TypeScript mirrors of Rust IPC types — keep in sync with `#[serde(rename_all = "camelCase")]`. */
 
 export type CaptureSourceKind = "display" | "window";
 
@@ -17,13 +12,7 @@ export interface CaptureSource {
   thumbnail: string | null;
 }
 
-/**
- * An attached iPhone / iPad whose own screen can be recorded over USB.
- *
- * Deliberately not a `CaptureSource`: it comes from CoreMediaIO rather than the
- * window server, so it has no thumbnail, no crop and no cursor, and its size is
- * whatever the device chooses to send.
- */
+/** USB iPhone/iPad screen source (CoreMediaIO — not a `CaptureSource`). */
 export interface CaptureDevice {
   /** `device:{uniqueID}` — goes straight into `RecorderConfig.sourceId`. */
   id: string;

@@ -1,7 +1,4 @@
-/**
- * Click-through on-screen guide — shows crop bounds after pick and during
- * recording. Not captured in the video (separate overlay window).
- */
+/** Click-through on-screen guide for the crop region during area capture. */
 
 import { useEffect, useState } from "react";
 import { listen } from "@tauri-apps/api/event";

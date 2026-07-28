@@ -1,7 +1,5 @@
-/**
- * Runnable check for presentableVideoTime. Run:
- *   node --experimental-strip-types src/windows/editor/lib/presentableVideoTime.selfcheck.ts
- */
+/** Selfcheck: presentableVideoTime. */
+
 import { FIRST_PRESENTABLE_TIME, presentableVideoTime } from "./presentableVideoTime.ts";
 
 function assert(cond: boolean, msg: string): void {

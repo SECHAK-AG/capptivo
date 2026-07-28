@@ -2,26 +2,7 @@ import type { CaptionCuePayload, CaptionWordPayload } from "./types";
 import { buildCaptionTextFromWords } from "./parser";
 import { padSpans, resegmentCuesBySilence, type SilenceInterval } from "./silence";
 
-/**
- * Phrase-aware caption segmentation.
- *
- * Whisper breaks speech on its own internal boundaries — not on sentences — so a single
- * cue can run two phrases together, and re-segmenting purely on acoustic silence merges
- * back-to-back sentences and misassigns boundary words. We instead walk Whisper's own
- * word stream (which carries punctuation) and start a new caption at a real boundary:
- *   - the end of a sentence (`.`, `?`, `!`, `…`), or
- *   - a real pause — a large gap between two consecutive words, or a long ffmpeg
- *     `silencedetect` interval sitting in that gap.
- *
- * Because every break happens *between two consecutive words*, a word can never leak into
- * the wrong caption (the failure mode of center-time region assignment). Commas/clauses
- * stay inside a caption and a whole sentence is allowed to be one caption; only a high
- * safety cap splits a runaway phrase with no punctuation and no pause.
- *
- * When the transcript has no word timings (SRT fallback) we first re-segment by acoustic
- * silence (`resegmentCuesBySilence`) and then split each cue on its sentence punctuation, so
- * a continuous paragraph still becomes one caption per sentence (timing is proportional).
- */
+/** Phrase-aware caption segmentation on Whisper word timings and acoustic silence. */
 
 /** A gap (ms) between two consecutive words this long or longer starts a new phrase. */
 const DEFAULT_PHRASE_PAUSE_MS = 700;
@@ -32,10 +13,7 @@ const DEFAULT_EDGE_PAD_MS = 80;
 /** Safety cap: a phrase with no sentence end and no pause is split once it gets this long. */
 const DEFAULT_MAX_PHRASE_MS = 12_000;
 
-/**
- * A caption shorter than this (ms) is "too quick" and may be merged with an adjacent short
- * caption so rapid-fire one-word sentences ("Okay." "Great.") don't each flash by alone.
- */
+/** Captions shorter than this (ms) may merge with an adjacent short caption. */
 const DEFAULT_MIN_CAPTION_MS = 800;
 /** Only merge short captions separated by at most this gap (ms) — never across a real pause. */
 const DEFAULT_MERGE_GAP_MS = 400;
@@ -74,11 +52,7 @@ const SENTENCE_END = /[.?!…。！？]$/;
 const TRAILING_CLOSERS = /[)\]}"'”’»」』）】］｝>]+$/u;
 
 /**
- * Unambiguous English titles that take a trailing period mid-sentence. Kept deliberately
- * short: only words that are never themselves a sentence (so we don't suppress a real
- * break — e.g. "no" is excluded because "No." is a valid sentence). Dotted initialisms
- * like "e.g."/"U.S."/"a.m." are handled by the regex below, not this list. `?`/`!`/`…`
- * always end a sentence. For non-English audio this simply never matches.
+ * English titles that take a trailing period mid-sentence (non-English audio never matches).
  */
 const ABBREVIATIONS = new Set(["mr", "mrs", "ms", "dr", "prof", "sr", "jr", "st", "vs", "etc"]);
 
@@ -92,7 +66,7 @@ function isAbbreviation(text: string): boolean {
 	if (core.length === 0) {
 		return false;
 	}
-	// Single-letter initial ("J.", "U.") or dotted initialism ("U.S.", "e.g.", "a.m.").
+	// Single-letter initial or dotted initialism.
 	if (/^[a-z]$/.test(core) || /^[a-z](\.[a-z])+$/.test(core)) {
 		return true;
 	}
@@ -100,8 +74,7 @@ function isAbbreviation(text: string): boolean {
 }
 
 /**
- * True when a word's text ends a sentence, ignoring trailing closing quotes/brackets and
- * common abbreviations (so "Mr. Smith" or "e.g." don't start a new caption).
+ * True when a word ends a sentence, ignoring trailing closers and abbreviations.
  */
 export function endsSentence(text: string): boolean {
 	const trimmed = text.trim().replace(TRAILING_CLOSERS, "").trim();
@@ -122,7 +95,6 @@ function flattenWords(cues: CaptionCuePayload[]): CaptionWordPayload[] {
 	for (const cue of cues) {
 		const words = (cue.words ?? []) as CaptionWordPayload[];
 		words.forEach((word, index) => {
-			// A new cue continues the speech, so its first word leads with a space.
 			const leadingSpace =
 				stream.length > 0 && (index === 0 ? true : word.leadingSpace !== false);
 			stream.push({
@@ -199,11 +171,7 @@ function groupWordsBySentence(words: CaptionWordPayload[]): CaptionWordPayload[]
 	return groups;
 }
 
-/**
- * Split a word-less cue's text into one cue per sentence, distributing the cue's time span
- * across sentences by character length. Used on the fallback (no word timing) path so a
- * continuous paragraph still becomes one caption per sentence.
- */
+/** Split a word-less cue into one cue per sentence with proportional timing. */
 function splitTextBySentence(cue: CaptionCuePayload): CaptionCuePayload[] {
 	const tokens = cue.text.trim().split(/\s+/).filter(Boolean);
 	if (tokens.length <= 1) {
@@ -272,7 +240,6 @@ function mergeTwoCues(left: CaptionCuePayload, right: CaptionCuePayload): Captio
 	const leftWords = Array.isArray(left.words) ? (left.words as CaptionWordPayload[]) : [];
 	const rightWords = Array.isArray(right.words) ? (right.words as CaptionWordPayload[]) : [];
 	if (leftWords.length > 0 && rightWords.length > 0) {
-		// The right cue's first word started its own phrase (no leading space) — restore it.
 		const joined = normalizePhraseWords([
 			...leftWords,
 			...rightWords.map((word, index) =>
@@ -302,12 +269,7 @@ interface MergeOptions {
 	maxMergedChars: number;
 }
 
-/**
- * Merge adjacent captions that are BOTH short and rapid-fire (tiny gap), so quick one-word
- * sentences like "Okay." "Great." read as one caption instead of flashing by individually.
- * Only merges when both sides are short, so a short caption never absorbs a full-length one,
- * and never across a real pause or past the size caps.
- */
+/** Merge adjacent short captions separated by a tiny gap. */
 function mergeShortAdjacentCaptions(
 	cues: CaptionCuePayload[],
 	options: MergeOptions,
@@ -349,11 +311,7 @@ function renumberCues(cues: CaptionCuePayload[]): CaptionCuePayload[] {
 	return cues.map((cue, index) => ({ ...cue, id: `caption-${index + 1}` }));
 }
 
-/**
- * Re-segment Whisper cues into one caption per sentence/phrase, then merge rapid-fire short
- * sentences back together. Returns sorted, non-overlapping cues with fresh ids. Falls back to
- * silence-only re-segmentation (plus sentence splitting) when the transcript has no word timings.
- */
+/** Re-segment Whisper cues into phrase-sized captions; falls back to silence-only path without word timings. */
 export function segmentCuesIntoPhrases(
 	cues: CaptionCuePayload[],
 	silences: SilenceInterval[],
@@ -374,10 +332,6 @@ export function segmentCuesIntoPhrases(
 		return [];
 	}
 
-	// No word timings (SRT path): the silence-only segmenter trims/merges by acoustic
-	// silence but can't see sentence boundaries, so a continuous paragraph would collapse
-	// into one caption. Re-segment by silence first, then split each cue on its sentence
-	// punctuation so we still get one caption per sentence.
 	if (!hasWordTimings(cues)) {
 		const base = resegmentCuesBySilence(cues, silences, { splitSilenceMs, edgePadMs });
 		const sentences = base.flatMap(splitCueBySentences);
@@ -409,9 +363,6 @@ export function segmentCuesIntoPhrases(
 		const shouldBreak =
 			endsSentence(word.text) ||
 			gapMs >= pauseMs ||
-			// Only consult acoustic silence when there's a real gap between the words. When
-			// consecutive words overlap or abut (gapMs <= 0) a silence interval spanning that
-			// region must not manufacture a bogus split.
 			(gapMs > 0 && silenceInGap(word.endMs, next.startMs, silences, splitSilenceMs)) ||
 			phraseDurationMs >= maxPhraseMs;
 
@@ -449,10 +400,6 @@ export function segmentCuesIntoPhrases(
 		text: piece.text,
 		...(piece.words.length > 0 ? { words: piece.words } : {}),
 	}));
-	// Merge rapid-fire short captions BEFORE padding so merge eligibility sees the true
-	// speech gaps. Padding pulls cue edges toward each other, which would shrink the
-	// apparent gap and could merge two captions across a real pause sitting just above
-	// mergeGapMs. Pad the survivors afterward so envelopes still get their edge padding.
 	const merged = mergeShortAdjacentCaptions(sentenceCues, mergeOptions);
 	padSpans(merged, edgePadMs);
 	return renumberCues(merged);

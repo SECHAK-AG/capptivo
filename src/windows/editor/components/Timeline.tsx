@@ -147,8 +147,6 @@ export function Timeline({
   const scrollRef = useRef<HTMLDivElement | null>(null);
   const playheadRef = useRef<HTMLDivElement | null>(null);
   const dragRef = useRef<DragState | null>(null);
-  // Committed zoom (mirrors state after paint) + latest intended zoom (compounds
-  // rapid wheel ticks) + the scrollLeft to apply once the new width is laid out.
   const committedZoomRef = useRef(MIN_ZOOM);
   const targetZoomRef = useRef(MIN_ZOOM);
   const pendingScrollRef = useRef<number | null>(null);
@@ -181,8 +179,6 @@ export function Timeline({
 
   const zoomBy = useCallback((factor: number) => zoomToValue(targetZoomRef.current * factor), [zoomToValue]);
 
-  // Keep the committed zoom in sync and apply the anchored scrollLeft after the
-  // new track width is in the DOM (layout effect = before paint, no flicker).
   useLayoutEffect(() => {
     committedZoomRef.current = uiZoom;
     const el = scrollRef.current;
@@ -192,7 +188,6 @@ export function Timeline({
     }
   }, [uiZoom, containerWidth]);
 
-  // Track the visible width so "fit" (zoom = 1) always matches the container.
   useEffect(() => {
     const el = scrollRef.current;
     if (!el) return;
@@ -205,9 +200,6 @@ export function Timeline({
     return () => observer.disconnect();
   }, [ready]);
 
-  // Non-passive wheel listener: ⌘/Ctrl-scroll and trackpad pinch zoom (anchored
-  // at the cursor); a plain wheel pans horizontally. React's onWheel is passive,
-  // so preventDefault would be ignored — hence the native listener.
   useEffect(() => {
     const el = scrollRef.current;
     if (!el) return;
@@ -248,7 +240,6 @@ export function Timeline({
     (!!selectedZoomFragmentId &&
       zoomFragments.some((f) => f.id === selectedZoomFragmentId));
 
-  // Keyboard: T/Z add, Delete, Undo/Redo, Esc clears split tool.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       const tag = (document.activeElement as HTMLElement | null)?.tagName;
@@ -408,8 +399,7 @@ export function Timeline({
     onSeek(t);
   };
 
-  // Playhead is DOM-driven so Timeline does not React-reconcile on every media
-  // tick. While playing, read the <video>; while paused, follow the store clock.
+  // Playhead is DOM-driven — no React reconcile on every media tick.
   useLayoutEffect(() => {
     const apply = (time: number) => {
       const el = playheadRef.current;

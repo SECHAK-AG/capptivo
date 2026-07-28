@@ -1,9 +1,4 @@
-/**
- * Runnable check: editor preset name trim + duplicate-safe id generation shape.
- * Full normalize lives in editorPresets.ts (covered by tsc). This file stays
- * dependency-free so `node --experimental-strip-types` can run it.
- * Run: `node --experimental-strip-types src/windows/editor/lib/editorPresets.selfcheck.ts`
- */
+/** Selfcheck: editor preset name trim and id generation. */
 
 function normalizePresets(raw: unknown): { id: string; name: string }[] {
   if (!Array.isArray(raw)) return [];

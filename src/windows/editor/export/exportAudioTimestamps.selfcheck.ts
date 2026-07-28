@@ -1,11 +1,4 @@
-/**
- * Runnable check for AAC priming timestamp clamp. Run:
- *   node --experimental-strip-types src/windows/editor/export/exportAudioTimestamps.selfcheck.ts
- *
- * Mediabunny demux yields negative PTS for AAC encoder delay (~−1024/48000s);
- * the muxer rejects them. `forMuxTimestamp` drops pure priming and clips
- * straddling packets to t≥0.
- */
+/** Selfcheck: AAC priming timestamp clamp. */
 
 import { EncodedPacket } from "mediabunny";
 import { forMuxTimestamp } from "./exportAudioTimestamps.ts";

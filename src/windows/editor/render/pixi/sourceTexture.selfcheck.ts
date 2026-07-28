@@ -1,7 +1,5 @@
-/**
- * Runnable check for GPU-upload elision. Run:
- *   node --experimental-strip-types src/windows/editor/render/pixi/sourceTexture.selfcheck.ts
- */
+/** Selfcheck: GPU texture upload elision. */
+
 import {
   immutableFrameNeedsUpload,
   needsGpuUpload,

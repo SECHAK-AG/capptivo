@@ -1,8 +1,4 @@
-/**
- * Microphone capture in the recorder WebView (same pattern as the camera window).
- * Keeps a warm getUserMedia stream while a device is selected; MediaRecorder writes
- * `mic.webm` during recording. Rust muxes it into `screen.mp4` on stop.
- */
+/** Microphone capture in the recorder WebView — warm stream + `mic.webm` during recording. */
 
 import { listen, emit } from "@tauri-apps/api/event";
 import { commands } from "@/ipc/bindings";
@@ -11,27 +7,14 @@ const CAPTURE_START = "mic://capture-start";
 const CAPTURE_FLUSH = "mic://capture-flush";
 const CAPTURE_FLUSHED = "mic://capture-flushed";
 
-/**
- * Capture the mic raw, with WebRTC voice processing OFF. On macOS,
- * `echoCancellation` routes the input through the Voice-Processing I/O audio
- * unit, which macOS treats like a VoIP call and **ducks every other app's
- * audio** — that's what quiets Chrome/music while recording and mangles the
- * system-audio track. `autoGainControl` also pumps recording levels. A screen
- * recorder wants the unprocessed signal anyway.
- */
+/** WebRTC voice processing off — on macOS, echo cancellation ducks other apps' audio. */
 export const MIC_AUDIO_PROCESSING_OFF = {
   echoCancellation: false,
   noiseSuppression: false,
   autoGainControl: false,
 } as const;
 
-/**
- * Trigger the OS mic permission prompt without keeping a capture session.
- * Needed when `enumerateDevices` returns nothing until TCC is granted
- * (chicken-and-egg: menu can't list devices, so the user can't pick one to
- * call getUserMedia). Stops tracks immediately; processing stays off so we
- * don't duck other apps during the probe.
- */
+/** One-shot mic TCC prompt when `enumerateDevices` returns nothing until permission is granted. */
 export async function probeMicPermission(): Promise<boolean> {
   if (!navigator.mediaDevices?.getUserMedia) return false;
   try {
@@ -50,8 +33,7 @@ let warmDeviceId: string | null = null;
 let stream: MediaStream | null = null;
 let recorder: MediaRecorder | null = null;
 let subscribed = false;
-/** Serializes chunk writes so async `arrayBuffer()` resolution can't reorder
- *  them on disk and corrupt the WebM (which would then fail the ffmpeg mux). */
+/** Serializes chunk writes so async `arrayBuffer()` can't reorder WebM chunks on disk. */
 let writeChain: Promise<void> = Promise.resolve();
 
 function enqueueChunk(blob: Blob): void {
@@ -141,7 +123,6 @@ async function flushMicFileCapture(): Promise<void> {
     }
   });
   recorder = null;
-  // Drain all queued chunks in order before closing — replaces the fixed sleep.
   await writeChain;
   await commands.finishMicFile().catch(() => null);
 }
@@ -169,7 +150,6 @@ export async function flushMicCaptureWithTimeout(ms = 4000): Promise<void> {
         resolve();
       };
       const timer = window.setTimeout(finish, ms);
-      // Listen before emitting the flush so a fast flush can't beat us to it.
       void listen(CAPTURE_FLUSHED, finish).then((un) => {
         unlisten = un;
         if (settled) {

@@ -83,9 +83,7 @@ import {
 import { buildCaptionsFromWhisper } from "@/captions/pipeline";
 import { listen } from "@tauri-apps/api/event";
 
-/** Re-exported so existing imports keep working; the platform-aware URL shape
- * (Windows serves custom schemes as `http://media.localhost`) lives in one
- * place. */
+/** Re-export; platform-aware media URL lives in `@/lib/platform`. */
 import { mediaUrl } from "@/lib/platform";
 export { mediaUrl };
 
@@ -142,12 +140,7 @@ function parseFaceCamCorner(raw: unknown): FaceCamCorner {
     : DEFAULT_FACE_CAM_CORNER;
 }
 
-/**
- * Persisted background selection. Only ids and parameters are stored — preset
- * srcs are rasterized data URLs (gradients/colors) or asset paths that may
- * change between builds, and custom uploads are ephemeral blob URLs. The
- * renderable src is regenerated from these on load.
- */
+/** Persisted background selection (ids/params only; src regenerated on load). */
 export interface PersistedBackground {
   type: BackgroundType;
   selection: "none" | "preset" | "custom-color" | "custom-gradient";
@@ -171,7 +164,6 @@ function snapshotBackground(s: EditorStore): PersistedBackground {
       selection = "preset";
       presetId = preset.id;
     } else if (s.customImageBackground && src === s.customImageBackground.src) {
-      // Custom upload is a blob URL that dies with the session — not restorable.
       selection = "none";
     } else if (s.backgroundType === "gradient") {
       selection = "custom-gradient";
@@ -301,24 +293,17 @@ export function parseFaceCam(raw: unknown): FaceCamParams {
 interface EditorStore {
   projectId: string | null;
   project: Project | null;
-  /** The original recording — always what the exporter reads. */
+  /** Original recording — what the exporter reads. */
   screenUrl: string | null;
-  /** Low-res preview proxy for smooth scrubbing; the preview `<video>` prefers
-   *  it. `null` until one exists (falls back to `screenUrl`). */
+  /** Low-res preview proxy; `null` until ready (falls back to `screenUrl`). */
   proxyUrl: string | null;
-  /**
-   * A proxy transcode is running in Rust. The preview waits for it instead of
-   * materializing a large original — see `MEDIA_DIRECT_PREVIEW_LIMIT`. Cleared
-   * on ready, on failure, and by a watchdog, so a lost event can never strand
-   * the editor on a blank stage.
-   */
+  /** Proxy transcode in flight; cleared on ready/failure/watchdog timeout. */
   proxyPending: boolean;
   /** Separate face-cam track (`camera.webm` / `camera.mp4`), when recorded. */
   cameraUrl: string | null;
   ready: boolean;
   error: string | null;
-  /** Guards the one-time editor-state init in `onVideoLoaded` so a proxy
-   *  hot-swap (which re-fires `loadedmetadata`) can't clobber in-session edits. */
+  /** One-time init guard — proxy hot-swap must not re-parse editor state. */
   mediaInitialized: boolean;
 
   sourceAspect: number;
@@ -444,12 +429,7 @@ let persistTimer: ReturnType<typeof setTimeout> | null = null;
 let autoSuggestDoneForProject: string | null = null;
 let autoSuggestTimer: ReturnType<typeof setTimeout> | null = null;
 
-/**
- * How long the preview waits for a proxy transcode before giving up and using
- * the original. This is a backstop, not the normal path: `project://proxy-ready`
- * and `project://proxy-failed` are what normally clear the wait, and a dropped
- * event must not leave the editor blank forever.
- */
+/** Backstop if `project://proxy-ready` / `proxy-failed` never arrives. */
 const PROXY_WAIT_TIMEOUT_MS = 3 * 60 * 1000;
 let proxyWaitTimer: ReturnType<typeof setTimeout> | null = null;
 
@@ -493,8 +473,7 @@ function snapshotOf(s: EditorStore): TimelineSnapshot {
   };
 }
 
-/** Shallow-structural equality with one level of nested plain-object handling
- *  (zoom `fixedRect`). Avoids serializing both snapshots to JSON on every edit. */
+/** Shallow equality with one nested level (zoom `fixedRect`). */
 function recordsEqual(a: object, b: object): boolean {
   const ao = a as Record<string, unknown>;
   const bo = b as Record<string, unknown>;
@@ -546,23 +525,15 @@ function pushHistory(get: () => EditorStore, set: (p: Partial<EditorStore>) => v
   });
 }
 
-/** Quiet period after the last edit before writing (coalesces slider drags). */
 const PERSIST_DEBOUNCE_MS = 400;
-/**
- * Durability ceiling: a write is guaranteed at most this long after the first
- * unsaved edit, even while edits keep streaming in. A trailing-edge debounce
- * alone never fires during sustained activity (each edit resets the timer), so
- * a crash mid-session could lose the entire burst.
- */
+/** Max wait before a persist fires during sustained edits (debounce alone never would). */
 const PERSIST_MAX_WAIT_MS = 3000;
 
-/** Wall-clock deadline for the oldest unsaved edit; null = nothing pending. */
 let persistDeadline: number | null = null;
 
 function schedulePersist(get: () => EditorStore) {
   const now = Date.now();
   if (persistDeadline === null) persistDeadline = now + PERSIST_MAX_WAIT_MS;
-  // Debounce, but never past the deadline the oldest unsaved edit set.
   const delay = Math.max(0, Math.min(PERSIST_DEBOUNCE_MS, persistDeadline - now));
   if (persistTimer) clearTimeout(persistTimer);
   persistTimer = setTimeout(() => {
@@ -572,12 +543,7 @@ function schedulePersist(get: () => EditorStore) {
   }, delay);
 }
 
-/**
- * Land any debounced save NOW. No-op when nothing is pending. Called before
- * `init()` swaps projects and from window close/hide hooks — the debounce
- * exists to coalesce slider drags, not to survive teardown, so anything that
- * can invalidate the store or kill the webview must flush first.
- */
+/** Flush pending persist before project swap or window teardown. */
 function flushPersist(get: () => EditorStore) {
   if (!persistTimer) return;
   clearTimeout(persistTimer);
@@ -598,13 +564,12 @@ function scheduleAutoSuggestZooms(get: () => EditorStore) {
       autoSuggestDoneForProject = s.projectId;
       return;
     }
-    // If they already saved an empty zoom list, don't re-stuff suggestions.
     const rawState = s.project?.editorState;
     if (rawState && typeof rawState === "object" && "zoomFragments" in rawState) {
       autoSuggestDoneForProject = s.projectId;
       return;
     }
-    if (!s.recordingMetadata) return; // wait for cursor.json
+    if (!s.recordingMetadata) return;
 
     const w = s.sourceVideoSize?.width ?? s.recordingMetadata.sourceWidth;
     const h = s.sourceVideoSize?.height ?? s.recordingMetadata.sourceHeight;
@@ -749,15 +714,11 @@ export const useEditorStore = create<EditorStore>((set, get) => ({
   customImageBackground: null,
 
   async init(projectId) {
-    // A pending save still belongs to the *previous* project state — land it
-    // before the reset below empties the store, or those edits are lost (and a
-    // stale timer firing mid-init would overwrite good state with defaults).
     flushPersist(get);
     if (autoSuggestTimer) {
       clearTimeout(autoSuggestTimer);
       autoSuggestTimer = null;
     }
-    // The previous project's watchdog must not fire against this one.
     clearProxyWait();
     autoSuggestDoneForProject = null;
     set({
@@ -786,8 +747,6 @@ export const useEditorStore = create<EditorStore>((set, get) => ({
       captionError: null,
       faceCam: { ...DEFAULT_FACE_CAM },
       aspectRatioPresetId: DEFAULT_ASPECT_RATIO_PRESET_ID,
-      // Reset the background so a project without a saved one doesn't inherit
-      // the previous project's; `onVideoLoaded` restores the persisted pick.
       backgroundType: "image",
       selectedBackground: null,
       backgroundImage: null,
@@ -810,7 +769,6 @@ export const useEditorStore = create<EditorStore>((set, get) => ({
         ready: true,
         error: null,
       });
-      // Cursor loads in parallel; applied once video metadata gives source size.
       void loadRecordingMetadata(projectId, null).then((meta) => {
         if (meta && get().projectId === projectId) {
           invalidateZoomKeyframesCache();
@@ -818,9 +776,6 @@ export const useEditorStore = create<EditorStore>((set, get) => ({
           scheduleAutoSuggestZooms(get);
         }
       });
-      // Preview proxy: `meta.json` dims are authoritative for export sizing (so a
-      // low-res proxy can't cap it); the proxy URL swaps into the preview when
-      // ready — either immediately here, or later via `project://proxy-ready`.
       void commands.ensureProxy(projectId).then((info) => {
         if (get().projectId !== projectId) return;
         const patch: Partial<EditorStore> = {};
@@ -829,8 +784,6 @@ export const useEditorStore = create<EditorStore>((set, get) => ({
           patch.sourceAspect = info.width / info.height;
         }
         if (info.proxy) patch.proxyUrl = mediaUrl(projectId, info.proxy);
-        // No filename means Rust is transcoding one; the preview holds off
-        // rather than dragging the original through IPC in the meantime.
         patch.proxyPending = !info.proxy;
         if (patch.proxyPending) scheduleProxyWaitTimeout(projectId, get);
         set(patch);
@@ -842,9 +795,6 @@ export const useEditorStore = create<EditorStore>((set, get) => ({
 
   onVideoLoaded(width, height, duration) {
     if (get().mediaInitialized) {
-      // Re-fired by a proxy hot-swap (the <video> src changed) or an element
-      // reload — do NOT re-parse editor state (it would discard in-session
-      // edits); just keep the duration fresh.
       if (duration > 0 && Math.abs(get().duration - duration) > 0.05) {
         set({ duration });
       }
@@ -869,21 +819,13 @@ export const useEditorStore = create<EditorStore>((set, get) => ({
       ? { ...DEFAULT_CURSOR_SETTINGS, ...parsed.cursorSettings }
       : {
           ...DEFAULT_CURSOR_SETTINGS,
-          // Old projects baked the OS cursor into screen.mp4 — don't overlay a second one.
           showCursor: get().project?.capture?.showsSystemCursor === false,
         };
     const faceCam = parsed?.faceCam ?? { ...DEFAULT_FACE_CAM };
 
-    // Prefer the authoritative dimensions from `ensureProxy` (meta.json) if they
-    // arrived first; otherwise fall back to the element's — which is the original
-    // here, since the proxy only ever swaps in after `mediaInitialized`.
     const existingSize = get().sourceVideoSize;
     const size = existingSize ?? { width, height };
 
-    // Restore the persisted background BEFORE mediaInitialized flips true, so
-    // the persists these setters schedule are dropped by the guard (no
-    // redundant disk write on open). Selection first — the setters regenerate
-    // the src and kick off the image load — then params + the active tab.
     const bg = parsed?.background;
     if (bg) {
       if (bg.selection === "preset" && bg.presetId) {
@@ -901,7 +843,6 @@ export const useEditorStore = create<EditorStore>((set, get) => ({
       } else if (bg.selection === "custom-gradient") {
         get().applyCustomGradient(bg.customGradientAngle, bg.customGradientStart, bg.customGradientEnd);
       }
-      // selection "none" → leave cleared (user opted out of a background).
       set({
         backgroundType: bg.type,
         customBackgroundColor: bg.customColor,
@@ -910,7 +851,6 @@ export const useEditorStore = create<EditorStore>((set, get) => ({
         customGradientAngle: bg.customGradientAngle,
       });
     } else {
-      // Fresh project — default to the first image preset.
       const first = get().imagePresets[0];
       if (first) get().selectBackground(first);
     }
@@ -956,7 +896,6 @@ export const useEditorStore = create<EditorStore>((set, get) => ({
   },
 
   selectBackground(preset) {
-    // Toggle off when re-clicking the active swatch.
     if (get().selectedBackground === preset.src) {
       get().clearBackground();
       return;
@@ -978,7 +917,7 @@ export const useEditorStore = create<EditorStore>((set, get) => ({
   },
 
   clearBackground() {
-    ++bgLoadToken; // drop any in-flight preset decode
+    ++bgLoadToken;
     set({
       selectedBackground: null,
       backgroundImage: null,
@@ -987,8 +926,6 @@ export const useEditorStore = create<EditorStore>((set, get) => ({
   },
 
   uploadCustomBackground(file) {
-    // Object URL (not a data URL): decoded once, no base64 bloat. Revoke the
-    // previous one so repeated uploads don't leak.
     const previous = get().customImageBackground;
     if (previous) URL.revokeObjectURL(previous.src);
 
@@ -1480,9 +1417,6 @@ export const useEditorStore = create<EditorStore>((set, get) => ({
   },
 
   persistEditorState() {
-    // Never write before the saved state has been parsed into the store
-    // (`onVideoLoaded`): during that window the store holds empty defaults,
-    // and persisting them would clobber the real editor state on disk.
     if (!get().mediaInitialized) return;
     const {
       projectId,
@@ -1564,7 +1498,7 @@ export const useEditorStore = create<EditorStore>((set, get) => ({
       backgroundSrcToLoad = selectedBackground;
     }
 
-    // Single store write so React doesn't re-render mid-apply and fight selection.
+    // Single store write so React doesn't re-render mid-apply.
     set({
       backgroundType: bg.type,
       selectedBackground,
@@ -1605,8 +1539,7 @@ export const useEditorStore = create<EditorStore>((set, get) => ({
   },
 }));
 
-// A preview proxy finished transcoding in Rust → swap it into the editor if it's
-// the project currently open. Registered once for the window's lifetime.
+// `project://proxy-ready` — swap transcoded proxy into the open project.
 void listen<{ projectId: string; proxy: string }>("project://proxy-ready", (e) => {
   if (useEditorStore.getState().projectId === e.payload.projectId) {
     clearProxyWait();
@@ -1617,8 +1550,6 @@ void listen<{ projectId: string; proxy: string }>("project://proxy-ready", (e) =
   }
 });
 
-// The transcode gave up (no ffmpeg, unreadable source, …). Stop waiting so the
-// preview falls back to the original instead of sitting blank.
 void listen<{ projectId: string; reason: string }>("project://proxy-failed", (e) => {
   if (useEditorStore.getState().projectId === e.payload.projectId) {
     console.warn("[editor] preview proxy failed", e.payload.reason);

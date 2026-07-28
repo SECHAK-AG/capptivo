@@ -1,7 +1,4 @@
-/**
- * Caption clock + karaoke word pick (aligned with web `captionDrawer` layout).
- * Word highlight only uses Whisper token times — never synthetic equal-split timing.
- */
+/** Caption clock + karaoke word pick (Whisper token times only). */
 
 import type { CaptionCue, CaptionCueWord } from "./types";
 
@@ -63,8 +60,6 @@ function pickCueIndexAtTimeSec(cues: CaptionCue[], timeSec: number): number {
   if (cues.length === 0) return -1;
   if (timeSec < msToSec(cues[0]!.startMs)) return 0;
 
-  // Scan directly over `cues` — the old `cues.map(...)` copy ran every rendered
-  // frame and scaled with recording length (hundreds of cues on a long clip).
   for (let k = 0; k < cues.length; k += 1) {
     const c = cues[k]!;
     const cEnd = msToSec(c.endMs);
@@ -96,12 +91,7 @@ function karaokeOrder(words: TimedDrawWord[]): number[] {
     });
 }
 
-/**
- * Karaoke index: hand off at the next token's start (avoids Whisper's long `end`
- * tails). Port of web `pickActiveWordKaraoke`. `order` is the precomputed
- * start-sorted index list (see [`karaokeOrder`]) — only the time comparison is
- * per-frame; the sort is cached per cue.
- */
+/** Karaoke index — hand off at the next token's start (avoids Whisper end tails). */
 function pickActiveWordIndex(
   words: TimedDrawWord[],
   order: number[],
@@ -136,11 +126,7 @@ function pickActiveWordIndex(
   return -1;
 }
 
-/**
- * Per-cue draw preparation — everything that depends only on the cue, not on
- * playback time. Cached by cue identity (cues are immutable once generated), so
- * the per-frame path does just a cue lookup plus the karaoke time scan.
- */
+/** Per-cue draw prep cached by cue identity (time-independent fields only). */
 type CuePrep =
   | { readonly kind: "words"; readonly words: TimedDrawWord[]; readonly order: number[] }
   /** Cue lacks usable Whisper timings → draw its text, no karaoke. */

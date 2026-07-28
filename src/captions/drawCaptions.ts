@@ -104,17 +104,9 @@ type CaptionLayout = {
 /** Bounds inner-map growth during e.g. a font-size drag; playback stays warm. */
 const MAX_LAYOUTS_PER_CUE = 4;
 
-// Keyed by cue identity, so entries drop automatically when captions are
-// regenerated. The inner map holds the handful of (font, width) combos actually
-// in play — typically just the preview size and the export size.
 const layoutCache = new WeakMap<CaptionCue, Map<string, CaptionLayout>>();
 
-/**
- * Line wrapping + width measurement for a cue, memoized. This is the expensive
- * part (O(words²) `measureText` in `wrapPhraseToLines`, plus per-word widths),
- * and it only changes when the cue, font, or available width change — never
- * per frame. The karaoke highlight (which word is lit) stays live in the caller.
- */
+/** Memoized line wrapping + width measurement for a cue at a given font and width. */
 function getCaptionLayout(
   ctx: CanvasRenderingContext2D,
   cue: CaptionCue,
@@ -132,7 +124,6 @@ function getCaptionLayout(
     layoutCache.set(cue, byKey);
   }
 
-  // `ctx.font` is set by the caller before this runs, so measurements are valid.
   const spaceW = ctx.measureText(" ").width;
   const lines = wrapPhraseToLines(ctx, layoutWords, maxLineWidth, spaceW);
   const lineWidths = lines.map((ln) => measureLineWidth(ctx, ln, spaceW));
@@ -147,8 +138,6 @@ function getCaptionLayout(
   return layout;
 }
 
-// Stable per-cue ids for `captionFrameKey`. Keyed by cue identity so entries
-// drop when captions are regenerated.
 const cueIds = new WeakMap<CaptionCue, number>();
 let nextCueId = 1;
 
@@ -161,15 +150,7 @@ function cueId(cue: CaptionCue): number {
   return id;
 }
 
-/**
- * A key identifying the *pixels* `drawCaptions` would paint for this frame, or
- * `null` when it would paint nothing.
- *
- * Captions have no per-frame animation: within a cue the image only changes
- * when the karaoke highlight moves to the next word. The GPU compositor uses
- * this to keep the caption layer as a cached texture and re-upload it a handful
- * of times per second instead of once per frame.
- */
+/** Content key for the caption layer texture, or `null` when nothing would be drawn. */
 export function captionFrameKey(
   cues: CaptionCue[],
   settings: CaptionSettings,

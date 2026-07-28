@@ -1,7 +1,5 @@
-/**
- * Runnable check for video zoom crop math. Run:
- *   node --experimental-strip-types src/engine/videoZoomCrop.selfcheck.ts
- */
+/** Selfcheck: video zoom crop math. */
+
 import { computeVideoZoomCrop } from "./videoZoomCrop.ts";
 
 function assert(cond: boolean, msg: string): void {

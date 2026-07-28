@@ -11,11 +11,7 @@ const FULL_RES_MAX_BLUR = 12;
 const MIN_BLUR_SCALE = 0.25;
 
 /**
- * Resolution scale for the offscreen blur pass. `blur(N px)` output carries no
- * detail finer than ~N px, so past {@link FULL_RES_MAX_BLUR} the pass renders
- * at reduced scale with a proportionally smaller radius and the final upscale
- * hides it — Canvas-2D blur cost grows with area × radius, and this keeps
- * slider drags cheap in WKWebView.
+ * Downscale offscreen blur past {@link FULL_RES_MAX_BLUR} — blur hides the upscale.
  */
 export function backgroundBlurScale(blurPx: number): number {
   const b = Math.max(0, blurPx);

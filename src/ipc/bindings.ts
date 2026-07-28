@@ -1,11 +1,4 @@
-/**
- * The single typed surface for calling Rust. Raw `invoke("string")` is banned
- * everywhere else (§14) — import `commands` from here instead. When `tauri-specta`
- * is wired, this file becomes generated and the shape stays identical.
- *
- * Tauri converts camelCase JS argument keys to the Rust command's snake_case
- * parameters automatically, so the argument objects below use camelCase.
- */
+/** Typed `invoke` surface — raw `invoke("string")` is banned elsewhere. */
 
 import { invoke } from "@tauri-apps/api/core";
 import type {
@@ -70,11 +63,7 @@ export const commands = {
   flushCameraCapture: () => invoke<void>("flush_camera_capture"),
   beginCameraFile: (projectId: string, filename: string) =>
     invoke<void>("begin_camera_file", { projectId, filename }),
-  // The chunk is the whole payload: Tauri only transfers raw bytes when the
-  // entire invoke argument is a typed array (nested, each byte becomes a JSON
-  // decimal number). Append-only, so unlike the export sink there is no
-  // position to carry — see plans/016 for the measured cost of getting this
-  // wrong.
+  // Chunk must be the whole invoke arg — nested typed arrays JSON-encode per byte.
   writeCameraChunk: (chunk: Uint8Array) =>
     invoke<void>("write_camera_chunk", chunk),
   finishCameraFile: () => invoke<string | null>("finish_camera_file"),
@@ -114,16 +103,9 @@ export const commands = {
   ensureThumbnail: (id: string) =>
     invoke<string | null>("ensure_thumbnail", { id }),
 
-  // --- export ---
-  // Save path: use `@tauri-apps/plugin-dialog` `save()` from JS (non-blocking).
-  // Never invoke a Rust `blocking_save_file` command — deadlocks macOS AppKit.
+  // Save path: use `@tauri-apps/plugin-dialog` `save()` — never a blocking Rust picker.
   beginExport: (path: string) => invoke<number>("begin_export", { path }),
-  // Tauri only transfers a payload as raw `application/octet-stream` bytes when
-  // the *entire* invoke argument is an ArrayBuffer/typed array — a Uint8Array
-  // nested inside an object is JSON-encoded as one decimal number per byte
-  // (~3.5x expansion, ~1.1 s of main-thread stringify per 16 MiB chunk). So the
-  // chunk *is* the payload and the scalars ride in headers. `position` is the
-  // absolute byte offset — streaming muxers write out of order.
+  // Chunk is the whole invoke arg; handle/position ride in headers for out-of-order muxers.
   writeExportChunk: (handle: number, position: number, chunk: Uint8Array) =>
     invoke<void>("write_export_chunk", chunk, {
       headers: {
@@ -131,22 +113,19 @@ export const commands = {
         "x-export-position": String(position),
       },
     }),
-  // Ensure a low-res preview proxy exists; returns the original dimensions
-  // (authoritative for export) and the proxy filename when it's ready now.
+  /** Returns original dimensions and proxy filename when ready. */
   ensureProxy: (projectId: string) =>
     invoke<{ proxy: string | null; width: number; height: number }>(
       "ensure_proxy",
       { projectId },
     ),
-  // Ensure the project's screen.mp4 is a seekable progressive MP4 before export
-  // reads it (migrates older fragmented recordings; fast no-op once progressive).
+  /** Migrates fragmented recordings to seekable MP4; no-op once progressive. */
   ensureSeekableRecording: (projectId: string) =>
     invoke<void>("ensure_seekable_recording", { projectId }),
   finishExport: (handle: number) => invoke<string>("finish_export", { handle }),
   abortExport: (handle: number, reason: string) =>
     invoke<void>("abort_export", { handle, reason }),
-  // Mux the recorded audio into a video-only export, trimmed to the kept
-  // segments and optionally voice-enhanced. No-op when the recording is silent.
+  /** Mux trimmed audio into a video-only export; no-op when silent. */
   muxExportAudio: (args: {
     projectId: string;
     videoPath: string;
@@ -155,9 +134,7 @@ export const commands = {
     preset: "off" | "podcast";
     hasSystemAudio: boolean;
   }) => invoke<void>("mux_export_audio", args),
-  // Trim/enhance audio to a sidecar while video encodes (overlaps wall time).
-  // `outName` is a bare filename under the project dir (media://-readable).
-  // Returns the absolute sidecar path, or null when the recording is silent.
+  /** Prepare a trimmed audio sidecar while video encodes; returns path or null when silent. */
   prepareExportAudio: (args: {
     projectId: string;
     outName: string;
@@ -166,7 +143,6 @@ export const commands = {
     preset: "off" | "podcast";
     hasSystemAudio: boolean;
   }) => invoke<string | null>("prepare_export_audio", args),
-  // Stream-copy a prepared audio sidecar onto the video-only export.
   attachExportAudio: (args: { videoPath: string; audioPath: string }) =>
     invoke<void>("attach_export_audio", args),
   removeTempFile: (args: { path: string }) => invoke<void>("remove_temp_file", args),

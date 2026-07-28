@@ -1,7 +1,5 @@
-/**
- * Runnable check for follow-cursor safe-zone + spring. Run:
- *   node --experimental-strip-types src/engine/smartFollow.selfcheck.ts
- */
+/** Selfcheck: follow-cursor safe zone and spring. */
+
 import {
   SMART_FOLLOW_CONFIG,
   createSmartFollowPlanner,

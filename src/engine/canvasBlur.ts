@@ -1,14 +1,5 @@
 /**
- * Is Canvas-2D `filter: blur()` real on this platform?
- *
- * WKWebView parses the property but renders the blur as a no-op, which showed
- * up as "barely blurs and looks pixelated" on the background layer and as a
- * hard black slab behind the recording. Everything that blurs on a 2D canvas
- * has to ask first and fall back to `gaussianBlurRgba`.
- *
- * Probe with a real draw: a working blur bleeds alpha outside the filled rect,
- * a no-op leaves the probe pixel empty. Cached — the answer cannot change
- * within a session.
+ * Probe whether Canvas-2D `filter: blur()` works (WKWebView no-op fallback).
  */
 let nativeBlurProbe: boolean | null = null;
 

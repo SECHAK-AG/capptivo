@@ -1,7 +1,5 @@
-/**
- * Runnable check for cursor placement. Run:
- *   node --experimental-strip-types src/engine/cursorOverlay.selfcheck.ts
- */
+/** Selfcheck: cursor placement. */
+
 import {
   assertCursorDefaults,
   DEFAULT_CURSOR_SETTINGS,

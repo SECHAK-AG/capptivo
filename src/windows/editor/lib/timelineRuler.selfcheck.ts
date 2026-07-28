@@ -1,7 +1,5 @@
-/**
- * Runnable check for adaptive timeline ruler. Run:
- *   node --experimental-strip-types src/windows/editor/lib/timelineRuler.selfcheck.ts
- */
+/** Selfcheck: adaptive timeline ruler. */
+
 import { buildTimelineRuler, formatTimelineTime } from "./timelineRuler.ts";
 
 function assert(cond: boolean, msg: string): void {

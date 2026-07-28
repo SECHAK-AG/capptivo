@@ -1,7 +1,4 @@
-/**
- * Runnable check: Match stage follows full source, never a content-crop fraction.
- * Run: `node --experimental-strip-types src/windows/editor/lib/composition.selfcheck.ts`
- */
+/** Selfcheck: match stage follows full source, not crop fraction. */
 
 export {}; // module scope — keeps top-level helpers out of the global namespace
 

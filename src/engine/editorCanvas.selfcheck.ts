@@ -1,7 +1,4 @@
-/**
- * Runnable check: face-cam margin clamps + corner inset.
- * Run: `node --experimental-strip-types src/engine/editorCanvas.selfcheck.ts`
- */
+/** Selfcheck: face-cam margin clamps and corner inset. */
 
 const MARGIN_MIN = 0;
 const MARGIN_MAX = 96;

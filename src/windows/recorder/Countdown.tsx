@@ -20,8 +20,6 @@ export function Countdown({ from = 3, onDone }: { from?: number; onDone: () => v
   if (n <= 0) return null;
 
   return (
-    // Transparent shell — if the native window is still wide, side bands stay clear
-    // instead of stretching the dark card into a pill.
     <div className="grid h-full w-full place-items-center bg-transparent">
       <div
         className="relative overflow-hidden bg-neutral-950/90"

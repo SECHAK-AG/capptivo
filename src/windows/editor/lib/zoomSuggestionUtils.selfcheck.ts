@@ -1,7 +1,4 @@
-/**
- * Runnable check: click clusters → suggested zoom windows.
- * Run: `node --experimental-strip-types src/windows/editor/lib/zoomSuggestionUtils.selfcheck.ts`
- */
+/** Selfcheck: click clusters to suggested zoom windows. */
 
 function buildClickClusters(
   clicks: { t: number; x: number; y: number }[],
