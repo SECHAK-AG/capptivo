@@ -45,7 +45,7 @@ export async function renderGifToSink(
   const session = sequential
     ? await createExportCompositorFromMedia(sequential.media, width, height, { cpuReadback: true })
     : await createExportCompositor(screenUrl, cameraUrl, width, height, { cpuReadback: true });
-  const { ctx, video, camera, segments, drawAt, dispose } = session;
+  const { ctx, video, camera, segments, drawAt, dispose, stats } = session;
   if (!ctx) {
     dispose();
     throw new Error("GIF export requires a readable canvas context");
@@ -117,6 +117,14 @@ export async function renderGifToSink(
 
     const queue = pool ? new OrderedPromiseQueue<QuantizedFrame>(pool.depth) : null;
 
+    // GIF is the only format that reads pixels back, and it pays for it twice:
+    // `compose()` blits the GPU canvas into a 2D canvas (the profiler's
+    // `readback` phase), then `getImageData` copies that into a fresh array.
+    // Bucketing the second copy separately is what tells us whether collapsing
+    // the two is worth the risk — see plans/005.
+    let getImageDataMs = 0;
+    const loopStart = performance.now();
+
     for (const t of frameTimes) {
       if (reader) {
         await reader.nextFrame();
@@ -126,7 +134,9 @@ export async function renderGifToSink(
       }
       drawAt(t);
 
+      const readStart = performance.now();
       const { data } = ctx.getImageData(0, 0, width, height);
+      getImageDataMs += performance.now() - readStart;
 
       if (pool && queue) {
         const ready = await queue.push(pool.submit(data));
@@ -149,6 +159,20 @@ export async function renderGifToSink(
     }
 
     if (framesWritten === 0) throw new Error("GIF export produced no frames");
+
+    const wallMs = performance.now() - loopStart;
+    const perFrameMs = wallMs / framesWritten;
+    const readShare = (getImageDataMs / framesWritten / perFrameMs) * 100;
+    console.info(
+      `[export] gif loop done in ${(wallMs / 1000).toFixed(1)}s ` +
+        `(${(framesWritten / (wallMs / 1000)).toFixed(1)} fps) — ` +
+        `${perFrameMs.toFixed(1)}ms/frame, ` +
+        `getImageData ${(getImageDataMs / framesWritten).toFixed(2)}ms/frame ` +
+        `(${readShare.toFixed(1)}% of frame time)`,
+    );
+    const breakdown = stats();
+    if (breakdown) console.info(`[export] gif composite breakdown: ${breakdown}`);
+
     gif.finish(); // writes the trailer into the buffer
     const tail = gif.stream.bytesView();
     if (tail.length > 0) await sink.append(tail.slice());
