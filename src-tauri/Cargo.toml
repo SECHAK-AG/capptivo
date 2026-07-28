@@ -1,0 +1,135 @@
+[package]
+name = "desktop"
+version = "0.1.0"
+description = "Capptivo Desktop — native screen recorder + editor"
+authors = ["idboussadel"]
+license = "AGPL-3.0-or-later"
+edition = "2021"
+
+[lib]
+# The `_lib` suffix keeps the lib name unique so it doesn't conflict with the
+# bin name (an issue on Windows, see rust-lang/cargo#8519).
+# Desktop-only: rlib is enough. staticlib/cdylib are for mobile and can make
+# macOS bin linking drop thin-local-LTO monomorphizations (undefined .llvm. symbols).
+name = "desktop_lib"
+crate-type = ["rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+# --- Tauri shell + plugins ---
+tauri = { version = "2", features = ["tray-icon", "image-png", "macos-private-api"] }
+tauri-plugin-opener = "2"
+tauri-plugin-dialog = "2"
+tauri-plugin-fs = "2"
+tauri-plugin-notification = "2"
+tauri-plugin-global-shortcut = "2"
+
+# --- Serialization ---
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+# --- Errors, logging, ids, time ---
+thiserror = "2"
+anyhow = "1"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+uuid = { version = "1", features = ["v4"] }
+chrono = { version = "0.4", features = ["serde", "clock"] }
+
+# --- Recording pipeline ---
+crossbeam-channel = "0.5"
+parking_lot = "0.12"
+
+ureq = { version = "2.12", default-features = false, features = ["tls"] }
+
+image = { version = "0.25", default-features = false, features = ["jpeg", "png"] }
+base64 = "0.22"
+
+[target.'cfg(target_os = "macos")'.dependencies]
+# Screen capture via ScreenCaptureKit. Pinned per TAURI_DESKTOP_MIGRATION.md §15
+# ("pin the rev; isolate behind trait CaptureBackend"). Video lives in
+# scap_backend.rs; system audio is a tiny companion SCStream in system_audio.rs
+# (scap 0.0.8 has no captures_audio; Cap's newer scap needs full Xcode/cidre).
+scap = { version = "=0.0.8", optional = true }
+# Low-level SCK for system audio — high-level CMSampleBuffer::new null-derefs on
+# audio frames (no sample-attachments). objc for SCK audio config setters the sys
+# crate's `From` impl omits (sample_rate / channel_count). Also used by windows.rs
+# to lock NSWindowCollectionBehaviorFullScreenPrimary (green expand arrows).
+screencapturekit-sys = { version = "0.2.8", optional = true }
+objc = "0.2.7"
+objc_id = { version = "0.1.1", optional = true }
+# Global cursor position + click polling for the zoom-follow data (no TCC needed
+# for position polling). Isolated behind cursor::CursorTracker.
+core-graphics = "0.24"
+
+[target.'cfg(target_os = "windows")'.dependencies]
+# Screen capture via Windows.Graphics.Capture. Same seam as scap on macOS:
+# video lives in wgc_backend.rs behind trait CaptureBackend.
+windows-capture = { version = "2.0", optional = true }
+# Win32 for cursor tracking (GetCursorPos / GetCursorInfo), overlay exclusion
+# (SetWindowDisplayAffinity), and GDI picker thumbnails (BitBlt / PrintWindow).
+windows = { version = "0.62", features = [
+    "Win32_Foundation",
+    "Win32_Graphics_Gdi",
+    "Win32_Graphics_Dwm",
+    "Win32_UI_WindowsAndMessaging",
+    "Win32_UI_Input_KeyboardAndMouse",
+    "Win32_UI_HiDpi",
+    "Win32_Storage_Xps",
+    # QPC: anchors WGC frame timestamps to the cursor sampler's clock.
+    "Win32_System_Performance",
+] }
+# WASAPI loopback for system audio (input stream opened on an output device).
+cpal = { version = "0.16", optional = true }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+# Screen capture via xdg-desktop-portal (ScreenCast) + PipeWire — the only path
+# that works uniformly on Wayland and X11. Portal negotiation is async (zbus),
+# driven on a dedicated thread with a current-thread tokio runtime.
+ashpd = { version = "0.11", default-features = false, features = ["tokio"], optional = true }
+pipewire = { version = "0.8", optional = true }
+tokio = { version = "1", features = ["rt", "time"], optional = true }
+# System audio: default-sink monitor via PulseAudio (works on PipeWire through
+# pipewire-pulse, and on plain PulseAudio).
+libpulse-binding = { version = "2", optional = true }
+libpulse-simple-binding = { version = "2", optional = true }
+# Global cursor sampling on X11 sessions (pure-Rust XCB connection).
+x11rb = { version = "0.13", optional = true }
+
+[features]
+default = ["scap-capture", "wgc-capture", "portal-capture"]
+# When disabled (e.g. CI without a display / non-macOS), only the synthetic
+# test-pattern backend is compiled, keeping `cargo test` green everywhere and
+# letting `cargo check --no-default-features` verify the pipeline without the
+# ScreenCaptureKit `-sys` build.
+scap-capture = ["dep:scap", "dep:screencapturekit-sys", "dep:objc_id"]
+# Windows.Graphics.Capture backend (no-op off Windows — the target-gated deps
+# only resolve there, so the feature is safe to keep in defaults).
+wgc-capture = ["dep:windows-capture", "dep:cpal"]
+# xdg-desktop-portal + PipeWire backend (no-op off Linux, same pattern).
+portal-capture = [
+    "dep:ashpd",
+    "dep:pipewire",
+    "dep:tokio",
+    "dep:libpulse-binding",
+    "dep:libpulse-simple-binding",
+    "dep:x11rb",
+]
+
+# objc's `msg_send!` probes `cfg(feature = "cargo-clippy")`; declare it alongside
+# this crate's real features so rustc 1.80+ doesn't warn on SCK setters.
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(feature, values("default", "scap-capture", "wgc-capture", "portal-capture", "cargo-clippy"))'] }
+
+# Optimize deps in dev (scap / ScreenCaptureKit are heavy) without raising
+# opt-level on *this* crate. opt-level >= 1 on the lib+bin pair triggers a
+# thin-local-LTO bug on recent rustc/macOS: Manager::state closures end up as
+# internal `.llvm.*` symbols and the final `desktop` bin fails to link.
+[profile.dev.package."*"]
+opt-level = 1
+
+[profile.release]
+codegen-units = 1
+lto = true

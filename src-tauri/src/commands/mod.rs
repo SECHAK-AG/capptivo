@@ -1,0 +1,79 @@
+//! IPC command surface. Kept deliberately small (§7); every command is a thin
+//! adapter over a domain module. Registered in one place via
+//! [`generate_handler!`](crate::commands::handlers).
+
+pub mod export;
+pub mod captions;
+pub mod project;
+pub mod recording;
+
+/// The full invoke handler. Referenced from `lib.rs`. Adding a command means
+/// adding it here and nowhere else.
+#[macro_export]
+macro_rules! command_handlers {
+    () => {
+        tauri::generate_handler![
+            // recording
+            $crate::commands::recording::list_capture_sources,
+            $crate::commands::recording::list_capture_devices,
+            $crate::commands::recording::platform_capabilities,
+            $crate::commands::recording::check_permissions,
+            $crate::commands::recording::request_screen_permission,
+            $crate::commands::recording::open_screen_recording_settings,
+            $crate::commands::recording::relaunch,
+            $crate::commands::recording::recorder_state,
+            $crate::commands::recording::start_recording,
+            $crate::commands::recording::pause_recording,
+            $crate::commands::recording::resume_recording,
+            $crate::commands::recording::stop_recording,
+            $crate::commands::recording::pick_capture_area,
+            $crate::commands::recording::complete_area_pick,
+            $crate::commands::recording::cancel_area_pick,
+            $crate::commands::recording::show_area_frame_guide,
+            $crate::commands::recording::hide_area_frame_guide,
+            $crate::commands::recording::begin_camera_file,
+            $crate::commands::recording::write_camera_chunk,
+            $crate::commands::recording::finish_camera_file,
+            $crate::commands::recording::begin_mic_file,
+            $crate::commands::recording::write_mic_chunk,
+            $crate::commands::recording::finish_mic_file,
+            $crate::windows::hide_recorder,
+            $crate::windows::set_recorder_layout,
+            $crate::windows::set_recorder_bar_width,
+            $crate::windows::show_camera_preview,
+            $crate::windows::hide_camera_preview,
+            $crate::windows::dismiss_camera_preview,
+            $crate::windows::set_camera_preview_visible,
+            $crate::windows::flush_camera_capture,
+            $crate::windows::flush_mic_capture,
+            $crate::windows::show_annotation_overlay,
+            $crate::windows::hide_annotation_overlay,
+            $crate::windows::sync_annotation_display,
+            $crate::windows::open_library,
+            $crate::windows::open_editor,
+            $crate::windows::present_window,
+            $crate::commands::captions::get_whisper_model_status,
+            $crate::commands::captions::download_whisper_model,
+            $crate::commands::captions::delete_whisper_model,
+            $crate::commands::captions::generate_captions,
+            // projects
+            $crate::commands::project::list_projects,
+            $crate::commands::project::load_project,
+            $crate::commands::project::ensure_proxy,
+            $crate::commands::project::save_editor_state,
+            $crate::commands::project::rename_project,
+            $crate::commands::project::delete_project,
+            $crate::commands::project::ensure_thumbnail,
+            // export
+            $crate::commands::export::ensure_seekable_recording,
+            $crate::commands::export::begin_export,
+            $crate::commands::export::write_export_chunk,
+            $crate::commands::export::finish_export,
+            $crate::commands::export::abort_export,
+            $crate::commands::export::mux_export_audio,
+            $crate::commands::export::prepare_export_audio,
+            $crate::commands::export::attach_export_audio,
+            $crate::commands::export::remove_temp_file,
+        ]
+    };
+}

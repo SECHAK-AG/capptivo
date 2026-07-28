@@ -1,0 +1,159 @@
+/**
+ * Frame-accurate GIF encode (gifenc). Requires an untainted canvas — the
+ * sequential path decodes via WebCodecs (never taints); the fallback loads
+ * media as blob: URLs in `createExportCompositor`.
+ *
+ * Quantization runs in a worker pool when available (plans/020); the main
+ * thread keeps the decode/composite loop moving. Frames are always written in
+ * timeline order — completion order from the pool may differ.
+ */
+
+import { GIFEncoder, applyPalette, quantize } from "gifenc";
+
+import {
+  createExportCompositor,
+  createExportCompositorFromMedia,
+  planFrameTimes,
+  seekTo,
+  yieldToMain,
+} from "./exportCompositor";
+import { openSequentialMedia } from "./sequentialMedia";
+import type { ExportSink } from "./exportSink";
+import { createDitherPalettizer } from "./gifDither";
+import {
+  createGifQuantizePool,
+  OrderedPromiseQueue,
+  type QuantizedFrame,
+} from "./gifQuantizePool";
+import type { ResolvedExportParams } from "./exportSettings";
+import { useEditorStore } from "../store";
+
+/** Flush the encoder's buffer to disk once it grows past this, so the whole
+ *  GIF never sits in RAM. */
+const GIF_FLUSH_THRESHOLD = 4 * 1024 * 1024;
+
+export async function renderGifToSink(
+  sink: ExportSink,
+  screenUrl: string,
+  cameraUrl: string | null,
+  params: ResolvedExportParams,
+): Promise<void> {
+  const { width, height, fps, gifColors, gifDither } = params;
+  // GIF is the one consumer of getImageData — the only path that wants a
+  // CPU-resident canvas (see CompositorOptions.cpuReadback).
+  const sequential = await openSequentialMedia(screenUrl, cameraUrl).catch(() => null);
+  const session = sequential
+    ? await createExportCompositorFromMedia(sequential.media, width, height, { cpuReadback: true })
+    : await createExportCompositor(screenUrl, cameraUrl, width, height, { cpuReadback: true });
+  const { ctx, video, camera, segments, drawAt, dispose } = session;
+  if (!ctx) {
+    dispose();
+    throw new Error("GIF export requires a readable canvas context");
+  }
+
+  const pool = createGifQuantizePool(width, height, gifColors, gifDither);
+  // Main-thread dither only for the fallback path — each worker builds its own.
+  const ditherApplyPalette =
+    pool || !gifDither ? null : createDitherPalettizer(width, height);
+
+  try {
+    const frameTimes = planFrameTimes(segments, fps);
+    const firstT = frameTimes[0] ?? segments[0]?.start ?? 0;
+
+    // Warm the first frame and prove the canvas is readable (not tainted).
+    // Sequential surfaces can't taint (WebCodecs pixels), so only the
+    // element-based fallback needs the priming seek. Use the same mid-slot
+    // time as the encode loop — exact t=0 often paints blank in WebKit.
+    if (!sequential) {
+      await seekTo(video, firstT);
+      if (camera) await seekTo(camera, firstT).catch(() => undefined);
+    }
+    drawAt(firstT);
+    try {
+      ctx.getImageData(0, 0, 1, 1);
+    } catch {
+      throw new Error(
+        "export canvas is tainted — cannot encode GIF. Try restarting the app.",
+      );
+    }
+
+    const gif = GIFEncoder();
+    const delayCs = Math.max(2, Math.round(100 / fps));
+    const format = "rgb565" as const;
+    let framesWritten = 0;
+    let lastPercent = -1;
+
+    const reportProgress = () => {
+      // Tied to frames *written*, not submitted, so the bar stays truthful.
+      const ratio = Math.min(1, framesWritten / frameTimes.length);
+      const percent = Math.round(ratio * 100);
+      if (percent !== lastPercent) {
+        lastPercent = percent;
+        useEditorStore.getState().setExportProgress(ratio);
+      }
+    };
+
+    const flushIfNeeded = async () => {
+      const pending = gif.stream.bytesView();
+      if (pending.length >= GIF_FLUSH_THRESHOLD) {
+        await sink.append(pending.slice());
+        gif.stream.reset();
+      }
+    };
+
+    const writeFrame = async (frame: QuantizedFrame) => {
+      gif.writeFrame(frame.index, width, height, {
+        palette: frame.palette,
+        delay: delayCs,
+        ...(framesWritten === 0 ? { repeat: 0 } : {}),
+      });
+      framesWritten += 1;
+      reportProgress();
+      await flushIfNeeded();
+    };
+
+    const reader =
+      sequential?.begin(frameTimes, { mode: "video-frame" }) ?? null;
+
+    const queue = pool ? new OrderedPromiseQueue<QuantizedFrame>(pool.depth) : null;
+
+    for (const t of frameTimes) {
+      if (reader) {
+        await reader.nextFrame();
+      } else {
+        await seekTo(video, t);
+        if (camera) await seekTo(camera, t).catch(() => undefined);
+      }
+      drawAt(t);
+
+      const { data } = ctx.getImageData(0, 0, width, height);
+
+      if (pool && queue) {
+        const ready = await queue.push(pool.submit(data));
+        if (ready) await writeFrame(ready);
+      } else {
+        const palette = quantize(data, gifColors, { format });
+        const index = ditherApplyPalette
+          ? ditherApplyPalette(data, palette)
+          : applyPalette(data, palette, format);
+        await writeFrame({ palette, index });
+        // Pool awaits already yield; keep yieldToMain on the fallback path.
+        if (framesWritten % 3 === 0) await yieldToMain();
+      }
+    }
+
+    if (queue) {
+      for await (const frame of queue.drain()) {
+        await writeFrame(frame);
+      }
+    }
+
+    if (framesWritten === 0) throw new Error("GIF export produced no frames");
+    gif.finish(); // writes the trailer into the buffer
+    const tail = gif.stream.bytesView();
+    if (tail.length > 0) await sink.append(tail.slice());
+  } finally {
+    pool?.dispose();
+    dispose();
+  }
+}

@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Merged into the bundled app's Info.plist by Tauri. The camera/microphone usage
+  strings are mandatory: a missing NS*UsageDescription key hard-crashes the app
+  the moment getUserMedia is called (§11). Screen Recording needs no key — it is
+  TCC-prompted by the system on first SCShareableContent query.
+
+  LSUIElement=1 makes this a menubar agent (no Dock icon at launch); the Rust
+  side flips to a Regular activation policy when a library or editor window opens.
+-->
+<plist version="1.0">
+  <dict>
+    <key>NSCameraUsageDescription</key>
+    <string>Capptivo uses your camera to record a webcam bubble alongside your screen.</string>
+    <key>NSMicrophoneUsageDescription</key>
+    <string>Capptivo uses your microphone to record narration with your screen.</string>
+    <key>LSUIElement</key>
+    <true/>
+  </dict>
+</plist>

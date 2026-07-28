@@ -1,0 +1,5 @@
+# Match tauri.conf.json macOS.minimumSystemVersion. Without this, rustc/Homebrew
+# objects (macOS 26 SDK) get linked with the toolchain default min (11.0) and
+# the linker emits noisy version-mismatch warnings.
+[env]
+MACOSX_DEPLOYMENT_TARGET = "13.0"

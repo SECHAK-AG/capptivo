@@ -1,0 +1,132 @@
+//! Application state managed by Tauri and shared across commands.
+
+use crate::project::ProjectStore;
+use crate::recorder::backend::{CaptureBackend, TestPatternBackend};
+use crate::recorder::types::{RecorderConfig, RecorderEvent};
+use crate::recorder::RecorderController;
+use parking_lot::Mutex;
+use std::collections::{HashMap, HashSet};
+use std::fs::File;
+use std::path::PathBuf;
+use std::sync::Arc;
+use tauri::{AppHandle, Emitter, Manager};
+
+pub struct AppState {
+    pub recorder: Arc<RecorderController>,
+    pub store: Arc<ProjectStore>,
+    /// The recording currently being captured (set on start, cleared on stop).
+    /// Holds the config so `stop_recording` can finalize the project manifest.
+    pub current_project: Mutex<Option<CurrentProject>>,
+    /// Open export file sinks, keyed by handle id (see `commands::export`).
+    pub exports: Mutex<HashMap<u64, ExportSink>>,
+    pub next_export_id: Mutex<u64>,
+    /// Optional face-cam file being written by the camera WebView during capture.
+    pub camera_sink: Mutex<Option<ExportSink>>,
+    /// Narration track from the recorder WebView (`mic.webm`).
+    pub mic_sink: Mutex<Option<ExportSink>>,
+    /// Project ids with a preview-proxy transcode in flight, so concurrent
+    /// `ensure_proxy` calls coalesce to a single FFmpeg pass.
+    pub proxy_jobs: Mutex<HashSet<String>>,
+}
+
+pub struct ExportSink {
+    pub file: File,
+    pub path: PathBuf,
+}
+
+#[derive(Clone)]
+pub struct CurrentProject {
+    pub id: String,
+    pub config: RecorderConfig,
+}
+
+impl AppState {
+    /// Build state from an app handle: resolves the data dir for the project
+    /// store and wires the recorder's event `emit` closure to Tauri events.
+    pub fn build(app: &AppHandle) -> Self {
+        let data_dir = app
+            .path()
+            .app_data_dir()
+            .unwrap_or_else(|_| std::env::temp_dir().join("Capptivo"));
+        let store = Arc::new(ProjectStore::new(data_dir));
+
+        let emit_handle = app.clone();
+        let emit = Arc::new(move |event: RecorderEvent| {
+            let channel = event.channel();
+            if let Err(err) = emit_handle.emit(channel, &event) {
+                tracing::warn!(%channel, %err, "failed to emit recorder event");
+            }
+        });
+
+        let recorder = Arc::new(RecorderController::new(make_backend(), emit));
+
+        Self {
+            recorder,
+            store,
+            current_project: Mutex::new(None),
+            exports: Mutex::new(HashMap::new()),
+            next_export_id: Mutex::new(1),
+            camera_sink: Mutex::new(None),
+            mic_sink: Mutex::new(None),
+            proxy_jobs: Mutex::new(HashSet::new()),
+        }
+    }
+}
+
+/// Choose the capture backend for this OS: ScreenCaptureKit on macOS,
+/// Windows.Graphics.Capture on Windows, the xdg-desktop-portal + PipeWire path
+/// on Linux. Falls back to the synthetic test pattern when capture isn't
+/// supported (old OS, CI, no portal) so the app still boots and the UI is usable.
+fn make_backend() -> Box<dyn CaptureBackend> {
+    // macOS additionally routes `device:` sources to CoreMediaIO/AVFoundation for
+    // iPhone & iPad screen capture — a different framework with different
+    // permissions, so it is composed in rather than folded into the screen
+    // backend. See `backend/router.rs`.
+    #[cfg(target_os = "macos")]
+    {
+        use crate::recorder::backend::{AvfDeviceBackend, RoutingBackend, DEVICE_ID_PREFIX};
+        let device = Box::new(AvfDeviceBackend::new());
+        return Box::new(RoutingBackend::new(
+            make_screen_backend(),
+            device,
+            DEVICE_ID_PREFIX,
+        ));
+    }
+    #[cfg(not(target_os = "macos"))]
+    make_screen_backend()
+}
+
+/// The display/window backend for this OS.
+fn make_screen_backend() -> Box<dyn CaptureBackend> {
+    #[cfg(all(target_os = "macos", feature = "scap-capture"))]
+    {
+        use crate::recorder::backend::ScapBackend;
+        let scap = ScapBackend::new();
+        if scap.is_supported() {
+            tracing::info!("using ScreenCaptureKit capture backend");
+            return Box::new(scap);
+        }
+        tracing::warn!("ScreenCaptureKit unsupported — falling back to test pattern");
+    }
+    #[cfg(all(target_os = "windows", feature = "wgc-capture"))]
+    {
+        use crate::recorder::backend::WgcBackend;
+        let wgc = WgcBackend::new();
+        if wgc.is_supported() {
+            tracing::info!("using Windows.Graphics.Capture backend");
+            return Box::new(wgc);
+        }
+        tracing::warn!("Windows.Graphics.Capture unsupported — falling back to test pattern");
+    }
+    #[cfg(all(target_os = "linux", feature = "portal-capture"))]
+    {
+        use crate::recorder::backend::PortalBackend;
+        let portal = PortalBackend::new();
+        if portal.is_supported() {
+            tracing::info!("using xdg-desktop-portal capture backend");
+            return Box::new(portal);
+        }
+        tracing::warn!("screen-cast portal unavailable — falling back to test pattern");
+    }
+    Box::new(TestPatternBackend::default())
+}

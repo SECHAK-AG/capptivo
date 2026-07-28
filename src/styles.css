@@ -1,0 +1,189 @@
+@import "tailwindcss";
+@import "tw-animate-css";
+
+/* `dark:` utilities apply under a `.dark` ancestor (set on the editor <html>). */
+@custom-variant dark (&:is(.dark *));
+
+/*
+ * shadcn design tokens ported from the web editor's app.css.
+ *
+ * `:root` holds the DARK palette so the recorder popover — which uses semantic
+ * tokens with no theme wrapper — stays dark, unchanged. The editor window sets
+ * `dark` or `light` on its own <html>, so the `.light` block below overrides the
+ * defaults, and portalled UI (dialogs, dropdowns) inherits the theme too.
+ */
+@theme inline {
+  --font-sans: "Poppins", ui-sans-serif, system-ui, sans-serif, "Apple Color Emoji";
+  --font-brand: "Orbitron", ui-sans-serif, system-ui, sans-serif;
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+  --radius-lg: var(--radius);
+  --radius-md: calc(var(--radius) - 2px);
+  --radius-sm: calc(var(--radius) - 4px);
+}
+
+:root,
+.dark {
+  --radius: 0.625rem;
+  --background: oklch(0.145 0 0);
+  --foreground: oklch(0.985 0 0);
+  /* Cards/popovers sit one step above the base so panels read as elevated. */
+  --card: oklch(0.205 0 0);
+  --card-foreground: oklch(0.985 0 0);
+  --popover: oklch(0.205 0 0);
+  --popover-foreground: oklch(0.985 0 0);
+  --primary: oklch(0.6546 0.1625 37.34);
+  --primary-foreground: oklch(0.12 0 0);
+  --secondary: oklch(0.269 0 0);
+  --secondary-foreground: oklch(0.985 0 0);
+  --muted: oklch(0.269 0 0);
+  --muted-foreground: oklch(0.708 0 0);
+  --accent: oklch(0.269 0 0);
+  --accent-foreground: oklch(0.985 0 0);
+  --destructive: oklch(0.396 0.141 25.723);
+  /* Translucent so hairline borders keep their subtle look in both themes. */
+  --border: oklch(1 0 0 / 10%);
+  --input: oklch(0.269 0 0);
+  --ring: oklch(0.439 0 0);
+}
+
+.light {
+  --background: oklch(0.985 0 0);
+  --foreground: oklch(0.205 0 0);
+  --card: oklch(1 0 0);
+  --card-foreground: oklch(0.205 0 0);
+  --popover: oklch(1 0 0);
+  --popover-foreground: oklch(0.205 0 0);
+  --primary: oklch(0.6546 0.1625 37.34);
+  /* Same brand orange in both themes → keep the dark-on-orange label too. */
+  --primary-foreground: oklch(0.205 0 0);
+  --secondary: oklch(0.97 0 0);
+  --secondary-foreground: oklch(0.205 0 0);
+  --muted: oklch(0.97 0 0);
+  --muted-foreground: oklch(0.556 0 0);
+  --accent: oklch(0.968 0 0);
+  --accent-foreground: oklch(0.205 0 0);
+  --destructive: oklch(0.577 0.245 27.325);
+  --border: oklch(0 0 0 / 10%);
+  --input: oklch(0.922 0 0);
+  --ring: oklch(0.708 0 0);
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  /* Transparent so the frameless recorder popover can have rounded corners. */
+  background: transparent;
+  font-family: var(--font-sans);
+  -webkit-font-smoothing: antialiased;
+}
+
+/* Recorder: don't clip dropdowns; window stays transparent. */
+html.recorder-shell #root > div {
+  overflow: visible;
+}
+
+html.camera-shell,
+html.camera-shell body,
+html.camera-shell #root {
+  background: transparent;
+  overflow: hidden;
+}
+
+html.camera-shell #root > div {
+  overflow: hidden;
+}
+
+html.annotation-shell,
+html.annotation-shell body,
+html.annotation-shell #root {
+  background: transparent;
+  overflow: hidden;
+  width: 100%;
+  height: 100%;
+  min-height: 100vh;
+  min-width: 100vw;
+}
+
+html.annotation-shell #root > div {
+  overflow: hidden;
+  width: 100%;
+  height: 100%;
+}
+
+html.area-shell,
+html.area-shell body,
+html.area-shell #root {
+  background: transparent;
+  overflow: hidden;
+  width: 100%;
+  height: 100%;
+  min-height: 100vh;
+  min-width: 100vw;
+}
+
+html.area-shell #root > div {
+  overflow: hidden;
+  width: 100%;
+  height: 100%;
+  min-height: 100vh;
+}
+
+/*
+ * Editor: opaque chrome. body is transparent for the recorder; without a solid
+ * paint here, scrolled regions show the WKWebView's default white underneath.
+ */
+html.editor-shell,
+html.editor-shell body,
+html.editor-shell #root {
+  background: var(--background);
+  color: var(--foreground);
+}
+
+html.editor-shell #root > div {
+  min-height: 100%;
+}
+
+/* Portalled selects/menus: subtle border only — no WKWebView focus halo on panels or open triggers. */
+html.editor-shell [data-slot="select-content"],
+html.editor-shell [data-slot="dropdown-menu-content"],
+html.editor-shell [data-slot="dropdown-menu-sub-content"] {
+  outline: none;
+}
+
+html.editor-shell [data-slot="select-content"]:focus,
+html.editor-shell [data-slot="select-content"]:focus-visible,
+html.editor-shell [data-slot="dropdown-menu-content"]:focus,
+html.editor-shell [data-slot="dropdown-menu-content"]:focus-visible,
+html.editor-shell [data-slot="dropdown-menu-sub-content"]:focus,
+html.editor-shell [data-slot="dropdown-menu-sub-content"]:focus-visible {
+  outline: none;
+  box-shadow: 0 10px 15px -3px rgb(0 0 0 / 0.25), 0 4px 6px -4px rgb(0 0 0 / 0.25);
+}
+
+html.editor-shell [data-slot="select-trigger"][data-state="open"],
+html.editor-shell [data-slot="dropdown-menu-trigger"][data-state="open"] {
+  outline: none;
+  --tw-ring-shadow: 0 0 #0000;
+}
