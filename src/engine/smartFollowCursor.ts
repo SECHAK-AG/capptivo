@@ -150,6 +150,26 @@ export function recenterFocusWhenCursorLeavesSafeZone(
   return clampTargetForScale({ x: nextX, y: nextY }, scale);
 }
 
+/**
+ * First index whose `t >= time`, or `length` when every sample precedes it.
+ *
+ * Cursor tracks hold one sample per 60 Hz tick for the whole recording — tens
+ * of thousands on a long one — and a planner is rebuilt for every fragment
+ * touched by a zoom or crop edit. Scanning the track linearly made that
+ * O(recording), so a pointer drag re-walked every sample per event. Ascending
+ * `t` is already relied on by `sampleCursorAtTime`.
+ */
+function lowerBoundByTime(samples: readonly { t: number }[], time: number): number {
+  let lo = 0;
+  let hi = samples.length;
+  while (lo < hi) {
+    const mid = (lo + hi) >> 1;
+    if (samples[mid].t < time) lo = mid + 1;
+    else hi = mid;
+  }
+  return lo;
+}
+
 function findActiveClick(
   clicks: MappedPoint[],
   time: number,
@@ -184,11 +204,13 @@ export function createSmartFollowPlanner(
   const rangeStart = fragment.start - pad;
   const rangeEnd = fragment.end + pad;
 
+  // Only the window the fragment can actually read is mapped: seek to its
+  // first sample, then walk until the range closes.
+  const raw = metadata.cursorSamples;
   const samples: MappedPoint[] = [];
-  for (const sample of metadata.cursorSamples) {
-    if (sample.t < rangeStart || sample.t > rangeEnd) {
-      continue;
-    }
+  for (let i = lowerBoundByTime(raw, rangeStart); i < raw.length; i += 1) {
+    const sample = raw[i];
+    if (sample.t > rangeEnd) break;
     const mapped = toContent({ x: sample.x, y: sample.y });
     samples.push({
       t: sample.t,
@@ -198,9 +220,10 @@ export function createSmartFollowPlanner(
   }
 
   if (samples.length === 0) {
-    const raw = metadata.cursorSamples;
-    const fallback =
-      raw.find((s) => s.t >= fragment.start) ?? raw[raw.length - 1];
+    // The fragment sits outside the track entirely — seed it with the nearest
+    // recorded position so the camera has something to hold.
+    const index = lowerBoundByTime(raw, fragment.start);
+    const fallback = index < raw.length ? raw[index] : raw[raw.length - 1];
     const mapped = toContent({ x: fallback.x, y: fallback.y });
     samples.push({
       t: fragment.start,

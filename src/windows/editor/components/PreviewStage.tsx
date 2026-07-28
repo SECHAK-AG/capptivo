@@ -9,7 +9,6 @@ import {
   findSegmentIndexAtTime,
   getNextPlayableTime,
   preloadCursorAssets,
-  resolveZoomPanAtTime,
 } from "@/engine";
 import { useEditorStore } from "../store";
 import { resolveZoomReactiveState } from "../render/renderFrame";
@@ -20,7 +19,7 @@ import {
 } from "../render/createFrameCompositor";
 import { trackVideoFrames } from "../render/videoFrameTrack";
 import { useStageDimensions } from "../lib/useStageDimensions";
-import { getZoomKeyframesMap } from "../lib/zoomCache";
+import { getZoomPanAtTime } from "../lib/zoomCache";
 import {
   isEditorTypingTarget,
   presentableVideoTime,
@@ -192,17 +191,7 @@ export function PreviewStage({
         if (!nowPlaying && !camera.paused) camera.pause();
       }
 
-      const keyframes = getZoomKeyframesMap(
-        zoomFragments,
-        recordingMetadata,
-        crop,
-      );
-      const zoom = resolveZoomPanAtTime(
-        zoomFragments,
-        recordingMetadata,
-        t,
-        keyframes,
-      );
+      const zoom = getZoomPanAtTime(zoomFragments, recordingMetadata, crop, t);
       const active =
         zoomFragments.find((f) => t >= f.start && t <= f.end) ?? null;
 

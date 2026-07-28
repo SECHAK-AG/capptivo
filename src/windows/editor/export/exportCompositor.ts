@@ -12,11 +12,10 @@
 import {
   computeCursorLoopReturn,
   createFullSegment,
-  resolveZoomPanAtTime,
   totalKeptDuration,
   type TrimSegment,
 } from "@/engine";
-import { getZoomKeyframesMap } from "../lib/zoomCache";
+import { getZoomPanAtTime } from "../lib/zoomCache";
 import { resolveZoomReactiveState } from "../render/renderFrame";
 import {
   createFrameCompositor,
@@ -222,8 +221,12 @@ export async function createExportCompositorFromMedia(
       sourceVideoSize,
     } = useEditorStore.getState();
 
-    const keyframes = getZoomKeyframesMap(zoomFragments, recordingMetadata, screenContentCrop);
-    const zoom = resolveZoomPanAtTime(zoomFragments, recordingMetadata, sourceTime, keyframes);
+    const zoom = getZoomPanAtTime(
+      zoomFragments,
+      recordingMetadata,
+      screenContentCrop,
+      sourceTime,
+    );
     const active = zoomFragments.find((f) => sourceTime >= f.start && sourceTime <= f.end) ?? null;
 
     frame.compose(
