@@ -177,6 +177,8 @@ export const en = {
   "cursor.clickEffect.spotlight": "Spotlight",
   "cursor.clickEffect.echo": "Echo",
 
+  "preview.preparing": "Preparing preview…",
+
   "timeline.loading": "Loading timeline…",
   "timeline.addFragment": "Add fragment",
   "timeline.zoom": "Zoom",

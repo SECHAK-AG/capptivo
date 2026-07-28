@@ -306,6 +306,13 @@ interface EditorStore {
   /** Low-res preview proxy for smooth scrubbing; the preview `<video>` prefers
    *  it. `null` until one exists (falls back to `screenUrl`). */
   proxyUrl: string | null;
+  /**
+   * A proxy transcode is running in Rust. The preview waits for it instead of
+   * materializing a large original — see `MEDIA_DIRECT_PREVIEW_LIMIT`. Cleared
+   * on ready, on failure, and by a watchdog, so a lost event can never strand
+   * the editor on a blank stage.
+   */
+  proxyPending: boolean;
   /** Separate face-cam track (`camera.webm` / `camera.mp4`), when recorded. */
   cameraUrl: string | null;
   ready: boolean;
@@ -436,6 +443,36 @@ let persistTimer: ReturnType<typeof setTimeout> | null = null;
 /** One auto-suggest attempt per project open (success or empty). */
 let autoSuggestDoneForProject: string | null = null;
 let autoSuggestTimer: ReturnType<typeof setTimeout> | null = null;
+
+/**
+ * How long the preview waits for a proxy transcode before giving up and using
+ * the original. This is a backstop, not the normal path: `project://proxy-ready`
+ * and `project://proxy-failed` are what normally clear the wait, and a dropped
+ * event must not leave the editor blank forever.
+ */
+const PROXY_WAIT_TIMEOUT_MS = 3 * 60 * 1000;
+let proxyWaitTimer: ReturnType<typeof setTimeout> | null = null;
+
+/** Stop waiting for a proxy — from either event, the watchdog, or a reset. */
+function clearProxyWait(): void {
+  if (!proxyWaitTimer) return;
+  clearTimeout(proxyWaitTimer);
+  proxyWaitTimer = null;
+}
+
+/** Arm the backstop for `projectId`; a project switch cancels it. */
+function scheduleProxyWaitTimeout(projectId: string, get: () => EditorStore): void {
+  clearProxyWait();
+  proxyWaitTimer = setTimeout(() => {
+    proxyWaitTimer = null;
+    if (get().projectId !== projectId) return;
+    console.warn(
+      `[editor] no proxy after ${PROXY_WAIT_TIMEOUT_MS / 1000}s — ` +
+        "falling back to the original recording",
+    );
+    useEditorStore.setState({ proxyPending: false });
+  }, PROXY_WAIT_TIMEOUT_MS);
+}
 
 function loadImage(src: string): Promise<HTMLImageElement> {
   return new Promise((resolve, reject) => {
@@ -655,6 +692,7 @@ export const useEditorStore = create<EditorStore>((set, get) => ({
   project: null,
   screenUrl: null,
   proxyUrl: null,
+  proxyPending: false,
   cameraUrl: null,
   ready: false,
   error: null,
@@ -719,6 +757,8 @@ export const useEditorStore = create<EditorStore>((set, get) => ({
       clearTimeout(autoSuggestTimer);
       autoSuggestTimer = null;
     }
+    // The previous project's watchdog must not fire against this one.
+    clearProxyWait();
     autoSuggestDoneForProject = null;
     set({
       ready: false,
@@ -728,6 +768,7 @@ export const useEditorStore = create<EditorStore>((set, get) => ({
       duration: 0,
       screenUrl: null,
       proxyUrl: null,
+      proxyPending: false,
       cameraUrl: null,
       mediaInitialized: false,
       recordingMetadata: null,
@@ -788,6 +829,10 @@ export const useEditorStore = create<EditorStore>((set, get) => ({
           patch.sourceAspect = info.width / info.height;
         }
         if (info.proxy) patch.proxyUrl = mediaUrl(projectId, info.proxy);
+        // No filename means Rust is transcoding one; the preview holds off
+        // rather than dragging the original through IPC in the meantime.
+        patch.proxyPending = !info.proxy;
+        if (patch.proxyPending) scheduleProxyWaitTimeout(projectId, get);
         set(patch);
       }).catch(() => undefined);
     } catch (e) {
@@ -1564,8 +1609,20 @@ export const useEditorStore = create<EditorStore>((set, get) => ({
 // the project currently open. Registered once for the window's lifetime.
 void listen<{ projectId: string; proxy: string }>("project://proxy-ready", (e) => {
   if (useEditorStore.getState().projectId === e.payload.projectId) {
+    clearProxyWait();
     useEditorStore.setState({
       proxyUrl: mediaUrl(e.payload.projectId, e.payload.proxy),
+      proxyPending: false,
     });
+  }
+});
+
+// The transcode gave up (no ffmpeg, unreadable source, …). Stop waiting so the
+// preview falls back to the original instead of sitting blank.
+void listen<{ projectId: string; reason: string }>("project://proxy-failed", (e) => {
+  if (useEditorStore.getState().projectId === e.payload.projectId) {
+    console.warn("[editor] preview proxy failed", e.payload.reason);
+    clearProxyWait();
+    useEditorStore.setState({ proxyPending: false });
   }
 });

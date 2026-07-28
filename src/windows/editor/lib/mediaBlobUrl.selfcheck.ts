@@ -12,6 +12,7 @@
 import {
   MEDIA_FETCH_WINDOW,
   isSameOriginMediaUrl,
+  probeMediaSize,
   toBlobMediaUrl,
 } from "./mediaBlobUrl.ts";
 
@@ -280,6 +281,44 @@ await withServer({ total: 0 }, async (blobs) => {
   const message = await messageOf(() => toBlobMediaUrl("media://localhost/p/empty.mp4"));
   assert(message === "media is empty", `empty media is reported, got "${message}"`);
   assert(blobs.length === 0, "empty read creates no blob");
+});
+
+// `probeMediaSize` decides whether the preview waits for the proxy or opens
+// against the original, so it must cost one request and never assemble a blob.
+await withServer({ total: TOTAL }, async (blobs) => {
+  let requests = 0;
+  const counted = installServer({ total: TOTAL, onRequest: () => (requests += 1) });
+  const size = await probeMediaSize(SCREEN);
+  counted();
+  assert(size === TOTAL, `probe reports the total, got ${size}`);
+  assert(requests === 1, `probe costs one request, made ${requests}`);
+  assert(blobs.length === 0, "probe materializes nothing");
+});
+
+// A server with no Content-Range gives no size — the caller must not read that
+// as "empty" and skip the file.
+await withServer({ total: TOTAL, omitContentRange: true }, async () => {
+  assert((await probeMediaSize(SCREEN)) === null, "missing Content-Range → null");
+});
+
+// A whole-body 200 still yields a usable size.
+await withServer({ total: 4096, wholeBody: true }, async () => {
+  const size = await probeMediaSize("media://localhost/p/small.mp4");
+  assert(size === 4096, `whole-body probe reports the size, got ${size}`);
+});
+
+// Abort propagates by name, same as the assembler.
+await withServer({ total: TOTAL, delayFor: () => 10 }, async () => {
+  const controller = new AbortController();
+  const pending = probeMediaSize(SCREEN, { signal: controller.signal });
+  controller.abort();
+  let name = "";
+  try {
+    await pending;
+  } catch (e) {
+    name = e instanceof Error ? e.name : String(e);
+  }
+  assert(name === "AbortError", `probe abort surfaces AbortError, got "${name}"`);
 });
 
 console.log("mediaBlobUrl.selfcheck: ok");

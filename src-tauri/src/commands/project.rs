@@ -27,6 +27,16 @@ struct ProxyReadyEvent {
     proxy: String,
 }
 
+/// Emitted when a transcode gives up. The editor waits for the proxy rather
+/// than pulling a large original across IPC, so a failure that only reached the
+/// log would leave the preview blank with nothing left to wait for.
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ProxyFailedEvent {
+    project_id: String,
+    reason: String,
+}
+
 /// Ensure a preview proxy exists for `project_id`. Returns immediately with the
 /// original dimensions (and the proxy filename if it already exists); otherwise
 /// the transcode runs on a background thread and `project://proxy-ready` is
@@ -73,7 +83,16 @@ pub fn ensure_proxy(
                     },
                 );
             }
-            Err(e) => tracing::warn!(%e, "preview proxy generation failed"),
+            Err(e) => {
+                tracing::warn!(%e, "preview proxy generation failed");
+                let _ = app.emit(
+                    "project://proxy-failed",
+                    ProxyFailedEvent {
+                        project_id,
+                        reason: e.to_string(),
+                    },
+                );
+            }
         }
     });
 

@@ -3,7 +3,7 @@
  * then a full-bleed timeline docked to the bottom of the column.
  */
 
-import { useEffect, useRef, type RefObject } from "react";
+import { useEffect, useRef, useState, type RefObject } from "react";
 import {
   computeCursorLoopReturn,
   findSegmentIndexAtTime,
@@ -29,6 +29,11 @@ import {
 } from "../lib/playback";
 import { PlaybackControls } from "./PlaybackControls";
 import { useSameOriginMediaUrl } from "../lib/useSameOriginMediaUrl";
+import {
+  MEDIA_DIRECT_PREVIEW_LIMIT,
+  probeMediaSize,
+} from "../lib/mediaBlobUrl";
+import { useI18n } from "@/lib/settings";
 
 /** Pace the play loop to presented video samples when RVFC exists; else rAF. */
 function playFrameScheduler(video: HTMLVideoElement | null): {
@@ -60,12 +65,47 @@ export function PreviewStage({
   const requestPaintRef = useRef<() => void>(() => {});
   const compositorRef = useRef<FrameCompositor | null>(null);
 
+  const { t: translate } = useI18n();
   const screenUrl = useEditorStore((s) => s.screenUrl);
   const proxyUrl = useEditorStore((s) => s.proxyUrl);
+  const proxyPending = useEditorStore((s) => s.proxyPending);
   const cameraUrl = useEditorStore((s) => s.cameraUrl);
+
+  /**
+   * `null` until probed. `true` = the original is small enough to preview
+   * directly while the proxy transcodes; `false` = wait for the proxy instead.
+   */
+  const [originalIsSmall, setOriginalIsSmall] = useState<boolean | null>(null);
+
+  useEffect(() => {
+    if (!screenUrl) {
+      setOriginalIsSmall(null);
+      return;
+    }
+    const ac = new AbortController();
+    setOriginalIsSmall(null);
+    void probeMediaSize(screenUrl, { signal: ac.signal })
+      // An unreported size must not block the preview — fall back to opening
+      // against the original, which is what happened before this gate existed.
+      .then((size) => {
+        if (!ac.signal.aborted) {
+          setOriginalIsSmall(size === null || size <= MEDIA_DIRECT_PREVIEW_LIMIT);
+        }
+      })
+      .catch(() => {
+        if (!ac.signal.aborted) setOriginalIsSmall(true);
+      });
+    return () => ac.abort();
+  }, [screenUrl]);
+
   // Scrub/play against the lightweight proxy when it exists; the exporter still
-  // reads the original (`screenUrl`) directly.
-  const previewUrl = proxyUrl ?? screenUrl;
+  // reads the original (`screenUrl`) directly. While a transcode is running,
+  // only fall back to the original when it is small enough to copy into the
+  // heap — on a long recording that copy is multi-gigabyte, races the transcode
+  // for the same file, and is thrown away the moment the proxy lands.
+  // `=== false` (not `!`) so an in-flight probe keeps the old behaviour.
+  const waitingForProxy = proxyPending && originalIsSmall === false;
+  const previewUrl = proxyUrl ?? (waitingForProxy ? null : screenUrl);
   // media:// is cross-origin on WKWebView — GPU upload throws SecurityError.
   // Same-origin blob: URLs are required for compositing local media.
   const playbackUrl = useSameOriginMediaUrl(previewUrl);
@@ -481,6 +521,11 @@ export function PreviewStage({
             }}
           >
             <div ref={hostRef} className="block h-full w-full" />
+            {playbackUrl === null && proxyPending ? (
+              <div className="pointer-events-none absolute inset-0 flex items-center justify-center bg-black/60 text-sm text-white/80">
+                {translate("preview.preparing")}
+              </div>
+            ) : null}
             <video
               ref={videoRef}
               // A fresh element per source, exactly like the face cam below.

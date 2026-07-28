@@ -29,6 +29,18 @@ export const MEDIA_FETCH_CONCURRENCY = 4;
 /** Smaller than this is not a decodable container — treat it as an empty read. */
 const MIN_MEDIA_BYTES = 64;
 
+/**
+ * Above this, the editor waits for the 1280-long-edge preview proxy rather than
+ * copying the original into the JS heap.
+ *
+ * The original is only ever a stopgap until the transcode lands: on a long
+ * recording that stopgap is multi-gigabyte, races the transcode for the same
+ * file, and is discarded the moment the proxy arrives. ~256 MiB is a couple of
+ * minutes of screen capture, so short recordings still open instantly against
+ * the original.
+ */
+export const MEDIA_DIRECT_PREVIEW_LIMIT = 256 * 1024 * 1024;
+
 export type BlobMediaUrl = {
   src: string;
   revoke: () => void;
@@ -146,6 +158,29 @@ async function probeMedia(
 function totalFromContentRange(res: Response): number | null {
   const total = Number(res.headers.get("Content-Range")?.split("/")[1]);
   return Number.isFinite(total) && total > 0 ? total : null;
+}
+
+/**
+ * Byte size of a media resource, from the same one-byte ranged read the blob
+ * assembler uses — so a caller can decide *whether* to materialize something
+ * without paying to materialize it.
+ *
+ * Returns `null` when the server reported no total; callers must then decide
+ * without a size rather than treat the resource as absent.
+ */
+export async function probeMediaSize(
+  url: string,
+  options: ToBlobMediaUrlOptions = {},
+): Promise<number | null> {
+  const probe = await probeMedia(url, options.signal);
+  switch (probe.kind) {
+    case "whole":
+      return probe.body.byteLength;
+    case "ranged":
+      return probe.total;
+    case "unknown":
+      return null;
+  }
 }
 
 /**

@@ -187,6 +187,8 @@ export const fr: Record<TranslationKey, string> = {
   "cursor.clickEffect.spotlight": "Halo",
   "cursor.clickEffect.echo": "Écho",
 
+  "preview.preparing": "Préparation de l'aperçu…",
+
   "timeline.loading": "Chargement de la timeline…",
   "timeline.addFragment": "Ajouter un fragment",
   "timeline.zoom": "Zoom",
