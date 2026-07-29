@@ -16,6 +16,7 @@ import {
   type TrimSegment,
 } from "@/engine";
 import { getZoomPanAtTime } from "../lib/zoomCache";
+import { resolveZoomCompositionLayout } from "../lib/composition";
 import { resolveZoomReactiveState } from "../render/renderFrame";
 import {
   createFrameCompositor,
@@ -253,11 +254,26 @@ export async function createExportCompositorFromMedia(
     : null;
 
   const drawAt = (sourceTime: number) => {
+    const hasSelectedBackground = backgroundImage !== null;
+    const hasImageBackground =
+      hasSelectedBackground && backgroundType === "image";
+    const zoomLayout = resolveZoomCompositionLayout({
+      stageWidth: renderWidth,
+      stageHeight: renderHeight,
+      presetId: aspectRatioPresetId,
+      sourceAspect,
+      sourceVideoSize,
+      hasSelectedBackground,
+      hasImageBackground,
+      devicePadding: look.devicePadding,
+      screenContentCrop,
+    });
     const zoom = getZoomPanAtTime(
       zoomFragments,
       recordingMetadata,
       screenContentCrop,
       sourceTime,
+      zoomLayout,
     );
     // Deliberately still a linear `find`: fragments are stored in creation
     // order and nothing stops two from overlapping, so "first match in array
@@ -280,8 +296,8 @@ export async function createExportCompositorFromMedia(
         aspectRatioPresetId,
         backgroundType,
         sourceVideoSize,
-        // Baked keyframes go straight to the camera: they are already
-        // recording-rect NDC, enveloped and clamped.
+        // Baked keyframes go straight to the camera: already recording-rect NDC
+        // (fixed-rect centres are mapped from stage NDC via composition layout).
         zoomScale: zoom.scale,
         zoomFocus: { x: zoom.x, y: zoom.y },
         ...resolveZoomReactiveState(active, sourceTime),

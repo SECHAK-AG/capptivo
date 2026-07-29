@@ -19,6 +19,7 @@ import {
 } from "../render/createFrameCompositor";
 import { trackVideoFrames } from "../render/videoFrameTrack";
 import { useStageDimensions } from "../lib/useStageDimensions";
+import { resolveZoomCompositionLayout } from "../lib/composition";
 import { getZoomPanAtTime } from "../lib/zoomCache";
 import {
   isEditorTypingTarget,
@@ -214,7 +215,27 @@ export function PreviewStage({
         if (!nowPlaying && !camera.paused) camera.pause();
       }
 
-      const zoom = getZoomPanAtTime(zoomFragments, recordingMetadata, crop, t);
+      const hasSelectedBackground = backgroundImage !== null;
+      const hasImageBackground =
+        hasSelectedBackground && backgroundType === "image";
+      const zoomLayout = resolveZoomCompositionLayout({
+        stageWidth: stageRef.current.width,
+        stageHeight: stageRef.current.height,
+        presetId: aspectRatioPresetId,
+        sourceAspect,
+        sourceVideoSize,
+        hasSelectedBackground,
+        hasImageBackground,
+        devicePadding: look.devicePadding,
+        screenContentCrop: crop,
+      });
+      const zoom = getZoomPanAtTime(
+        zoomFragments,
+        recordingMetadata,
+        crop,
+        t,
+        zoomLayout,
+      );
       const active =
         zoomFragments.find((f) => t >= f.start && t <= f.end) ?? null;
 

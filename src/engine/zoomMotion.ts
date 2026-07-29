@@ -60,6 +60,11 @@ export type RecordingMetadata = {
   durationSeconds?: number;
 };
 
+/**
+ * Fixed zoom frame in **composition / stage NDC** (0–1 of the full canvas,
+ * including background padding). Camera focus is derived by mapping the rect
+ * centre through the laid-out recording rect (see `stageNdcToRecordingNdc`).
+ */
 export type FixedZoomRect = {
   x: number;
   y: number;
@@ -410,9 +415,10 @@ export function getZoomTarget(
   metadata: RecordingMetadata | null,
 ): { x: number; y: number } {
   if (fragment.mode === "fixed-rect" && fragment.fixedRect) {
+    // Stage-NDC centre; callers that need recording-NDC must map via layout.
     return {
-      x: clamp(fragment.fixedRect.x + fragment.fixedRect.width / 2, 0, 1),
-      y: clamp(fragment.fixedRect.y + fragment.fixedRect.height / 2, 0, 1),
+      x: fragment.fixedRect.x + fragment.fixedRect.width / 2,
+      y: fragment.fixedRect.y + fragment.fixedRect.height / 2,
     };
   }
 
@@ -475,25 +481,11 @@ export function computeSceneZoomScale(
   return 1 + (S - 1) * env;
 }
 
-/**
- * Zoom pivot in NDC (0–1 of the recording). Fixed-rect uses the rect centre;
- * follow-cursor uses the keyframe pan.
- */
+/** Zoom pivot in recording NDC — keyframe / follow pan (fixed-rect is baked already mapped). */
 export function computeSceneZoomPivotNdc(
-  activeZoom: ZoomFragment | null | undefined,
+  _activeZoom: ZoomFragment | null | undefined,
   pan: { x: number; y: number },
 ): { x: number; y: number } {
-  if (
-    activeZoom &&
-    activeZoom.mode === "fixed-rect" &&
-    activeZoom.fixedRect
-  ) {
-    const fr = activeZoom.fixedRect;
-    return {
-      x: clamp(fr.x + fr.width / 2, 0, 1),
-      y: clamp(fr.y + fr.height / 2, 0, 1),
-    };
-  }
   return { x: pan.x, y: pan.y };
 }
 
@@ -518,13 +510,11 @@ export function computeSceneZoomRenderCenter(
   }
 
   if (activeZoom.mode === "fixed-rect") {
-    return clampTargetForScale(
-      {
-        x: 0.5 + (raw.x - 0.5) * env,
-        y: 0.5 + (raw.y - 0.5) * env,
-      },
-      s,
-    );
+    // Allow focus onto composition padding (outside recording 0–1).
+    return {
+      x: 0.5 + (raw.x - 0.5) * env,
+      y: 0.5 + (raw.y - 0.5) * env,
+    };
   }
 
   return clampTargetForScale(raw, s);
@@ -617,6 +607,11 @@ export function computeZoomKeyframes(
   metadata: RecordingMetadata | null,
   fps: number = ZOOM_MOTION_SAMPLE_FPS,
   fullNormToContentNdc?: ZoomContentSpaceMap,
+  /**
+   * Maps fixed-rect stage-NDC centres → recording NDC. When omitted, the rect
+   * is treated as already in recording space (tests / no-layout callers).
+   */
+  stageCenterToRecordingNdc?: ZoomContentSpaceMap,
 ): ZoomKeyframe[] {
   const toContent = (p: { x: number; y: number }): { x: number; y: number } => {
     return fullNormToContentNdc ? fullNormToContentNdc(p) : p;
@@ -627,11 +622,6 @@ export function computeZoomKeyframes(
   const frameCount = Math.ceil(duration * fps);
 
   let motionState: ZoomMotionState = { x: 0.5, y: 0.5, vx: 0, vy: 0 };
-
-  const fixedTargetScale =
-    fragment.mode === "fixed-rect" && fragment.fixedRect
-      ? scaleFromFixedRect(fragment.fixedRect)
-      : null;
 
   const dt = 1 / Math.max(1, fps);
   const smartFollowPlanner =
@@ -663,20 +653,24 @@ export function computeZoomKeyframes(
     anchor: { x: number; y: number },
     envelope: number,
     zoomScale: number,
+    softClamp: boolean,
   ): { x: number; y: number } => {
     const interp = {
       x: 0.5 + (anchor.x - 0.5) * envelope,
       y: 0.5 + (anchor.y - 0.5) * envelope,
     };
-    return clampTargetForScale(interp, zoomScale);
+    return softClamp ? clampTargetForScale(interp, zoomScale) : interp;
   };
 
   for (let i = 0; i <= frameCount; i += 1) {
     const t = fragment.start + i / fps;
     const envelope = computeZoomEnvelope(fragment, t);
-    const targetScale =
-      fixedTargetScale !== null ? fixedTargetScale : fragment.targetScale;
-    const zoomScale = 1 + (targetScale - 1) * envelope;
+    // Fixed-rect: hyperbolic scale so the visible window shrinks evenly onto
+    // the rect. Follow-cursor: linear scale (pan couples via clamp window).
+    const zoomScale =
+      fragment.mode === "fixed-rect"
+        ? computeSceneZoomScale(fragment, envelope)
+        : 1 + (Math.max(1, fragment.targetScale) - 1) * envelope;
 
     const inEaseOut = safeEaseOut > 0 && t > easeOutStartT && envelope < 1;
 
@@ -693,7 +687,7 @@ export function computeZoomKeyframes(
         if (!easeOutAnchor) {
           easeOutAnchor = { x: motionState.x, y: motionState.y };
         }
-        const panned = easeOutPan(easeOutAnchor, envelope, zoomScale);
+        const panned = easeOutPan(easeOutAnchor, envelope, zoomScale, true);
         motionState = { x: panned.x, y: panned.y, vx: 0, vy: 0 };
         smartFollowRuntime = createSmartFollowRuntime({
           x: motionState.x,
@@ -726,26 +720,33 @@ export function computeZoomKeyframes(
         smartFollowRuntime = stepped.runtime;
       }
     } else if (fragment.mode === "fixed-rect" && fragment.fixedRect) {
-      const rawFixed = {
-        x: clamp(fragment.fixedRect.x + fragment.fixedRect.width / 2, 0, 1),
-        y: clamp(fragment.fixedRect.y + fragment.fixedRect.height / 2, 0, 1),
+      const stageCenter = {
+        x: fragment.fixedRect.x + fragment.fixedRect.width / 2,
+        y: fragment.fixedRect.y + fragment.fixedRect.height / 2,
       };
-      const fixedCenter = toContent(rawFixed);
-      if (inEaseOut) {
-        if (!easeOutAnchor) {
-          easeOutAnchor = { x: motionState.x, y: motionState.y };
-        }
-        const panned = easeOutPan(easeOutAnchor, envelope, zoomScale);
-        motionState = { x: panned.x, y: panned.y, vx: 0, vy: 0 };
-      } else {
-        const clamped = clampTargetForScale(fixedCenter, zoomScale);
-        motionState = { x: clamped.x, y: clamped.y, vx: 0, vy: 0 };
-      }
+      const mapped = stageCenterToRecordingNdc
+        ? stageCenterToRecordingNdc(stageCenter)
+        : stageCenter;
+      const fixedCenter = toContent(mapped);
+      // Lerp centre → rect with the envelope (ease-in, plateau, ease-out).
+      // Snapping pan to the rect while scale is still ~1× reads as a hard crop.
+      // Padding focus is intentional — do not clamp into the recording texture.
+      const panned = computeSceneZoomRenderCenter(
+        fragment,
+        fixedCenter,
+        zoomScale,
+        envelope,
+      );
+      motionState = { x: panned.x, y: panned.y, vx: 0, vy: 0 };
     }
-    const safe = clampTargetForScale(
-      { x: motionState.x, y: motionState.y },
-      zoomScale,
-    );
+
+    const safe =
+      fragment.mode === "fixed-rect"
+        ? { x: motionState.x, y: motionState.y }
+        : clampTargetForScale(
+            { x: motionState.x, y: motionState.y },
+            zoomScale,
+          );
     motionState = { ...motionState, x: safe.x, y: safe.y };
     keyframes.push({ t, x: safe.x, y: safe.y, scale: zoomScale });
   }

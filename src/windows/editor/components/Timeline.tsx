@@ -11,7 +11,6 @@ import {
   Redo2,
   RotateCcw,
   Scissors,
-  Sparkles,
   Trash2,
   Undo2,
   ZoomIn,
@@ -109,7 +108,6 @@ export function Timeline({
   const historyFuture = useEditorStore((s) => s.historyFuture);
 
   const addFragment = useEditorStore((s) => s.addFragment);
-  const suggestZoomsFromClicks = useEditorStore((s) => s.suggestZoomsFromClicks);
   const deleteSelected = useEditorStore((s) => s.deleteSelected);
   const restoreTrimGap = useEditorStore((s) => s.restoreTrimGap);
   const moveTrimGap = useEditorStore((s) => s.moveTrimGap);
@@ -482,13 +480,6 @@ export function Timeline({
               <DropdownMenuItem onClick={() => addFragment("zoom")}>
                 <ZoomIn className="size-4 text-muted-foreground" />
                 {t("timeline.zoom")}
-              </DropdownMenuItem>
-              <DropdownMenuItem
-                onClick={() => suggestZoomsFromClicks({ force: true, selectPanel: true })}
-                disabled={duration <= 0}
-              >
-                <Sparkles className="size-4 text-muted-foreground" />
-                {t("timeline.suggestZooms")}
               </DropdownMenuItem>
               <DropdownMenuItem onClick={() => addFragment("trim")}>
                 <Scissors className="size-4 text-muted-foreground" />

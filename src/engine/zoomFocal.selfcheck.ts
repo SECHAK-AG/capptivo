@@ -84,13 +84,16 @@ const fixed: ZoomFragment = {
   assert(startFocal.x === 0.5 && startFocal.y === 0.5, "env=0 focal = center");
 }
 
-// --- baked fixed-rect keyframes: clamp opens with scale (no easeInPan lag) ---
+// --- baked fixed-rect keyframes: pan lerps with envelope (no snap crop) ---
 {
   const keys = computeZoomKeyframes(fixed, null, 60);
   assert(Math.abs(keys[0]!.x - 0.5) < 0.02, "fixed bake: start ~center at 1×");
-  for (const k of keys) {
-    assert(inValidRange(k, k.scale), `fixed bake: out of crop at t=${k.t}`);
-  }
+  assert(
+    Math.abs(keys[0]!.scale - 1) < 1e-6,
+    "fixed bake: start scale is 1",
+  );
+  // Fixed-rect may focus onto composition padding (outside recording 0–1);
+  // follow-cursor still uses clampTargetForScale to avoid black void.
   const mid = keys.find((k) => {
     const env = computeZoomEnvelope(fixed, k.t);
     return env > 0.45 && env < 0.55;
@@ -100,13 +103,44 @@ const fixed: ZoomFragment = {
     x: fixedRect.x + fixedRect.width / 2,
     y: fixedRect.y + fixedRect.height / 2,
   };
-  // Mid ease-in should already sit on the clamp of the focus — not lag at
-  // centre while scale ramps (the old easeInPan "zoom center first" feel).
-  const expected = clampTargetForScale(focus, mid!.scale);
+  const midEnv = computeZoomEnvelope(fixed, mid!.t);
+  // Mid ease-in must lerp centre→rect with the envelope — snapping pan to the
+  // rect while scale is still climbing reads as a hard crop / new video.
+  const expected = {
+    x: 0.5 + (focus.x - 0.5) * midEnv,
+    y: 0.5 + (focus.y - 0.5) * midEnv,
+  };
   assert(
     Math.abs(mid!.x - expected.x) < 0.02 &&
       Math.abs(mid!.y - expected.y) < 0.02,
-    `fixed bake: mid pan should track clamp window (got ${mid!.x},${mid!.y} want ${expected.x},${expected.y})`,
+    `fixed bake: mid pan should lerp with envelope (got ${mid!.x},${mid!.y} want ${expected.x},${expected.y})`,
+  );
+  const hyper = computeSceneZoomScale(fixed, midEnv);
+  assert(
+    Math.abs(mid!.scale - hyper) < 0.02,
+    `fixed bake: mid scale should be hyperbolic (got ${mid!.scale} want ${hyper})`,
+  );
+  // Early ease-in: pan must still be near centre (not already on the rect).
+  const early = keys.find((k) => {
+    const env = computeZoomEnvelope(fixed, k.t);
+    return env > 0.08 && env < 0.18;
+  });
+  assert(early != null, "fixed bake: early ease-in sample");
+  const earlyEnv = computeZoomEnvelope(fixed, early!.t);
+  assert(
+    Math.abs(early!.x - (0.5 + (focus.x - 0.5) * earlyEnv)) < 0.02,
+    `fixed bake: early pan must track envelope, not snap (got ${early!.x})`,
+  );
+  // Plateau: sit on the rect centre at full hyperbolic scale.
+  const plateau = keys.find((k) => {
+    const env = computeZoomEnvelope(fixed, k.t);
+    return env > 0.99;
+  });
+  assert(plateau != null, "fixed bake: plateau sample");
+  assert(
+    Math.abs(plateau!.x - focus.x) < 0.02 &&
+      Math.abs(plateau!.y - focus.y) < 0.02,
+    `fixed bake: plateau pan = rect centre (got ${plateau!.x},${plateau!.y})`,
   );
 }
 

@@ -123,7 +123,7 @@ export const en = {
   "zoom.faceCamSize.caption": "{percent}% of normal size at full zoom",
   "zoom.referenceFrame": "Reference frame (zoom start)",
   "zoom.referenceFrame.hint":
-    "Choose which part of the screen is in view when this fixed zoom starts. Drag the frame here to move it; use the corner handles to resize.",
+    "Choose which part of the composition is in view when this fixed zoom starts. Drag anywhere on the canvas (background + screen); use the corner handles to resize.",
   "zoom.scale": "Scale",
   "zoom.scale.hint":
     "How much the view is magnified while following the cursor. Higher zooms in closer.",
@@ -179,7 +179,6 @@ export const en = {
   "timeline.loading": "Loading timeline…",
   "timeline.addFragment": "Add fragment",
   "timeline.zoom": "Zoom",
-  "timeline.suggestZooms": "Suggest zooms",
   "timeline.trim": "Trim",
   "timeline.reset": "Reset",
   "ratio.label": "Aspect ratio",

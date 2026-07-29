@@ -2,8 +2,9 @@
  * Zoom inspector panel — desktop analog of the web editor's `EditorZoomPanel`.
  */
 
-import { useCallback, useMemo, useRef, useState } from "react";
+import { useCallback, useMemo, useRef, useState, type CSSProperties, type PointerEvent as ReactPointerEvent } from "react";
 import {
+  getCompositionLayout,
   getFaceCamZoomPresenceMinScale,
   getShrinkFaceCamDuringZoom,
   hitTestHandle,
@@ -27,6 +28,7 @@ import { Slider } from "@/components/ui/slider";
 import { cn } from "@/lib/utils";
 import { useI18n } from "@/lib/settings";
 
+import { resolveRecordingLayoutParams, type VideoLayoutFrac } from "../lib/composition";
 import { useStageDimensions } from "../lib/useStageDimensions";
 import { cornerHandleOverlayStyle, CROP_HANDLE_SIZE, getHandleCursor } from "../lib/cropHandles";
 import { formatTimelineTime } from "../lib/timelineMath";
@@ -39,6 +41,7 @@ type Rect = { x: number; y: number; width: number; height: number };
 const MIN_ZOOM_RECT_RATIO = 0.08;
 const DEFAULT_FIXED_RECT: NormRect = { x: 0.3, y: 0.25, width: 0.4, height: 0.5 };
 
+/** Clamp fixed-rect in composition / stage NDC (full canvas including background). */
 function clampZoomFixedRect(rect: NormRect): NormRect {
   const width = Math.max(MIN_ZOOM_RECT_RATIO, Math.min(1, rect.width));
   const height = Math.max(MIN_ZOOM_RECT_RATIO, Math.min(1, rect.height));
@@ -72,7 +75,15 @@ export function ZoomPanel({
 }: ZoomPanelProps) {
   const { t } = useI18n();
   const cameraUrl = useEditorStore((s) => s.cameraUrl);
+  const look = useEditorStore((s) => s.look);
+  const selectedBackground = useEditorStore((s) => s.selectedBackground);
+  const backgroundType = useEditorStore((s) => s.backgroundType);
+  const screenContentCrop = useEditorStore((s) => s.screenContentCrop);
+  const aspectRatioPresetId = useEditorStore((s) => s.aspectRatioPresetId);
+  const sourceAspect = useEditorStore((s) => s.sourceAspect);
+  const sourceVideoSize = useEditorStore((s) => s.sourceVideoSize);
 
+  // Interaction bounds = full composition stage (bg + recording).
   const stageRef = useRef<HTMLDivElement>(null);
   const pointerIdRef = useRef<number | null>(null);
   const interactionRef = useRef<Interaction | null>(null);
@@ -106,7 +117,62 @@ export function ZoomPanel({
 
   const { width: compW, height: compH } = useStageDimensions();
 
-  // Fixed-rect is recording-space NDC (same space the camera focuses in).
+  const hasSelectedBackground = selectedBackground !== null;
+  const hasImageBackground = hasSelectedBackground && backgroundType === "image";
+
+  const videoLayoutPct = useMemo(() => {
+    const { sourceAspect: layoutAspect, devicePadding } = resolveRecordingLayoutParams({
+      presetId: aspectRatioPresetId,
+      sourceAspect,
+      sourceVideoSize,
+      hasSelectedBackground,
+      hasImageBackground,
+      devicePadding: look.devicePadding,
+      screenContentCrop,
+    });
+    const { video } = getCompositionLayout(layoutAspect, compW, compH, devicePadding);
+    const frac: VideoLayoutFrac = {
+      x: video.x / compW,
+      y: video.y / compH,
+      width: video.width / compW,
+      height: video.height / compH,
+    };
+    return {
+      left: frac.x * 100,
+      top: frac.y * 100,
+      width: frac.width * 100,
+      height: frac.height * 100,
+      radiusX: Math.min(look.cornerRadius, video.width / 2) / video.width * 100,
+      radiusY: Math.min(look.cornerRadius, video.height / 2) / video.height * 100,
+    };
+  }, [
+    aspectRatioPresetId,
+    sourceAspect,
+    sourceVideoSize,
+    hasSelectedBackground,
+    hasImageBackground,
+    look.devicePadding,
+    look.cornerRadius,
+    screenContentCrop,
+    compW,
+    compH,
+  ]);
+
+  const crop = screenContentCrop;
+  const videoCropStyle = useMemo((): CSSProperties | undefined => {
+    if (!crop || crop.width <= 1e-6 || crop.height <= 1e-6) return undefined;
+    return {
+      position: "absolute",
+      left: `${(-crop.x / crop.width) * 100}%`,
+      top: `${(-crop.y / crop.height) * 100}%`,
+      width: `${(1 / crop.width) * 100}%`,
+      height: `${(1 / crop.height) * 100}%`,
+      maxWidth: "none",
+      objectFit: "fill",
+    };
+  }, [crop]);
+
+  // Fixed-rect is composition / stage NDC (full canvas including background).
   const zoomRectToStagePx = useCallback(
     (rect: NormRect, bounds: { width: number; height: number }): Rect => ({
       x: rect.x * bounds.width,
@@ -128,7 +194,7 @@ export function ZoomPanel({
     [],
   );
 
-  const handlePointerDown = (e: React.PointerEvent) => {
+  const handlePointerDown = (e: ReactPointerEvent) => {
     if (!selectedZoomFragment || !selectedZoomFixedRect || !stageRef.current) {
       return;
     }
@@ -163,7 +229,7 @@ export function ZoomPanel({
       : { mode: "move", startX: localX, startY: localY, startRect: rectPx };
   };
 
-  const handlePointerMove = (e: React.PointerEvent) => {
+  const handlePointerMove = (e: ReactPointerEvent) => {
     if (!selectedZoomFragment || !stageRef.current) {
       return;
     }
@@ -252,7 +318,7 @@ export function ZoomPanel({
     }));
   };
 
-  const handlePointerUp = (e: React.PointerEvent) => {
+  const handlePointerUp = (e: ReactPointerEvent) => {
     if (e.pointerId !== pointerIdRef.current) {
       return;
     }
@@ -413,7 +479,7 @@ export function ZoomPanel({
               </FieldLabelWithHint>
               {/*
                 9999px "outside" dim must live inside overflow-hidden (see screen crop) or it
-                covers the whole inspector. Corner handles on a sibling so they stay unclipped.
+                covers the whole inspector. Handles sit on a sibling so they stay unclipped.
               */}
               <div
                 ref={stageRef}
@@ -431,15 +497,64 @@ export function ZoomPanel({
                 style={{ aspectRatio: `${compW} / ${compH}`, cursor: hoverCursor }}
               >
                 <div className="absolute inset-0 overflow-hidden rounded-none bg-muted">
-                  {screenUrl ? (
-                    <InspectorVideoPreview
-                      src={screenUrl}
-                      seekTo={selectedZoomFragment.start}
-                      className="h-full w-full object-contain"
-                    />
-                  ) : (
-                    <div className="h-full w-full bg-muted" />
+                  {selectedBackground && (
+                    <>
+                      <div
+                        aria-hidden
+                        className="absolute inset-0"
+                        style={{
+                          backgroundImage: `url("${selectedBackground}")`,
+                          backgroundSize: "cover",
+                          backgroundPosition: "center",
+                          transform: look.backgroundBlur > 0 ? "scale(1.12)" : undefined,
+                          filter:
+                            look.backgroundBlur > 0
+                              ? `blur(${Math.min(24, look.backgroundBlur)}px)`
+                              : undefined,
+                        }}
+                      />
+                      {look.backgroundDarkness > 0 && (
+                        <div
+                          aria-hidden
+                          className="absolute inset-0"
+                          style={{
+                            backgroundColor: `rgba(0,0,0,${Math.min(100, look.backgroundDarkness) / 100})`,
+                          }}
+                        />
+                      )}
+                    </>
                   )}
+                  <div
+                    className="absolute overflow-hidden"
+                    style={{
+                      left: `${videoLayoutPct.left}%`,
+                      top: `${videoLayoutPct.top}%`,
+                      width: `${videoLayoutPct.width}%`,
+                      height: `${videoLayoutPct.height}%`,
+                      borderRadius: `${videoLayoutPct.radiusX}% / ${videoLayoutPct.radiusY}%`,
+                    }}
+                  >
+                    {screenUrl ? (
+                      videoCropStyle ? (
+                        <div className="absolute inset-0 overflow-hidden">
+                          <InspectorVideoPreview
+                            src={screenUrl}
+                            seekTo={selectedZoomFragment.start}
+                            className="h-full w-full"
+                            style={videoCropStyle}
+                          />
+                        </div>
+                      ) : (
+                        <InspectorVideoPreview
+                          src={screenUrl}
+                          seekTo={selectedZoomFragment.start}
+                          className="h-full w-full object-cover"
+                        />
+                      )
+                    ) : (
+                      <div className="h-full w-full bg-muted" />
+                    )}
+                  </div>
                   <div
                     className="pointer-events-none absolute border-2 border-primary"
                     style={{

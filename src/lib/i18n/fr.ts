@@ -134,7 +134,7 @@ export const fr: Record<TranslationKey, string> = {
   "zoom.faceCamSize.caption": "{percent} % de la taille normale au zoom maximal",
   "zoom.referenceFrame": "Cadre de référence (début du zoom)",
   "zoom.referenceFrame.hint":
-    "Choisissez la partie de l'écran visible au début de ce zoom fixe. Faites glisser le cadre pour le déplacer ; utilisez les poignées d'angle pour le redimensionner.",
+    "Choisissez la partie de la composition visible au début de ce zoom fixe. Faites glisser le cadre n'importe où sur le canvas (arrière-plan + écran) ; utilisez les poignées d'angle pour le redimensionner.",
   "zoom.scale": "Échelle",
   "zoom.scale.hint":
     "Niveau d'agrandissement de la vue pendant le suivi du curseur. Plus la valeur est élevée, plus le zoom est rapproché.",
@@ -192,7 +192,6 @@ export const fr: Record<TranslationKey, string> = {
   "timeline.loading": "Chargement de la timeline…",
   "timeline.addFragment": "Ajouter un fragment",
   "timeline.zoom": "Zoom",
-  "timeline.suggestZooms": "Suggérer des zooms",
   "timeline.trim": "Découpe",
   "timeline.reset": "Réinitialiser",
   "ratio.label": "Format d'image",

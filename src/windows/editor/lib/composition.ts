@@ -3,7 +3,7 @@
  */
 
 import type { ScreenContentCropNorm, ShadowPass } from "@/engine";
-import { computeEffectiveSourceAspect } from "@/engine";
+import { computeEffectiveSourceAspect, getCompositionLayout } from "@/engine";
 
 export const EXPORT_COMPOSITION = {
   width: 1920,
@@ -226,5 +226,69 @@ export function resolveRecordingLayoutParams(params: {
           params.devicePadding,
         )
       : 0,
+  };
+}
+
+/** Video rect as fractions of the composition stage (0–1). */
+export type VideoLayoutFrac = {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+};
+
+/** Layout snapshot used to map fixed-rect stage NDC → recording NDC. */
+export type ZoomCompositionLayout = {
+  video: VideoLayoutFrac;
+};
+
+/** Stage-NDC point → recording-NDC (may fall outside 0–1 when on the background). */
+export function stageNdcToRecordingNdc(
+  point: { x: number; y: number },
+  video: VideoLayoutFrac,
+): { x: number; y: number } {
+  const vw = Math.max(1e-6, video.width);
+  const vh = Math.max(1e-6, video.height);
+  return {
+    x: (point.x - video.x) / vw,
+    y: (point.y - video.y) / vh,
+  };
+}
+
+/** Pixel video rect → stage fractions. */
+export function videoRectToLayoutFrac(
+  video: { x: number; y: number; width: number; height: number },
+  stageW: number,
+  stageH: number,
+): VideoLayoutFrac {
+  return {
+    x: video.x / Math.max(1e-6, stageW),
+    y: video.y / Math.max(1e-6, stageH),
+    width: video.width / Math.max(1e-6, stageW),
+    height: video.height / Math.max(1e-6, stageH),
+  };
+}
+
+/** Composition layout for fixed-rect zoom (stage NDC → recording NDC). */
+export function resolveZoomCompositionLayout(params: {
+  stageWidth: number;
+  stageHeight: number;
+  presetId: AspectRatioPresetId;
+  sourceAspect: number;
+  sourceVideoSize: { width: number; height: number } | null;
+  hasSelectedBackground: boolean;
+  hasImageBackground: boolean;
+  devicePadding: number;
+  screenContentCrop?: ScreenContentCropNorm | null;
+}): ZoomCompositionLayout {
+  const { sourceAspect, devicePadding } = resolveRecordingLayoutParams(params);
+  const { video } = getCompositionLayout(
+    sourceAspect,
+    params.stageWidth,
+    params.stageHeight,
+    devicePadding,
+  );
+  return {
+    video: videoRectToLayoutFrac(video, params.stageWidth, params.stageHeight),
   };
 }

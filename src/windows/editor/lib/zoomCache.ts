@@ -1,6 +1,6 @@
 /**
  * Zoom keyframe cache — rebuilt on invalidation, lazy per-fragment integration.
- * Editor entry point for zoom motion (handles crop mapping).
+ * Editor entry point for zoom motion (handles crop mapping + composition layout).
  */
 
 // Direct import for selfcheck under `node --experimental-strip-types` (barrel pulls DOM).
@@ -16,6 +16,11 @@ import {
   type ZoomKeyframe,
 } from "../../../engine/zoomMotion.ts";
 
+/** Video rect as fractions of the composition stage (0–1). */
+export type ZoomCompositionLayout = {
+  video: { x: number; y: number; width: number; height: number };
+};
+
 let version = 0;
 let builtVersion = -1;
 
@@ -25,8 +30,11 @@ let builtFragments = new Map<string, ZoomFragment>();
 /** Metadata/crop the current `cache` was built against. */
 let builtMetadata: RecordingMetadata | null = null;
 let builtCrop: ScreenContentCropNorm | null = null;
+let builtLayout: ZoomCompositionLayout | null = null;
 /** Content-space map for `builtCrop`; rebuilt only when the crop really moves. */
 let builtToContent: ZoomContentSpaceMap | undefined;
+/** Stage→recording map for fixed-rect centres; rebuilt with layout. */
+let builtStageToRecording: ZoomContentSpaceMap | undefined;
 
 function cropEquals(
   a: ScreenContentCropNorm | null,
@@ -39,16 +47,38 @@ function cropEquals(
   );
 }
 
+function layoutEquals(
+  a: ZoomCompositionLayout | null,
+  b: ZoomCompositionLayout | null,
+): boolean {
+  if (a === b) return true;
+  if (!a || !b) return false;
+  const av = a.video;
+  const bv = b.video;
+  return (
+    av.x === bv.x &&
+    av.y === bv.y &&
+    av.width === bv.width &&
+    av.height === bv.height
+  );
+}
+
 /** Prune stale entries; does not integrate keyframes (lazy). */
 function reconcile(
   fragments: ZoomFragment[],
   metadata: RecordingMetadata | null,
   crop: ScreenContentCropNorm | null,
+  layout: ZoomCompositionLayout | null,
 ): void {
-  if (version === builtVersion) return;
-
   const sameCrop = cropEquals(crop, builtCrop);
-  const canReuse = metadata === builtMetadata && sameCrop;
+  const sameLayout = layoutEquals(layout, builtLayout);
+  const sameMeta = metadata === builtMetadata;
+
+  if (version === builtVersion && sameCrop && sameLayout && sameMeta) {
+    return;
+  }
+
+  const canReuse = sameMeta && sameCrop && sameLayout;
 
   const next = new Map<string, ZoomKeyframe[]>();
   const nextFragments = new Map<string, ZoomFragment>();
@@ -67,8 +97,17 @@ function reconcile(
       ? createFullNormToContentNdcFromCrop(crop)
       : undefined;
   }
+  if (!sameLayout) {
+    builtStageToRecording = layout
+      ? (p) => ({
+          x: (p.x - layout.video.x) / Math.max(1e-6, layout.video.width),
+          y: (p.y - layout.video.y) / Math.max(1e-6, layout.video.height),
+        })
+      : undefined;
+  }
   builtMetadata = metadata;
   builtCrop = crop;
+  builtLayout = layout;
   builtVersion = version;
 }
 
@@ -78,8 +117,9 @@ export function getZoomPanAtTime(
   metadata: RecordingMetadata | null,
   crop: ScreenContentCropNorm | null,
   time: number,
+  layout: ZoomCompositionLayout | null = null,
 ): { x: number; y: number; scale: number } {
-  reconcile(fragments, metadata, crop);
+  reconcile(fragments, metadata, crop, layout);
 
   const active = findActiveZoomFragment(fragments, time);
   if (!active) return { x: 0.5, y: 0.5, scale: 1 };
@@ -91,6 +131,7 @@ export function getZoomPanAtTime(
       metadata,
       undefined,
       builtToContent,
+      builtStageToRecording,
     );
     cache.set(active.id, keyframes);
   }
