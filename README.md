@@ -131,6 +131,9 @@ Open the recorder with **⌥⇧R** (**Alt+Shift+R** on Windows/Linux), or click 
 - Native pipeline per OS (ScreenCaptureKit / Windows.Graphics.Capture / PipeWire) → hardware H.264 → crash-safe fragmented MP4
 - 60 Hz cursor + click track saved with the project (`cursor.json`)
 
+![Capptivo recording bar](assets/recording-bar-capptivo.webp)
+![Capptivo annotation bar](assets/annotation-bar-capptivo.webp)
+
 ### Annotations
 
 Draw on top of the screen while recording — floating toolbar, click-through when idle.
