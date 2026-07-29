@@ -48,6 +48,7 @@ import { commands } from "@/ipc/bindings";
 import { cn } from "@/lib/utils";
 
 const ANNOTATION_ESCAPE_EVENT = "annotation://escape";
+const ANNOTATION_DISPLAY_EVENT = "annotation://display";
 
 /** Preset swatches — custom colors come from the picker tile after these. */
 const PALETTE = [
@@ -223,6 +224,36 @@ export function AnnotationApp() {
     };
   }, []);
 
+  // Tell Rust whether monitor-hopping is safe. The native follow loop (not a
+  // WebView timer — those get App-Nap'd once click-through) moves the overlay
+  // across displays; skip hops while a tool is armed so the canvas isn't yanked.
+  useEffect(() => {
+    if (!overlayVisible) return;
+    void commands
+      .setAnnotationDisplayFollow(passThrough)
+      .catch(() => undefined);
+  }, [passThrough, overlayVisible]);
+
+  // Overlay hopped displays — drop the drag offset so the bar isn't parked
+  // off-screen on a smaller monitor.
+  useEffect(() => {
+    let unlisten: (() => void) | undefined;
+    let disposed = false;
+    void listen(ANNOTATION_DISPLAY_EVENT, () => {
+      dragOffsetRef.current = { x: 0, y: 0 };
+      setBarOffset({ x: 0, y: 0 });
+      const el = toolbarElRef.current;
+      if (el) el.style.transform = barTransform(0, 0);
+    }).then((fn) => {
+      if (disposed) fn();
+      else unlisten = fn;
+    });
+    return () => {
+      disposed = true;
+      unlisten?.();
+    };
+  }, []);
+
   // OS click-through while idle. `setIgnoreCursorEvents` blocks ALL hits (including
   // the toolbar), so we poll the real cursor and temporarily re-enable hits when
   // it's over the bar / left-side menus. Suspended while the overlay is hidden —
@@ -237,17 +268,9 @@ export function AnnotationApp() {
 
     let cancelled = false;
     let timer = 0;
-    // Follow the cursor's display at a slower cadence than hit-testing
-    // (~every 6th tick ≈ 0.5 s): the overlay hops monitors like the recorder
-    // bar, but only in click-through mode — never mid-annotation.
-    let displayTick = 0;
 
     const tick = async () => {
       if (cancelled) return;
-      if (!draggingRef.current && ++displayTick >= 6) {
-        displayTick = 0;
-        void commands.syncAnnotationDisplay().catch(() => undefined);
-      }
       // Never re-evaluate hit-testing mid-drag: the async cursor/rect reads
       // race the moving bar, and one stale "not over the bar" answer flips
       // `setIgnoreCursorEvents(true)` under an active pointer capture —

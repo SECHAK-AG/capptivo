@@ -48,7 +48,7 @@ macro_rules! command_handlers {
             $crate::windows::flush_mic_capture,
             $crate::windows::show_annotation_overlay,
             $crate::windows::hide_annotation_overlay,
-            $crate::windows::sync_annotation_display,
+            $crate::windows::set_annotation_display_follow,
             $crate::windows::open_library,
             $crate::windows::open_editor,
             $crate::windows::present_window,

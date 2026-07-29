@@ -18,6 +18,7 @@ import {
   MonitorSpeaker,
   Mic,
   MicOff,
+  Pencil,
   Settings,
   Smartphone,
   SquareDashed,
@@ -93,6 +94,12 @@ export function RecorderToolbar({ onRecord }: { onRecord: () => void }) {
       : captureMode === "device"
         ? !!selectedDeviceId
         : !!selectedSourceId;
+
+  const annotationVisible = useRecorderStore((s) => s.annotationVisible);
+  const setAnnotationVisible = useRecorderStore((s) => s.setAnnotationVisible);
+  const annotateLabel = annotationVisible
+    ? t("recorder.hud.annotate.hide")
+    : t("recorder.hud.annotate.show");
 
   const areaSize = areaSelection
     ? `${Math.round(areaSelection.crop.width)}×${Math.round(areaSelection.crop.height)}`
@@ -223,6 +230,23 @@ export function RecorderToolbar({ onRecord }: { onRecord: () => void }) {
         </div>
 
         <Divider />
+
+        <Button
+          type="button"
+          variant="ghost"
+          size="icon"
+          className={cn(
+            CTRL,
+            "size-9 shrink-0 text-muted-foreground",
+            annotationVisible && "bg-primary/20 text-primary hover:bg-primary/25",
+          )}
+          aria-label={annotateLabel}
+          aria-pressed={annotationVisible}
+          title={annotateLabel}
+          onClick={() => setAnnotationVisible(!annotationVisible)}
+        >
+          <Pencil className="size-4" />
+        </Button>
 
         <SettingsMenu
           open={auxMenu === "settings"}

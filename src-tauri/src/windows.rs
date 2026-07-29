@@ -16,10 +16,9 @@
 //! flip we hide the recorder and unpin overlays; then we warp the cursor onto
 //! the shell and focus once so the user's display stays active.
 
-#[cfg(target_os = "macos")]
-use std::sync::atomic::AtomicBool;
-use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::Mutex;
+use std::time::Duration;
 use tauri::{AppHandle, Emitter, Manager, WebviewUrl, WebviewWindowBuilder};
 
 pub const RECORDER_LABEL: &str = "recorder";
@@ -34,9 +33,13 @@ pub const SHOW_LIBRARY_EVENT: &str = "shell://show-library";
 /// The overlay WebView is reused (show/hide, never closed), so its idle
 /// cursor-poll would otherwise keep running while hidden; it gates on this.
 pub const ANNOTATION_VISIBILITY_EVENT: &str = "annotation://visibility";
+/// Fired when the overlay hops to another display — frontend resets bar drag offset.
+pub const ANNOTATION_DISPLAY_EVENT: &str = "annotation://display";
 /// Progressive dismiss while the overlay is open (panel → tool → close).
 pub const ANNOTATION_ESCAPE_EVENT: &str = "annotation://escape";
 const ANNOTATION_ESCAPE_HOTKEY: &str = "Escape";
+/// How often the native follow loop re-checks the cursor's display.
+const ANNOTATION_FOLLOW_INTERVAL: Duration = Duration::from_millis(300);
 /// Camera bubble should switch `getUserMedia` to this device id.
 pub const CAMERA_DEVICE_EVENT: &str = "camera://device";
 /// Bubble closed (X) — recorder store clears the camera toggle.
@@ -680,10 +683,52 @@ fn position_annotation_on_active_display(
     let size = monitor.size();
     win.set_size(tauri::Size::Physical(*size))?;
     win.set_position(tauri::Position::Physical(*pos))?;
+    // Same as the recorder bar: macOS can drop CanJoinAllSpaces after resize.
+    pin_to_all_spaces_if_shown(win);
     Ok(())
 }
 
 static ANNOTATION_ESCAPE_ARMED: AtomicBool = AtomicBool::new(false);
+/// Native follow loop is running (overlay visible).
+static ANNOTATION_FOLLOW_ON: AtomicBool = AtomicBool::new(false);
+/// Bumped on stop so a sleeping worker exits even if FOLLOW_ON flips true again.
+static ANNOTATION_FOLLOW_GEN: AtomicU32 = AtomicU32::new(0);
+/// When false (a drawing tool is armed), skip monitor hops so the canvas
+/// isn't yanked mid-stroke. Set from the WebView via IPC.
+static ANNOTATION_FOLLOW_DISPLAY: AtomicBool = AtomicBool::new(true);
+
+fn start_annotation_display_follow(app: &AppHandle) {
+    ANNOTATION_FOLLOW_DISPLAY.store(true, Ordering::Relaxed);
+    if ANNOTATION_FOLLOW_ON.swap(true, Ordering::SeqCst) {
+        return;
+    }
+    let gen = ANNOTATION_FOLLOW_GEN.load(Ordering::SeqCst);
+    let app = app.clone();
+    let _ = std::thread::Builder::new()
+        .name("annotation-display".into())
+        .spawn(move || {
+            while ANNOTATION_FOLLOW_ON.load(Ordering::SeqCst)
+                && ANNOTATION_FOLLOW_GEN.load(Ordering::SeqCst) == gen
+            {
+                if ANNOTATION_FOLLOW_DISPLAY.load(Ordering::Relaxed) {
+                    let _ = sync_annotation_display_inner(&app);
+                }
+                std::thread::sleep(ANNOTATION_FOLLOW_INTERVAL);
+            }
+        });
+}
+
+fn stop_annotation_display_follow() {
+    ANNOTATION_FOLLOW_ON.store(false, Ordering::SeqCst);
+    ANNOTATION_FOLLOW_GEN.fetch_add(1, Ordering::SeqCst);
+}
+
+/// WebView reports click-through vs drawing so the native follow loop can
+/// skip hops while a tool is armed (yank mid-stroke). No-op when hidden.
+#[tauri::command]
+pub fn set_annotation_display_follow(follow: bool) {
+    ANNOTATION_FOLLOW_DISPLAY.store(follow, Ordering::Relaxed);
+}
 
 fn arm_annotation_escape(app: &AppHandle) {
     if ANNOTATION_ESCAPE_ARMED.swap(true, Ordering::SeqCst) {
@@ -739,6 +784,7 @@ pub fn show_annotation_overlay(app: AppHandle) -> tauri::Result<()> {
         win.show()?;
         let _ = app.emit(ANNOTATION_VISIBILITY_EVENT, true);
         arm_annotation_escape(&app);
+        start_annotation_display_follow(&app);
         raise_recording_chrome(&app);
         return Ok(());
     }
@@ -767,6 +813,7 @@ pub fn show_annotation_overlay(app: AppHandle) -> tauri::Result<()> {
     win.show()?;
     let _ = app.emit(ANNOTATION_VISIBILITY_EVENT, true);
     arm_annotation_escape(&app);
+    start_annotation_display_follow(&app);
     // Ink is fullscreen always-on-top — re-assert HUD / face-cam above it or
     // the highlighter toggle (and camera) are unreachable.
     raise_recording_chrome(&app);
@@ -786,6 +833,7 @@ fn raise_recording_chrome(app: &AppHandle) {
 
 #[tauri::command]
 pub fn hide_annotation_overlay(app: AppHandle) -> tauri::Result<()> {
+    stop_annotation_display_follow();
     if let Some(win) = app.get_webview_window(ANNOTATION_LABEL) {
         set_follows_spaces(&win, false);
         win.hide()?;
@@ -795,37 +843,36 @@ pub fn hide_annotation_overlay(app: AppHandle) -> tauri::Result<()> {
     Ok(())
 }
 
-/// Move the annotation overlay to the display the cursor is on, when that
-/// changed — polled slowly by the annotation WebView while in click-through
-/// mode, so the toolbar follows the user across monitors like the recorder
-/// bar does. No-op when already on the right display. While a drawing tool is
-/// armed the WebView doesn't call this: hopping displays mid-annotation would
-/// yank the canvas out from under the pen. Ink survives the hop — the engine
-/// redraws committed strokes from its history on resize.
-#[tauri::command]
-pub fn sync_annotation_display(app: AppHandle) -> tauri::Result<()> {
+/// Move the annotation overlay to the cursor's display when it changed.
+/// Driven by a native thread while the overlay is visible — WebView timers
+/// get App-Nap'd once the window is click-through / unfocused, which is why
+/// a JS poll never kept up with the recorder bar's Spaces pin.
+/// No-op when already on the right display. Skipped while a drawing tool is
+/// armed (`set_annotation_display_follow(false)`).
+fn sync_annotation_display_inner(app: &AppHandle) -> tauri::Result<()> {
     let Some(win) = app.get_webview_window(ANNOTATION_LABEL) else {
         return Ok(());
     };
     if !win.is_visible().unwrap_or(false) {
         return Ok(());
     }
-    let Some(target) = active_monitor(&app) else {
+    let Some(target) = active_monitor(app) else {
         return Ok(());
     };
     // Same display → nothing to do (the common case on every poll tick).
     if let (Ok(pos), Ok(size)) = (win.outer_position(), win.outer_size()) {
         let cx = pos.x as f64 + size.width as f64 / 2.0;
         let cy = pos.y as f64 + size.height as f64 / 2.0;
-        if let Some(current) = monitor_at_physical(&app, cx, cy) {
+        if let Some(current) = monitor_at_physical(app, cx, cy) {
             if current.position() == target.position() {
                 return Ok(());
             }
         }
     }
-    position_annotation_on_active_display(&app, &win)?;
+    position_annotation_on_active_display(app, &win)?;
+    let _ = app.emit(ANNOTATION_DISPLAY_EVENT, ());
     // Keep HUD / face-cam above the freshly moved fullscreen layer.
-    raise_recording_chrome(&app);
+    raise_recording_chrome(app);
     Ok(())
 }
 

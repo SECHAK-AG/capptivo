@@ -74,7 +74,9 @@ export const commands = {
   finishMicFile: () => invoke<string | null>("finish_mic_file"),
   showAnnotationOverlay: () => invoke<void>("show_annotation_overlay"),
   hideAnnotationOverlay: () => invoke<void>("hide_annotation_overlay"),
-  syncAnnotationDisplay: () => invoke<void>("sync_annotation_display"),
+  /** Pause/resume native multi-monitor follow while a drawing tool is armed. */
+  setAnnotationDisplayFollow: (follow: boolean) =>
+    invoke<void>("set_annotation_display_follow", { follow }),
   openLibrary: () => invoke<void>("open_library"),
   openEditor: (projectId: string) =>
     invoke<void>("open_editor", { projectId }),
