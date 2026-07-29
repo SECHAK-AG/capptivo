@@ -40,6 +40,22 @@ No more paying $29/month for video editing software. I hope you enjoy it, and co
 
 ---
 
+<p align="center">
+  <video
+    src="assets/capptivo-hero-demo.mp4"
+    width="800"
+    controls
+    muted
+    playsinline
+    autoplay
+    loop
+  >
+    <a href="assets/capptivo-demo.mp4">Watch the Capptivo demo</a>
+  </video>
+</p>
+
+---
+
 ## Download
 
 Installers are published on the
