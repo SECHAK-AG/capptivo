@@ -13,7 +13,6 @@ import {
   type ReactNode,
 } from "react";
 import {
-  Brush,
   Check,
   Circle,
   Eraser,
@@ -22,7 +21,7 @@ import {
   Minus,
   MousePointer2,
   MoveUpRight,
-  Paintbrush,
+  Pencil,
   Pipette,
   Redo2,
   Square,
@@ -36,6 +35,7 @@ import { emit, listen } from "@tauri-apps/api/event";
 
 import { AnnotationEngine } from "@/annotation/engine";
 import type { AnnotationTool, ShapeKind } from "@/annotation/types";
+import { BrushSizeIcon } from "@/components/icons/BrushSizeIcon";
 import { Button } from "@/components/ui/button";
 import {
   DropdownMenu,
@@ -89,9 +89,12 @@ export function AnnotationApp() {
   const [brushSize, setBrushSize] = useState(6);
   const [panel, setPanel] = useState<Panel>(null);
   const [barOffset, setBarOffset] = useState({ x: 0, y: 0 });
-  const dragRef = useRef<{ startX: number; startY: number; origX: number; origY: number } | null>(
-    null,
-  );
+  const dragRef = useRef<{
+    startX: number;
+    startY: number;
+    origX: number;
+    origY: number;
+  } | null>(null);
   /** True for the whole grip gesture — read by the click-through poll. */
   const draggingRef = useRef(false);
   /** Latest drag offset, committed to state once on release. */
@@ -174,7 +177,9 @@ export function AnnotationApp() {
       canvas.removeEventListener("pointercancel", onUp);
       engine.destroy();
       engineRef.current = null;
-      void getCurrentWindow().setIgnoreCursorEvents(false).catch(() => undefined);
+      void getCurrentWindow()
+        .setIgnoreCursorEvents(false)
+        .catch(() => undefined);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -183,13 +188,18 @@ export function AnnotationApp() {
     const engine = engineRef.current;
     if (!engine) return;
     engine.setTool(tool);
-    canvasRef.current?.classList.toggle("pointer-events-none", tool === "select");
+    canvasRef.current?.classList.toggle(
+      "pointer-events-none",
+      tool === "select",
+    );
   }, [tool]);
 
   const applyIgnore = (ignore: boolean) => {
     if (ignoreRef.current === ignore) return;
     ignoreRef.current = ignore;
-    void getCurrentWindow().setIgnoreCursorEvents(ignore).catch(() => undefined);
+    void getCurrentWindow()
+      .setIgnoreCursorEvents(ignore)
+      .catch(() => undefined);
   };
 
   // Native show/hide from Rust (`annotation://visibility`). Keeps `overlayVisible`
@@ -203,12 +213,10 @@ export function AnnotationApp() {
         setTool("select");
         setPanel(null);
       }
-    }).then(
-      (fn) => {
-        if (disposed) fn();
-        else unlisten = fn;
-      },
-    );
+    }).then((fn) => {
+      if (disposed) fn();
+      else unlisten = fn;
+    });
     return () => {
       disposed = true;
       unlisten?.();
@@ -341,7 +349,9 @@ export function AnnotationApp() {
         ref={canvasRef}
         className={cn(
           "absolute inset-0 h-full w-full touch-none",
-          tool === "select" ? "pointer-events-none cursor-default" : "cursor-crosshair",
+          tool === "select"
+            ? "pointer-events-none cursor-default"
+            : "cursor-crosshair",
         )}
       />
 
@@ -414,7 +424,7 @@ export function AnnotationApp() {
           label="Pen"
           active={tool === "pen"}
           onClick={() => pickTool("pen")}
-          icon={<Paintbrush className="size-4" />}
+          icon={<Pencil className="size-4" />}
         />
         <ToolBtn
           label="Highlighter"
@@ -492,7 +502,9 @@ export function AnnotationApp() {
 
         <DropdownMenu
           open={panel === "color"}
-          onOpenChange={(open) => setPanel(open ? "color" : panel === "color" ? null : panel)}
+          onOpenChange={(open) =>
+            setPanel(open ? "color" : panel === "color" ? null : panel)
+          }
         >
           <DropdownMenuTrigger asChild>
             <button
@@ -531,7 +543,8 @@ export function AnnotationApp() {
                   }}
                   className={cn(
                     "size-8 rounded-lg ring-1 ring-border transition-transform hover:scale-105",
-                    c.toLowerCase() === color.toLowerCase() && "ring-2 ring-primary",
+                    c.toLowerCase() === color.toLowerCase() &&
+                      "ring-2 ring-primary",
                   )}
                   style={{ backgroundColor: c }}
                 />
@@ -540,8 +553,9 @@ export function AnnotationApp() {
                 title="Custom color"
                 className={cn(
                   "relative flex size-8 cursor-pointer items-center justify-center overflow-hidden rounded-lg bg-muted ring-1 ring-border transition-transform hover:scale-105",
-                  !PALETTE.some((c) => c.toLowerCase() === color.toLowerCase()) &&
-                    "ring-2 ring-primary",
+                  !PALETTE.some(
+                    (c) => c.toLowerCase() === color.toLowerCase(),
+                  ) && "ring-2 ring-primary",
                 )}
                 style={
                   !PALETTE.some((c) => c.toLowerCase() === color.toLowerCase())
@@ -565,13 +579,15 @@ export function AnnotationApp() {
 
         <DropdownMenu
           open={panel === "size"}
-          onOpenChange={(open) => setPanel(open ? "size" : panel === "size" ? null : panel)}
+          onOpenChange={(open) =>
+            setPanel(open ? "size" : panel === "size" ? null : panel)
+          }
         >
           <DropdownMenuTrigger asChild>
             <ToolBtn
-              label="Brush size"
+              label="Stroke size"
               active={panel === "size"}
-              icon={<Brush className="size-4" />}
+              icon={<BrushSizeIcon className="size-4" />}
             />
           </DropdownMenuTrigger>
           <DropdownMenuContent
@@ -581,7 +597,7 @@ export function AnnotationApp() {
             className={cn(MENU, "w-52 p-3")}
           >
             <p className="mb-3 text-[10px] font-medium tracking-wider text-muted-foreground uppercase">
-              Brush size
+              Stroke size
             </p>
             <div className="flex items-center gap-3">
               <Slider
@@ -595,12 +611,6 @@ export function AnnotationApp() {
               <span className="w-6 text-right text-xs tabular-nums text-muted-foreground">
                 {brushSize}
               </span>
-            </div>
-            <div className="mt-3 flex justify-center">
-              <span
-                className="rounded-full bg-foreground"
-                style={{ width: brushSize, height: brushSize }}
-              />
             </div>
           </DropdownMenuContent>
         </DropdownMenu>
@@ -654,7 +664,8 @@ const ToolBtn = forwardRef<
     className={cn(
       "size-9 shrink-0 rounded-xl text-muted-foreground hover:bg-muted hover:text-foreground",
       "data-[state=open]:bg-muted data-[state=open]:text-foreground",
-      active && "bg-primary/20 text-primary hover:bg-primary/20 hover:text-primary",
+      active &&
+        "bg-primary/20 text-primary hover:bg-primary/20 hover:text-primary",
       className,
     )}
     {...props}

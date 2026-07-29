@@ -265,6 +265,11 @@ export const en = {
   "recorder.hud.annotate.show": "Show annotations",
   "recorder.hud.annotate.hide": "Hide annotations",
   "recorder.error.dismiss": "Dismiss",
+
+  "library.search.placeholder": "Search by name…",
+  "library.search.filter": "Filter",
+  "library.search.clear": "Clear search",
+  "library.search.noMatch": "No recordings match that name.",
 } as const;
 
 export type TranslationKey = keyof typeof en;

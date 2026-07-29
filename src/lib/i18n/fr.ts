@@ -280,4 +280,9 @@ export const fr: Record<TranslationKey, string> = {
   "recorder.hud.annotate.show": "Afficher les annotations",
   "recorder.hud.annotate.hide": "Masquer les annotations",
   "recorder.error.dismiss": "Fermer",
+
+  "library.search.placeholder": "Rechercher par nom…",
+  "library.search.filter": "Filtrer",
+  "library.search.clear": "Effacer la recherche",
+  "library.search.noMatch": "Aucun enregistrement ne correspond à ce nom.",
 };

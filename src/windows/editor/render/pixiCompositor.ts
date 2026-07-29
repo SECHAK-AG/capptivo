@@ -3,6 +3,10 @@
  * Persistent scene graph with per-layer content keys to minimize per-frame work.
  */
 
+// Installed builds serve from `tauri://` with a strict CSP (no unsafe-eval).
+// Pixi v8 otherwise refuses WebGL/WebGPU init — black preview + broken export.
+import "pixi.js/unsafe-eval";
+
 import {
   Container,
   Graphics,

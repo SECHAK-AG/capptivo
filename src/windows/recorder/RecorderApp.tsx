@@ -1,7 +1,7 @@
 /** Recorder popover — setup bar, countdown, or in-record HUD. */
 
 import { useEffect, useRef, useState } from "react";
-import { GripVertical, Highlighter, X } from "lucide-react";
+import { GripVertical, Pencil, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { useI18n } from "@/lib/settings";
 import { cn } from "@/lib/utils";
@@ -39,7 +39,8 @@ export function RecorderApp() {
     })();
   }, []);
 
-  const live = status === "recording" || status === "paused" || status === "finalizing";
+  const live =
+    status === "recording" || status === "paused" || status === "finalizing";
 
   useEffect(() => {
     if (counting) void commands.setRecorderLayout("countdown");
@@ -135,7 +136,7 @@ function RecordingHud() {
             : "border-border text-muted-foreground hover:bg-muted hover:text-foreground",
         )}
       >
-        <Highlighter className="size-4" />
+        <Pencil className="size-4" />
       </button>
       <button
         type="button"
@@ -145,7 +146,8 @@ function RecordingHud() {
         className={cn(
           "h-9 rounded-xl border border-border bg-transparent px-3 text-xs font-medium text-foreground transition-colors",
           "hover:bg-muted disabled:opacity-40",
-          paused && "border-primary/40 bg-primary/10 text-primary hover:bg-primary/15",
+          paused &&
+            "border-primary/40 bg-primary/10 text-primary hover:bg-primary/15",
         )}
       >
         {paused ? t("recorder.hud.resume") : t("recorder.hud.pause")}

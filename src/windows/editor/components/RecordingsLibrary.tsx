@@ -3,8 +3,8 @@
  * (`thumbnail.jpg`); the library never decodes screen.mp4.
  */
 
-import { useCallback, useEffect, useRef, useState, useTransition } from "react";
-import { MoreHorizontal, Trash2 } from "lucide-react";
+import { useCallback, useEffect, useMemo, useRef, useState, useTransition } from "react";
+import { MoreHorizontal, Search, Trash2, X } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import {
@@ -15,6 +15,7 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { commands } from "@/ipc/bindings";
 import type { ProjectSummary } from "@/ipc/types";
+import { useI18n } from "@/lib/settings";
 import { cn } from "@/lib/utils";
 import { mediaUrl } from "../store";
 
@@ -29,6 +30,12 @@ function formatCreatedAt(iso: string): string {
 
 function displayTitle(p: ProjectSummary): string {
   return p.title?.trim() || "Untitled recording";
+}
+
+function matchesNameFilter(project: ProjectSummary, query: string): boolean {
+  const needle = query.trim().toLowerCase();
+  if (!needle) return true;
+  return displayTitle(project).toLowerCase().includes(needle);
 }
 
 /** Poster from `thumbnail.jpg` only — backfill once if the file is missing. */
@@ -96,10 +103,29 @@ type RecordingsLibraryProps = {
 };
 
 export function RecordingsLibrary({ currentProjectId, onOpenProject }: RecordingsLibraryProps) {
+  const { t } = useI18n();
   const [projects, setProjects] = useState<ProjectSummary[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [busyId, setBusyId] = useState<string | null>(null);
+  const [searchDraft, setSearchDraft] = useState("");
+  const [nameFilter, setNameFilter] = useState("");
   const [, startTransition] = useTransition();
+  const searchRef = useRef<HTMLInputElement>(null);
+
+  const filteredProjects = useMemo(
+    () => projects.filter((p) => matchesNameFilter(p, nameFilter)),
+    [projects, nameFilter],
+  );
+
+  const applyNameFilter = useCallback(() => {
+    setNameFilter(searchDraft.trim());
+  }, [searchDraft]);
+
+  const clearNameFilter = useCallback(() => {
+    setSearchDraft("");
+    setNameFilter("");
+    searchRef.current?.focus();
+  }, []);
 
   const refresh = useCallback(async () => {
     try {
@@ -142,6 +168,49 @@ export function RecordingsLibrary({ currentProjectId, onOpenProject }: Recording
       </header>
 
       <div className="mx-auto w-full max-w-6xl flex-1 px-8 pb-12 pt-6">
+        {projects.length > 0 ? (
+          <form
+            className="mb-6 flex flex-col gap-2 sm:flex-row sm:items-center"
+            onSubmit={(e) => {
+              e.preventDefault();
+              applyNameFilter();
+            }}
+          >
+            <div className="relative min-w-0 flex-1 sm:max-w-md">
+              <Search
+                className="pointer-events-none absolute top-1/2 left-3 size-4 -translate-y-1/2 text-muted-foreground"
+                aria-hidden
+              />
+              <input
+                ref={searchRef}
+                type="search"
+                value={searchDraft}
+                onChange={(e) => setSearchDraft(e.target.value)}
+                placeholder={t("library.search.placeholder")}
+                aria-label={t("library.search.placeholder")}
+                className={cn(
+                  "h-10 w-full rounded-lg border border-border bg-card py-2 pr-9 pl-9 text-sm text-foreground",
+                  "placeholder:text-muted-foreground outline-none transition-colors",
+                  "focus-visible:border-primary/50 focus-visible:ring-2 focus-visible:ring-primary/30",
+                )}
+              />
+              {nameFilter ? (
+                <button
+                  type="button"
+                  onClick={clearNameFilter}
+                  className="absolute top-1/2 right-2 flex size-7 -translate-y-1/2 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+                  aria-label={t("library.search.clear")}
+                >
+                  <X className="size-4" />
+                </button>
+              ) : null}
+            </div>
+            <Button type="submit" variant="secondary" className="shrink-0 sm:w-auto">
+              {t("library.search.filter")}
+            </Button>
+          </form>
+        ) : null}
+
         {error ? (
           <p className="mb-4 text-sm text-destructive" role="alert">
             {error}
@@ -152,9 +221,13 @@ export function RecordingsLibrary({ currentProjectId, onOpenProject }: Recording
           <p className="py-20 text-center text-sm text-muted-foreground">
             No recordings yet. Capture from the menubar tray, then come back here.
           </p>
+        ) : filteredProjects.length === 0 ? (
+          <p className="py-20 text-center text-sm text-muted-foreground">
+            {t("library.search.noMatch")}
+          </p>
         ) : (
           <ul className="grid grid-cols-1 gap-5 sm:grid-cols-2 lg:grid-cols-3">
-            {projects.map((p) => {
+            {filteredProjects.map((p) => {
               const title = displayTitle(p);
               const busy = busyId === p.id;
               const isCurrent = p.id === currentProjectId;
