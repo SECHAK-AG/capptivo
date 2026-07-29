@@ -162,6 +162,16 @@ export async function createPixiFrameCompositor(
     inputs: RenderFrameInputs,
     captions?: FrameCompositorCaptions | null,
   ): void {
+    // Preview paints can race ahead of the React resize effect; keep the
+    // composition buffer aligned with the frame inputs. Preserve output size
+    // so GIF/export downscale isn't reset by a stray preview paint.
+    if (
+      inputs.width > 0 &&
+      inputs.height > 0 &&
+      (inputs.width !== width || inputs.height !== height)
+    ) {
+      resize(inputs.width, inputs.height, outputWidth, outputHeight);
+    }
     const w = width;
     const h = height;
     const look = inputs.look;

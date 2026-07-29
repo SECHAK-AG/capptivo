@@ -465,26 +465,60 @@ function sourceSize(image: CanvasImageSource): { w: number; h: number } {
   return { w: 0, h: 0 };
 }
 
-/** Stretch source edge pixels into the pad so blur samples solid content. */
-function fillBlurPad(
+/**
+ * object-fit: cover dest rect — always covers tw×th (may extend past).
+ * Pure so selfchecks can lock the framing without a DOM canvas.
+ */
+export function coverDestRect(
+  srcW: number,
+  srcH: number,
+  destW: number,
+  destH: number,
+): { x: number; y: number; width: number; height: number } {
+  const sw = Math.max(1, srcW);
+  const sh = Math.max(1, srcH);
+  const tw = Math.max(1, destW);
+  const th = Math.max(1, destH);
+  const scale = Math.max(tw / sw, th / sh);
+  const width = sw * scale;
+  const height = sh * scale;
+  return { x: (tw - width) / 2, y: (th - height) / 2, width, height };
+}
+
+/** Draw `image` covering `tw×th` at `(dx, dy)` — crops overflow, never letterboxes. */
+function drawImageCover(
   ctx: CanvasRenderingContext2D,
   image: CanvasImageSource,
+  tw: number,
+  th: number,
+  dx = 0,
+  dy = 0,
+): void {
+  const { w: iw, h: ih } = sourceSize(image);
+  if (iw < 1 || ih < 1) return;
+  const r = coverDestRect(iw, ih, tw, th);
+  ctx.drawImage(image, dx + r.x, dy + r.y, r.width, r.height);
+}
+
+/** Extend the already-drawn inner rect into the blur pad so edges stay solid. */
+function fillBlurPad(
+  ctx: CanvasRenderingContext2D,
   pad: number,
   w: number,
   h: number,
 ): void {
-  const { w: iw, h: ih } = sourceSize(image);
-  if (iw < 1 || ih < 1) return;
+  if (pad < 1 || w < 1 || h < 1) return;
+  const c = ctx.canvas;
 
-  ctx.drawImage(image, 0, 0, 1, ih, 0, pad, pad, h);
-  ctx.drawImage(image, iw - 1, 0, 1, ih, pad + w, pad, pad, h);
-  ctx.drawImage(image, 0, 0, iw, 1, pad, 0, w, pad);
-  ctx.drawImage(image, 0, ih - 1, iw, 1, pad, pad + h, w, pad);
+  ctx.drawImage(c, pad, pad, 1, h, 0, pad, pad, h);
+  ctx.drawImage(c, pad + w - 1, pad, 1, h, pad + w, pad, pad, h);
+  ctx.drawImage(c, pad, pad, w, 1, pad, 0, w, pad);
+  ctx.drawImage(c, pad, pad + h - 1, w, 1, pad, pad + h, w, pad);
 
-  ctx.drawImage(image, 0, 0, 1, 1, 0, 0, pad, pad);
-  ctx.drawImage(image, iw - 1, 0, 1, 1, pad + w, 0, pad, pad);
-  ctx.drawImage(image, 0, ih - 1, 1, 1, 0, pad + h, pad, pad);
-  ctx.drawImage(image, iw - 1, ih - 1, 1, 1, pad + w, pad + h, pad, pad);
+  ctx.drawImage(c, pad, pad, 1, 1, 0, 0, pad, pad);
+  ctx.drawImage(c, pad + w - 1, pad, 1, 1, pad + w, 0, pad, pad);
+  ctx.drawImage(c, pad, pad + h - 1, 1, 1, 0, pad + h, pad, pad);
+  ctx.drawImage(c, pad + w - 1, pad + h - 1, 1, 1, pad + w, pad + h, pad, pad);
 }
 
 function ensureCanvas(
@@ -520,7 +554,7 @@ function renderBackgroundToCache(
   ctx.filter = "none";
 
   if (safeBlur <= 0) {
-    ctx.drawImage(image, 0, 0, w, h);
+    drawImageCover(ctx, image, w, h);
   } else {
     const nativeBlur = nativeCanvasBlurWorks();
     let scale = backgroundBlurScale(safeBlur);
@@ -546,8 +580,8 @@ function renderBackgroundToCache(
     pctx.imageSmoothingEnabled = true;
     pctx.imageSmoothingQuality = "high";
     pctx.filter = "none";
-    pctx.drawImage(image, pad, pad, sw, sh);
-    fillBlurPad(pctx, image, pad, sw, sh);
+    drawImageCover(pctx, image, sw, sh, pad, pad);
+    fillBlurPad(pctx, pad, sw, sh);
 
     if (nativeBlur) {
       bctx.clearRect(0, 0, pw, ph);

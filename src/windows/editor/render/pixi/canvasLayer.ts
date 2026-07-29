@@ -13,6 +13,10 @@
  * Layers are also placed and sized independently of the stage, so a layer can
  * cover just the region it draws into (see the cursor overlay, which is a few
  * hundred pixels square rather than full-stage).
+ *
+ * Never resize a canvas bound to a live Pixi `CanvasSource` — that invalidates
+ * the GPU texture (see `ShadowLayer`). Pixel-size changes allocate a new
+ * canvas + source and swap the sprite texture.
  */
 
 import { CanvasSource, Sprite, Texture } from "pixi.js";
@@ -47,9 +51,10 @@ export type CanvasLayerUpdate = CanvasLayerPlacement & {
 export class CanvasLayer {
   readonly sprite: Sprite;
 
-  private readonly canvas: HTMLCanvasElement;
-  private readonly ctx: CanvasRenderingContext2D;
-  private readonly source: CanvasSource;
+  private canvas: HTMLCanvasElement;
+  private ctx: CanvasRenderingContext2D;
+  private source: CanvasSource;
+  private readonly label: string;
   private key: string | null = null;
   private bitmapWidth = 0;
   private bitmapHeight = 0;
@@ -57,6 +62,7 @@ export class CanvasLayer {
   private originY = 0;
 
   constructor(label: string) {
+    this.label = label;
     this.canvas = document.createElement("canvas");
     this.canvas.width = 1;
     this.canvas.height = 1;
@@ -73,6 +79,8 @@ export class CanvasLayer {
     });
     this.sprite = new Sprite(new Texture({ source: this.source, label }));
     this.sprite.visible = false;
+    this.bitmapWidth = 1;
+    this.bitmapHeight = 1;
   }
 
   update(update: CanvasLayerUpdate): void {
@@ -95,10 +103,7 @@ export class CanvasLayer {
 
     if (resized || contentChanged) {
       if (resized) {
-        // CanvasSource.resize() resizes the backing canvas, which clears it.
-        this.source.resize(w, h, 1);
-        this.bitmapWidth = w;
-        this.bitmapHeight = h;
+        this.reallocate(w, h);
       } else {
         this.ctx.clearRect(0, 0, w, h);
       }
@@ -133,5 +138,31 @@ export class CanvasLayer {
     this.sprite.destroy({ texture: true, textureSource: true });
     this.canvas.width = 0;
     this.canvas.height = 0;
+  }
+
+  /** New GPU canvas + source — never resize a live CanvasSource. */
+  private reallocate(w: number, h: number): void {
+    const next = document.createElement("canvas");
+    next.width = w;
+    next.height = h;
+    const ctx = next.getContext("2d");
+    if (!ctx) throw new Error(`canvas layer "${this.label}": no 2d context`);
+
+    const previous = this.sprite.texture;
+    this.canvas = next;
+    this.ctx = ctx;
+    this.source = new CanvasSource({
+      resource: next,
+      resolution: 1,
+      autoDensity: false,
+      label: this.label,
+    });
+    this.sprite.texture = new Texture({
+      source: this.source,
+      label: this.label,
+    });
+    previous.destroy(true);
+    this.bitmapWidth = w;
+    this.bitmapHeight = h;
   }
 }
