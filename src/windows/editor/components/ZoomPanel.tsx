@@ -29,6 +29,7 @@ import { cn } from "@/lib/utils";
 import { useI18n } from "@/lib/settings";
 
 import { resolveRecordingLayoutParams, type VideoLayoutFrac } from "../lib/composition";
+import { screenPreviewUrl } from "../lib/screenPreviewUrl";
 import { useStageDimensions } from "../lib/useStageDimensions";
 import { cornerHandleOverlayStyle, CROP_HANDLE_SIZE, getHandleCursor } from "../lib/cropHandles";
 import { formatTimelineTime } from "../lib/timelineMath";
@@ -56,7 +57,6 @@ type Interaction =
 
 export type ZoomPanelProps = {
   visible: boolean;
-  screenUrl: string | null;
   recordingMetadata: RecordingMetadata | null;
   zoomFragments: ZoomFragment[];
   selectedZoomFragmentId: string | null;
@@ -66,7 +66,6 @@ export type ZoomPanelProps = {
 
 export function ZoomPanel({
   visible,
-  screenUrl,
   recordingMetadata,
   zoomFragments,
   selectedZoomFragmentId,
@@ -74,6 +73,9 @@ export function ZoomPanel({
   updateSelectedZoomFragment,
 }: ZoomPanelProps) {
   const { t } = useI18n();
+  const previewUrl = useEditorStore((s) =>
+    screenPreviewUrl(s.proxyUrl, s.screenUrl),
+  );
   const cameraUrl = useEditorStore((s) => s.cameraUrl);
   const look = useEditorStore((s) => s.look);
   const selectedBackground = useEditorStore((s) => s.selectedBackground);
@@ -534,11 +536,11 @@ export function ZoomPanel({
                       borderRadius: `${videoLayoutPct.radiusX}% / ${videoLayoutPct.radiusY}%`,
                     }}
                   >
-                    {screenUrl ? (
+                    {previewUrl ? (
                       videoCropStyle ? (
                         <div className="absolute inset-0 overflow-hidden">
                           <InspectorVideoPreview
-                            src={screenUrl}
+                            src={previewUrl}
                             seekTo={selectedZoomFragment.start}
                             className="h-full w-full"
                             style={videoCropStyle}
@@ -546,7 +548,7 @@ export function ZoomPanel({
                         </div>
                       ) : (
                         <InspectorVideoPreview
-                          src={screenUrl}
+                          src={previewUrl}
                           seekTo={selectedZoomFragment.start}
                           className="h-full w-full object-cover"
                         />

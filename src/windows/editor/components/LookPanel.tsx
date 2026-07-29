@@ -14,6 +14,7 @@ import type { TranslationKey } from "@/lib/i18n";
 
 import { useEditorStore } from "../store";
 import { cn } from "../lib/cn";
+import { screenPreviewUrl } from "../lib/screenPreviewUrl";
 import {
   BACKGROUND_TYPE_TABS,
   clampGradientAngle,
@@ -40,7 +41,9 @@ export function LookPanel({ visible = true }: { visible?: boolean }) {
   const backgroundType = useEditorStore((s) => s.backgroundType);
   const setBackgroundType = useEditorStore((s) => s.setBackgroundType);
   const selectedBackground = useEditorStore((s) => s.selectedBackground);
-  const screenUrl = useEditorStore((s) => s.screenUrl);
+  const previewUrl = useEditorStore((s) =>
+    screenPreviewUrl(s.proxyUrl, s.screenUrl),
+  );
   const sourceAspect = useEditorStore((s) => s.sourceAspect);
   const screenContentCrop = useEditorStore((s) => s.screenContentCrop);
   const setScreenContentCrop = useEditorStore((s) => s.setScreenContentCrop);
@@ -79,10 +82,10 @@ export function LookPanel({ visible = true }: { visible?: boolean }) {
         {backgroundType === "color" && <ColorGrid />}
       </div>
 
-      {selectedBackground && screenUrl && (
+      {selectedBackground && previewUrl && (
         <ScreenContentCropPanel
           key="screen-content-crop"
-          videoUrl={screenUrl}
+          videoUrl={previewUrl}
           fileAspect={sourceAspect}
           hasBackground
           value={screenContentCrop}

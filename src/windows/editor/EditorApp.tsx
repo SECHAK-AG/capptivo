@@ -45,7 +45,6 @@ export function EditorApp() {
   const error = useEditorStore((s) => s.error);
   const inspectorPanel = useEditorStore((s) => s.inspectorPanel);
   const setInspectorPanel = useEditorStore((s) => s.setInspectorPanel);
-  const screenUrl = useEditorStore((s) => s.screenUrl);
   const cameraUrl = useEditorStore((s) => s.cameraUrl);
   const recordingMetadata = useEditorStore((s) => s.recordingMetadata);
   const zoomFragments = useEditorStore((s) => s.zoomFragments);
@@ -245,7 +244,6 @@ export function EditorApp() {
             <CameraPanel visible={inspectorPanel === "camera"} />
             <ZoomPanel
               visible={inspectorPanel === "zoom"}
-              screenUrl={screenUrl}
               recordingMetadata={recordingMetadata}
               zoomFragments={zoomFragments}
               selectedZoomFragmentId={selectedZoomFragmentId}
