@@ -87,34 +87,44 @@ export function EditorApp() {
     };
   }, []);
 
-  // Closing the editor window destroys the webview immediately — a debounced
-  // save still in its 400ms window would die with it. Land pending edits the
-  // moment the window hides, the page tears down, or Tauri requests a close.
-  // Each hook is a no-op when nothing is pending, so this costs nothing idle.
+  // Closing the editor destroys the webview — a debounced save still in its
+  // 400ms window, or an IPC write still in flight, would die with it. Flush on
+  // hide/pagehide (best-effort), and on native close *await* the save chain
+  // before destroy so the last edit lands.
   //
-  // Important: registering `onCloseRequested` makes Tauri intercept the native
-  // close and call `destroy()` after the handler. That needs
-  // `core:window:allow-destroy` (see capabilities/default.json). Do not call
-  // preventDefault unless we intentionally keep the window open.
+  // `onCloseRequested` intercepts the close; we `preventDefault`, persist, then
+  // `destroy()`. Needs `core:window:allow-destroy` (capabilities/default.json).
   useEffect(() => {
     const flush = () => useEditorStore.getState().flushEditorPersist();
-    const onVisibility = () => {
-      if (document.visibilityState === "hidden") flush();
+    const onPageHide = () => {
+      void flush();
     };
-    window.addEventListener("pagehide", flush);
+    const onVisibility = () => {
+      if (document.visibilityState === "hidden") void flush();
+    };
+    window.addEventListener("pagehide", onPageHide);
     document.addEventListener("visibilitychange", onVisibility);
 
+    let closing = false;
     let unlisten: (() => void) | undefined;
-    void getCurrentWindow()
-      .onCloseRequested(() => {
-        flush();
+    const win = getCurrentWindow();
+    void win
+      .onCloseRequested(async (event) => {
+        if (closing) return;
+        event.preventDefault();
+        closing = true;
+        try {
+          await flush();
+        } finally {
+          await win.destroy().catch(() => undefined);
+        }
       })
       .then((fn) => {
         unlisten = fn;
       });
 
     return () => {
-      window.removeEventListener("pagehide", flush);
+      window.removeEventListener("pagehide", onPageHide);
       document.removeEventListener("visibilitychange", onVisibility);
       unlisten?.();
     };

@@ -42,6 +42,12 @@ import { ExportSink } from "./exportSink";
 import { openExportAudioTrack } from "./exportAudioTrack";
 import { renderGifToSink } from "./exportGif";
 import {
+  beginExportAbort,
+  endExportAbort,
+  isExportCancelled,
+  throwIfAborted,
+} from "./exportCancel";
+import {
   DEFAULT_EXPORT_SETTINGS,
   resolveExportParams,
   type ExportAudioEnhance,
@@ -49,6 +55,8 @@ import {
   type ResolvedExportParams,
 } from "./exportSettings";
 import { resolveStageSize } from "../lib/composition";
+
+export { cancelActiveExport } from "./exportCancel";
 
 type CanvasCaptureTrack = MediaStreamTrack & { requestFrame?: () => void };
 
@@ -115,6 +123,7 @@ export async function exportProject(
 
   store.setExporting(true);
   store.setExportError(null);
+  const signal = beginExportAbort();
 
   // Pick the destination up front: the encoder streams straight into this file
   // as frames are produced, so peak memory is one chunk rather than the whole
@@ -126,7 +135,8 @@ export async function exportProject(
   } catch (e) {
     store.setExportError(describeError(e));
   }
-  if (!path) {
+  if (!path || signal.aborted) {
+    endExportAbort();
     const s = useEditorStore.getState();
     s.setExporting(false);
     s.setExportStatus(null);
@@ -166,16 +176,19 @@ export async function exportProject(
     console.info(`[export] ensureSeekableRecording(${project.id})…`);
     const t0 = performance.now();
     await commands.ensureSeekableRecording(project.id);
+    throwIfAborted(signal);
     console.info(
       `[export] ensureSeekableRecording done in ${(performance.now() - t0).toFixed(0)}ms ` +
         `screenUrl=${screenUrl}`,
     );
     sink = await ExportSink.open(path);
+    throwIfAborted(signal);
 
     if (resolved.format === "gif") {
-      await renderGifToSink(sink, screenUrl, store.cameraUrl, resolved);
+      await renderGifToSink(sink, screenUrl, store.cameraUrl, resolved, signal);
     } else {
       const prepared = audioPrep ? await audioPrep : null;
+      throwIfAborted(signal);
       audioAbsPath = prepared?.absPath ?? null;
       const audioMuxed = await renderVideoToSink(
         sink,
@@ -183,7 +196,9 @@ export async function exportProject(
         store.cameraUrl,
         resolved,
         prepared?.mediaUrl ?? null,
+        signal,
       );
+      throwIfAborted(signal);
       store.setExportStatus("Saving…");
       const saved = await sink.finish();
       sink = null;
@@ -217,8 +232,12 @@ export async function exportProject(
     await notifyDone(saved);
   } catch (e) {
     await sink?.abort(e);
-    useEditorStore.getState().setExportError(describeError(e));
+    // Cancel is intentional — don't surface it as an export failure toast.
+    if (!isExportCancelled(e)) {
+      useEditorStore.getState().setExportError(describeError(e));
+    }
   } finally {
+    endExportAbort();
     // Prepare may still be in flight if we failed before awaiting it — wait and
     // delete so capptivo-export-audio-* never accumulates in the project dir.
     if (!audioAbsPath && audioPrep) {
@@ -396,8 +415,10 @@ async function renderVideoToSink(
   cameraUrl: string | null,
   params: ResolvedExportParams,
   audioMediaUrl: string | null,
+  signal: AbortSignal,
 ): Promise<boolean> {
   const { width, height, fps, bitrate, container } = params;
+  throwIfAborted(signal);
 
   const tuning =
     typeof VideoEncoder !== "undefined"
@@ -418,10 +439,12 @@ async function renderVideoToSink(
       cameraUrl,
       pickMime(container).mime,
       params,
+      signal,
     );
     return false;
   }
 
+  throwIfAborted(signal);
   const sequential = await openSequentialMedia(screenUrl, cameraUrl).catch(
     () => null,
   );
@@ -512,6 +535,7 @@ async function renderVideoToSink(
     let lastYieldAt = loopStart;
 
     for (const t of frameTimes) {
+      throwIfAborted(signal);
       const decodeStart = performance.now();
       if (reader) {
         await reader.nextFrame();
@@ -560,6 +584,7 @@ async function renderVideoToSink(
         // toward the next interval.
         lastYieldAt = performance.now();
         yieldMs += lastYieldAt - yieldStart;
+        throwIfAborted(signal);
       }
     }
     await encodeQueue.drain();
@@ -608,7 +633,9 @@ async function renderVideoViaMediaRecorder(
   cameraUrl: string | null,
   mime: string,
   params: ResolvedExportParams,
+  signal: AbortSignal,
 ): Promise<void> {
+  throwIfAborted(signal);
   const { width, height, fps, bitrate } = params;
   // `captureStream` is a DOM-canvas API, so this path opts out of the
   // offscreen surface the WebCodecs loop uses.
@@ -688,6 +715,7 @@ async function renderVideoViaMediaRecorder(
     raf = requestAnimationFrame(draw);
 
     for (const seg of segments) {
+      throwIfAborted(signal);
       activeSeg = seg;
       await seekTo(video, seg.start);
       if (camera) await seekTo(camera, seg.start).catch(() => undefined);
@@ -695,8 +723,12 @@ async function renderVideoViaMediaRecorder(
       if (camera) void camera.play().catch(() => undefined);
       await waitUntil(
         video,
-        () => video.currentTime >= seg.end - 1 / fps || video.ended,
+        () =>
+          signal.aborted ||
+          video.currentTime >= seg.end - 1 / fps ||
+          video.ended,
       );
+      throwIfAborted(signal);
       video.pause();
       camera?.pause();
       playedBefore += Math.max(0, seg.end - seg.start);

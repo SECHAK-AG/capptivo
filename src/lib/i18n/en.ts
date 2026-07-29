@@ -65,6 +65,7 @@ export const en = {
   "export.exporting": "Exporting…",
   "export.progressTitle": "Exporting",
   "export.rendering": "Rendering your file.",
+  "export.cancel": "Cancel",
   "export.dialog.title": "Export",
   "export.dialog.description": "Choose format, encoding, frame rate, and file type.",
   "export.format": "Format",

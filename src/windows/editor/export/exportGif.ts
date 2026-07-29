@@ -17,6 +17,7 @@ import {
   seekTo,
 } from "./exportCompositor";
 import { yieldToMain } from "./exportYield";
+import { throwIfAborted } from "./exportCancel";
 import { openSequentialMedia } from "./sequentialMedia";
 import type { ExportSink } from "./exportSink";
 import { createDitherPalettizer } from "./gifDither";
@@ -37,7 +38,9 @@ export async function renderGifToSink(
   screenUrl: string,
   cameraUrl: string | null,
   params: ResolvedExportParams,
+  signal: AbortSignal,
 ): Promise<void> {
+  throwIfAborted(signal);
   const { width, height, fps, gifColors, gifDither } = params;
   // GIF is the one consumer of getImageData — the only path that wants a
   // CPU-resident canvas (see CompositorOptions.cpuReadback).
@@ -126,6 +129,7 @@ export async function renderGifToSink(
     const loopStart = performance.now();
 
     for (const t of frameTimes) {
+      throwIfAborted(signal);
       if (reader) {
         await reader.nextFrame();
       } else {
@@ -148,12 +152,16 @@ export async function renderGifToSink(
           : applyPalette(data, palette, format);
         await writeFrame({ palette, index });
         // Pool awaits already yield; keep yieldToMain on the fallback path.
-        if (framesWritten % 3 === 0) await yieldToMain();
+        if (framesWritten % 3 === 0) {
+          await yieldToMain();
+          throwIfAborted(signal);
+        }
       }
     }
 
     if (queue) {
       for await (const frame of queue.drain()) {
+        throwIfAborted(signal);
         await writeFrame(frame);
       }
     }

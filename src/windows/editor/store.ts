@@ -415,9 +415,10 @@ interface EditorStore {
   undo: () => void;
   redo: () => void;
   resetTimeline: () => void;
+  /** Snapshot + enqueue a save (debounced callers). */
   persistEditorState: () => void;
-  /** Land any debounced save immediately (close/hide/project-switch). */
-  flushEditorPersist: () => void;
+  /** Flush debounce and await every in-flight save (close / project switch). */
+  flushEditorPersist: () => Promise<void>;
   captureEditorPresetSnapshot: () => EditorPresetSnapshot;
   applyEditorPresetSnapshot: (snapshot: EditorPresetSnapshot) => void;
 }
@@ -530,6 +531,8 @@ const PERSIST_DEBOUNCE_MS = 400;
 const PERSIST_MAX_WAIT_MS = 3000;
 
 let persistDeadline: number | null = null;
+/** Serial chain of saves — close awaits this so destroy can't race IPC. */
+let persistChain: Promise<void> = Promise.resolve();
 
 function schedulePersist(get: () => EditorStore) {
   const now = Date.now();
@@ -539,17 +542,58 @@ function schedulePersist(get: () => EditorStore) {
   persistTimer = setTimeout(() => {
     persistTimer = null;
     persistDeadline = null;
-    get().persistEditorState();
+    enqueuePersist(get);
   }, delay);
 }
 
-/** Flush pending persist before project swap or window teardown. */
-function flushPersist(get: () => EditorStore) {
-  if (!persistTimer) return;
-  clearTimeout(persistTimer);
-  persistTimer = null;
-  persistDeadline = null;
-  get().persistEditorState();
+/**
+ * Snapshot editor state now and append a save onto {@link persistChain}.
+ * Payload is captured synchronously so a later `init` clear can't empty it.
+ */
+function enqueuePersist(get: () => EditorStore): void {
+  if (!get().mediaInitialized) return;
+  const {
+    projectId,
+    segments,
+    zoomFragments,
+    look,
+    screenContentCrop,
+    captions,
+    captionSettings,
+    cursorSettings,
+    faceCam,
+    aspectRatioPresetId,
+  } = get();
+  if (!projectId) return;
+  const editorState = {
+    segments,
+    zoomFragments,
+    look,
+    screenContentCrop,
+    captions,
+    captionSettings,
+    cursorSettings,
+    faceCam,
+    aspectRatioPresetId,
+    background: snapshotBackground(get()),
+  };
+  persistChain = persistChain
+    .catch(() => undefined)
+    .then(() => commands.saveEditorState(projectId, editorState));
+}
+
+/**
+ * Fire any pending debounced save immediately, then wait for the save chain
+ * (including an already in-flight write) to settle.
+ */
+function flushPersist(get: () => EditorStore): Promise<void> {
+  if (persistTimer) {
+    clearTimeout(persistTimer);
+    persistTimer = null;
+    persistDeadline = null;
+    enqueuePersist(get);
+  }
+  return persistChain;
 }
 
 /** Debounced auto-suggest after a fresh project has duration + click metadata. */
@@ -714,7 +758,7 @@ export const useEditorStore = create<EditorStore>((set, get) => ({
   customImageBackground: null,
 
   async init(projectId) {
-    flushPersist(get);
+    await flushPersist(get);
     if (autoSuggestTimer) {
       clearTimeout(autoSuggestTimer);
       autoSuggestTimer = null;
@@ -1417,36 +1461,11 @@ export const useEditorStore = create<EditorStore>((set, get) => ({
   },
 
   persistEditorState() {
-    if (!get().mediaInitialized) return;
-    const {
-      projectId,
-      segments,
-      zoomFragments,
-      look,
-      screenContentCrop,
-      captions,
-      captionSettings,
-      cursorSettings,
-      faceCam,
-      aspectRatioPresetId,
-    } = get();
-    if (!projectId) return;
-    void commands.saveEditorState(projectId, {
-      segments,
-      zoomFragments,
-      look,
-      screenContentCrop,
-      captions,
-      captionSettings,
-      cursorSettings,
-      faceCam,
-      aspectRatioPresetId,
-      background: snapshotBackground(get()),
-    });
+    enqueuePersist(get);
   },
 
   flushEditorPersist() {
-    flushPersist(get);
+    return flushPersist(get);
   },
 
   captureEditorPresetSnapshot() {

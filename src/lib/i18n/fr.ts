@@ -70,6 +70,7 @@ export const fr: Record<TranslationKey, string> = {
   "export.exporting": "Exportation…",
   "export.progressTitle": "Exportation",
   "export.rendering": "Génération de votre fichier.",
+  "export.cancel": "Annuler",
   "export.dialog.title": "Exporter",
   "export.dialog.description":
     "Choisissez le format, l'encodage, la fréquence d'images et le type de fichier.",

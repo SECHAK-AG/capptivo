@@ -35,7 +35,6 @@
     "lucide-react": "^0.475.0",
     "mediabunny": "^1.50.9",
     "pixi.js": "^8.19.0",
-    "radix-ui": "^1.6.4",
     "react": "^19.1.0",
     "react-dom": "^19.1.0",
     "tailwind-merge": "^3.6.0",
