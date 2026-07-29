@@ -15,8 +15,8 @@ import {
   createExportCompositorFromMedia,
   planFrameTimes,
   seekTo,
-  yieldToMain,
 } from "./exportCompositor";
+import { yieldToMain } from "./exportYield";
 import { openSequentialMedia } from "./sequentialMedia";
 import type { ExportSink } from "./exportSink";
 import { createDitherPalettizer } from "./gifDither";
