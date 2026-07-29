@@ -1,4 +1,9 @@
-/** Recorder popover store — projection of Rust `recorder://…` events plus local UI state. */
+/**
+ * Recorder popover store. The recorder *state machine* lives in Rust; this store
+ * is a **projection** of the `recorder://…` events plus local UI selection (which
+ * source, which toggles). Never keep "am I recording?" anywhere but here, fed
+ * from Rust (§6).
+ */
 
 import { create } from "zustand";
 import { emit, listen } from "@tauri-apps/api/event";
@@ -40,19 +45,23 @@ interface MediaDeviceOption {
 }
 
 interface RecorderStore {
+  // --- projected from Rust ---
   state: RecorderState;
   elapsed: number;
   lastError: string | null;
 
+  // --- local UI ---
   permissions: PermissionStatus | null;
   sources: CaptureSource[];
   selectedSourceId: string | null;
-  /** Attached iPhones / iPads — enumerated on demand when the Device menu opens. */
+  /** Attached iPhones / iPads. Enumerated on demand — never at boot, so we
+   *  don't touch AVFoundation for users who never open the Device menu. */
   devices: CaptureDevice[];
-  /** `device:{uniqueID}` — separate from `selectedSourceId` for mode switching. */
+  /** `device:{uniqueID}`. Kept apart from `selectedSourceId` so switching modes
+   *  can't hand a `display:` id to the device backend, or the reverse. */
   selectedDeviceId: string | null;
   loadingDevices: boolean;
-  /** Device-menu scoped; a phoneless Mac is not a recorder error. */
+  /** Scoped to the Device menu — a phoneless Mac is not a recorder error. */
   deviceError: string | null;
   captureMode: CaptureMode;
   areaSelection: CaptureAreaSelection | null;
@@ -66,8 +75,10 @@ interface RecorderStore {
   cameras: MediaDeviceOption[];
   microphones: MediaDeviceOption[];
 
+  /** Ink overlay visible while recording (separate WebView — synced via events). */
   annotationVisible: boolean;
 
+  // --- actions ---
   init: () => Promise<void>;
   refreshPermissions: () => Promise<void>;
   requestPermission: () => Promise<void>;
@@ -104,7 +115,7 @@ const DEFAULT_OPTIONS: CaptureOptions = {
 
 let subscribed = false;
 
-/** Re-open face-cam preview after recorder mic capture stole the AVCapture session. */
+/** Nudge face-cam after recorder-side mic GUM tore down its AVCapture session. */
 function reviveCameraPreview(cameraEnabled: boolean): Promise<void> {
   if (!cameraEnabled) return Promise.resolve();
   return emit("camera://revive", null).catch(() => undefined);
@@ -178,9 +189,16 @@ export const useRecorderStore = create<RecorderStore>((set, get) => ({
       await onStateChanged((state) => set({ state }));
       await onElapsed((seconds) => set({ elapsed: seconds }));
       await onError((message) => set({ lastError: message }));
+      // Bubble X button — sync toggle without re-invoking hide.
       void listen("camera://closed", () => {
         set({ cameraEnabled: false });
       });
+      // Rust is source of truth for overlay visibility (HUD toggle, tray menu, X).
+      void listen<boolean>("annotation://visibility", (e) => {
+        set({ annotationVisible: e.payload });
+      });
+      // Annotation bar X — hide runs through hideAnnotationOverlay too, but X can
+      // fire before the IPC round-trip; keep the flag in sync immediately.
       void listen("annotation://closed", () => {
         set({ annotationVisible: false });
       });
@@ -191,6 +209,7 @@ export const useRecorderStore = create<RecorderStore>((set, get) => ({
       /* recorder_state never fails, but stay defensive */
     }
     await get().refreshPermissions();
+    // OS dialog only — no Capptivo permissions card (macOS TCC / portal).
     if (!get().permissions?.canRecord) {
       await get().requestPermission();
     }
@@ -240,6 +259,9 @@ export const useRecorderStore = create<RecorderStore>((set, get) => ({
       set((s) => ({
         devices,
         deviceError: null,
+        // Keep the current pick if it's still plugged in; otherwise fall back to
+        // the only device, but never auto-select among several — that would be
+        // guessing which phone the user meant.
         selectedDeviceId:
           s.selectedDeviceId && devices.some((d) => d.id === s.selectedDeviceId)
             ? s.selectedDeviceId
@@ -248,6 +270,8 @@ export const useRecorderStore = create<RecorderStore>((set, get) => ({
               : null,
       }));
     } catch (e) {
+      // Camera TCC is the usual cause, and it has its own remedy — keep it out
+      // of `lastError` so it can't block the Record button for screen capture.
       const message = describeError(e);
       set({
         devices: [],
@@ -317,6 +341,8 @@ export const useRecorderStore = create<RecorderStore>((set, get) => ({
       areaSelection: mode === "area" ? get().areaSelection : null,
       selectedSourceId: pickDefaultSource(sources, mode, selectedSourceId),
     });
+    // Phones come and go while the bar is open; the list is only meaningful the
+    // moment the user asks for it.
     if (mode === "device") void get().refreshDevices();
   },
 
@@ -361,6 +387,8 @@ export const useRecorderStore = create<RecorderStore>((set, get) => ({
   setCameraEnabled(enabled) {
     set({ cameraEnabled: enabled });
     if (enabled) {
+      // Camera WebView owns getUserMedia — don't open a throwaway stream here
+      // (that steals the device and blacks out the preview).
       void (async () => {
         await get().refreshMediaDevices();
         const id = get().cameraDeviceId;
@@ -374,6 +402,7 @@ export const useRecorderStore = create<RecorderStore>((set, get) => ({
   setMicEnabled(enabled) {
     set({ micEnabled: enabled });
     if (enabled) {
+      // prepareMic owns getUserMedia — no throwaway probe (that blacks face-cam).
       void (async () => {
         await get().refreshMediaDevices();
         const { micDeviceId, cameraEnabled } = get();
@@ -390,6 +419,8 @@ export const useRecorderStore = create<RecorderStore>((set, get) => ({
   setAnnotationVisible(visible) {
     set({ annotationVisible: visible });
     if (visible) {
+      // First open builds the WebView — if the user hides before that finishes,
+      // the late `show()` would resurrect the bar (felt like needing 2–3 clicks).
       void commands
         .showAnnotationOverlay()
         .then(() => {
@@ -406,6 +437,8 @@ export const useRecorderStore = create<RecorderStore>((set, get) => ({
   setCameraDeviceId(id) {
     set({ cameraDeviceId: id, cameraEnabled: id !== null });
     if (id) {
+      // Preview WebView acquires the device; a recorder-side getUserMedia would
+      // kill that stream (black bubble when re-opening the camera menu).
       void commands.showCameraPreview(id).catch(() => undefined);
     } else {
       void commands.hideCameraPreview().catch(() => undefined);
@@ -438,6 +471,9 @@ export const useRecorderStore = create<RecorderStore>((set, get) => ({
       micEnabled,
       micDeviceId,
     } = get();
+    // Device capture goes through CoreMediaIO, not ScreenCaptureKit — it needs
+    // camera permission, not screen recording, so it must skip the screen gate
+    // below or a Mac without screen access could never record a phone.
     if (captureMode !== "device" && !get().permissions?.canRecord) {
       await get().requestPermission();
       if (!get().permissions?.canRecord) {
@@ -464,6 +500,8 @@ export const useRecorderStore = create<RecorderStore>((set, get) => ({
     const captureMicrophone = micEnabled && !!micDeviceId;
     let config: RecorderConfig;
     if (captureMode === "device") {
+      // No crop and no cursor exist for a phone's screen; `captureSystemAudio`
+      // means the *device's* own audio, which rides the same muxed stream.
       config = {
         ...options,
         sourceId: selectedDeviceId!,
@@ -483,11 +521,16 @@ export const useRecorderStore = create<RecorderStore>((set, get) => ({
     }
     try {
       set({ lastError: null });
+      // Annotations start closed on every recording — the overlay is opt-in
+      // via the HUD toggle. Without this, a toggle left on from the previous
+      // recording leaks into the next one (Rust hides the window on stop, but
+      // this store flag survives, leaving the HUD state stale).
       set({ annotationVisible: false });
       void commands.hideAnnotationOverlay().catch(() => undefined);
       if (captureMicrophone && micDeviceId) {
         await prepareMic(micDeviceId).catch(() => undefined);
       }
+      // Keep the floating bubble where it is — capture re-acquires inside that window.
       if (cameraEnabled && cameraDeviceId) {
         await commands.showCameraPreview(cameraDeviceId).catch(() => undefined);
       }
@@ -509,6 +552,8 @@ export const useRecorderStore = create<RecorderStore>((set, get) => ({
       if (cameraEnabled) {
         await flushCameraCaptureWithTimeout();
       }
+      // Rust stops ScreenCaptureKit first, then opens the editor (so the blank
+      // editor shell is never in the last frames), then finishes mux/finalize.
       await commands.stopRecording();
       void commands.hideAreaFrameGuide().catch(() => undefined);
       void commands.hideCameraPreview().catch(() => undefined);

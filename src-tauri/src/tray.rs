@@ -23,11 +23,16 @@ pub fn build(app: &AppHandle) -> tauri::Result<()> {
     // discoverable fallback on Windows for users who expect click = menu.
     let open_recorder =
         MenuItem::with_id(app, "open_recorder", "Open Recorder", true, None::<&str>)?;
+    let annotate =
+        MenuItem::with_id(app, "annotate", "Annotate Screen…", true, None::<&str>)?;
     let open_library = MenuItem::with_id(app, "open_library", "Recordings…", true, None::<&str>)?;
     let settings = MenuItem::with_id(app, "settings", "Settings…", true, None::<&str>)?;
     let separator = PredefinedMenuItem::separator(app)?;
     let quit = MenuItem::with_id(app, "quit", "Quit Capptivo", true, None::<&str>)?;
-    let menu = Menu::with_items(app, &[&open_recorder, &open_library, &settings, &separator, &quit])?;
+    let menu = Menu::with_items(
+        app,
+        &[&open_recorder, &annotate, &open_library, &settings, &separator, &quit],
+    )?;
 
     let mut builder = TrayIconBuilder::with_id(TRAY_ID)
         .menu(&menu)
@@ -67,6 +72,11 @@ fn on_menu_event(app: &AppHandle, event: tauri::menu::MenuEvent) {
         "open_recorder" => {
             if let Err(e) = windows::toggle_recorder_popover(app) {
                 tracing::warn!(%e, "failed to open recorder popover from menu");
+            }
+        }
+        "annotate" => {
+            if let Err(e) = windows::toggle_annotation_overlay(app) {
+                tracing::warn!(%e, "failed to toggle annotation overlay from menu");
             }
         }
         "open_library" => {

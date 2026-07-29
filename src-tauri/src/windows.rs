@@ -34,6 +34,9 @@ pub const SHOW_LIBRARY_EVENT: &str = "shell://show-library";
 /// The overlay WebView is reused (show/hide, never closed), so its idle
 /// cursor-poll would otherwise keep running while hidden; it gates on this.
 pub const ANNOTATION_VISIBILITY_EVENT: &str = "annotation://visibility";
+/// Progressive dismiss while the overlay is open (panel → tool → close).
+pub const ANNOTATION_ESCAPE_EVENT: &str = "annotation://escape";
+const ANNOTATION_ESCAPE_HOTKEY: &str = "Escape";
 /// Camera bubble should switch `getUserMedia` to this device id.
 pub const CAMERA_DEVICE_EVENT: &str = "camera://device";
 /// Bubble closed (X) — recorder store clears the camera toggle.
@@ -680,6 +683,52 @@ fn position_annotation_on_active_display(
     Ok(())
 }
 
+static ANNOTATION_ESCAPE_ARMED: AtomicBool = AtomicBool::new(false);
+
+fn arm_annotation_escape(app: &AppHandle) {
+    if ANNOTATION_ESCAPE_ARMED.swap(true, Ordering::SeqCst) {
+        return;
+    }
+    use tauri_plugin_global_shortcut::{GlobalShortcutExt, ShortcutState};
+    let result = app.global_shortcut().on_shortcut(ANNOTATION_ESCAPE_HOTKEY, |app, _, event| {
+        if event.state() != ShortcutState::Pressed {
+            return;
+        }
+        let Some(win) = app.get_webview_window(ANNOTATION_LABEL) else {
+            return;
+        };
+        if !win.is_visible().unwrap_or(false) {
+            return;
+        }
+        let _ = app.emit(ANNOTATION_ESCAPE_EVENT, ());
+    });
+    if let Err(e) = result {
+        ANNOTATION_ESCAPE_ARMED.store(false, Ordering::SeqCst);
+        tracing::warn!(%e, "failed to register annotation Escape hotkey");
+    }
+}
+
+fn disarm_annotation_escape(app: &AppHandle) {
+    if !ANNOTATION_ESCAPE_ARMED.swap(false, Ordering::SeqCst) {
+        return;
+    }
+    use tauri_plugin_global_shortcut::GlobalShortcutExt;
+    if let Err(e) = app.global_shortcut().unregister(ANNOTATION_ESCAPE_HOTKEY) {
+        tracing::warn!(%e, "failed to unregister annotation Escape hotkey");
+    }
+}
+
+/// Toggle the fullscreen annotation toolbar. Usable with or without recording
+/// (tray menu "Annotate Screen…" vs the HUD highlighter during a take).
+pub fn toggle_annotation_overlay(app: &AppHandle) -> tauri::Result<()> {
+    if let Some(win) = app.get_webview_window(ANNOTATION_LABEL) {
+        if win.is_visible().unwrap_or(false) {
+            return hide_annotation_overlay(app.clone());
+        }
+    }
+    show_annotation_overlay(app.clone())
+}
+
 /// Full-screen ink overlay while recording. Not SCK-excluded so drawings land
 /// in `screen.mp4` (same idea as the extension page overlay).
 #[tauri::command]
@@ -688,7 +737,8 @@ pub fn show_annotation_overlay(app: AppHandle) -> tauri::Result<()> {
         position_annotation_on_active_display(&app, &win)?;
         set_follows_spaces(&win, true);
         win.show()?;
-        let _ = win.emit(ANNOTATION_VISIBILITY_EVENT, true);
+        let _ = app.emit(ANNOTATION_VISIBILITY_EVENT, true);
+        arm_annotation_escape(&app);
         raise_recording_chrome(&app);
         return Ok(());
     }
@@ -715,6 +765,8 @@ pub fn show_annotation_overlay(app: AppHandle) -> tauri::Result<()> {
     position_annotation_on_active_display(&app, &win)?;
     set_follows_spaces(&win, true);
     win.show()?;
+    let _ = app.emit(ANNOTATION_VISIBILITY_EVENT, true);
+    arm_annotation_escape(&app);
     // Ink is fullscreen always-on-top — re-assert HUD / face-cam above it or
     // the highlighter toggle (and camera) are unreachable.
     raise_recording_chrome(&app);
@@ -737,7 +789,8 @@ pub fn hide_annotation_overlay(app: AppHandle) -> tauri::Result<()> {
     if let Some(win) = app.get_webview_window(ANNOTATION_LABEL) {
         set_follows_spaces(&win, false);
         win.hide()?;
-        let _ = win.emit(ANNOTATION_VISIBILITY_EVENT, false);
+        let _ = app.emit(ANNOTATION_VISIBILITY_EVENT, false);
+        disarm_annotation_escape(&app);
     }
     Ok(())
 }

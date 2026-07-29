@@ -1,7 +1,11 @@
-/** In-recording annotation overlay — extension engine + vertical recorder-style toolbar. */
+/**
+ * In-recording annotation overlay — same engine as the Capptivo extension,
+ * with a vertical toolbar styled like the desktop recorder bar.
+ */
 
 import {
   forwardRef,
+  useCallback,
   useEffect,
   useRef,
   useState,
@@ -43,6 +47,9 @@ import { Slider } from "@/components/ui/slider";
 import { commands } from "@/ipc/bindings";
 import { cn } from "@/lib/utils";
 
+const ANNOTATION_ESCAPE_EVENT = "annotation://escape";
+
+/** Preset swatches — custom colors come from the picker tile after these. */
 const PALETTE = [
   "#EAB308",
   "#f97316",
@@ -66,6 +73,7 @@ const SHAPES: { id: ShapeKind; label: string; icon: ReactNode }[] = [
 type ToolId = AnnotationTool;
 type Panel = "color" | "shape" | "size" | null;
 
+/** Toolbar transform: `translate3d` keeps the bar on its own GPU layer. */
 function barTransform(x: number, y: number): string {
   return `translate3d(${x}px, calc(-50% + ${y}px), 0)`;
 }
@@ -73,6 +81,8 @@ function barTransform(x: number, y: number): string {
 export function AnnotationApp() {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const engineRef = useRef<AnnotationEngine | null>(null);
+  // Pass-through until the user picks a drawing tool — otherwise the overlay
+  // steals every click from the Mac.
   const [tool, setTool] = useState<ToolId>("select");
   const [color, setColor] = useState(PALETTE[0]!);
   const [shapeKind, setShapeKind] = useState<ShapeKind>("rect");
@@ -82,14 +92,61 @@ export function AnnotationApp() {
   const dragRef = useRef<{ startX: number; startY: number; origX: number; origY: number } | null>(
     null,
   );
+  /** True for the whole grip gesture — read by the click-through poll. */
   const draggingRef = useRef(false);
+  /** Latest drag offset, committed to state once on release. */
   const dragOffsetRef = useRef({ x: 0, y: 0 });
   const dragRafRef = useRef(0);
   const toolbarElRef = useRef<HTMLDivElement | null>(null);
   const ignoreRef = useRef(false);
+  // The overlay WebView is reused (Rust show/hide, never closed), so this app
+  // stays mounted while hidden. Track native visibility to suspend the idle
+  // cursor-poll when off-screen — the window is created to be shown, so `true`.
   const [overlayVisible, setOverlayVisible] = useState(true);
 
   const passThrough = tool === "select" && panel === null;
+
+  const closeOverlay = useCallback(() => {
+    void emit("annotation://closed");
+    void getCurrentWindow().hide();
+    void commands.hideAnnotationOverlay().catch(() => undefined);
+  }, []);
+
+  /** Escape / cancel — peel layers before closing the whole overlay. */
+  const onEscape = useCallback(() => {
+    if (panel !== null) {
+      setPanel(null);
+      return;
+    }
+    if (tool !== "select") {
+      setTool("select");
+      return;
+    }
+    closeOverlay();
+  }, [closeOverlay, panel, tool]);
+
+  useEffect(() => {
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key !== "Escape") return;
+      e.preventDefault();
+      onEscape();
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [onEscape]);
+
+  useEffect(() => {
+    let unlisten: (() => void) | undefined;
+    let disposed = false;
+    void listen(ANNOTATION_ESCAPE_EVENT, onEscape).then((fn) => {
+      if (disposed) fn();
+      else unlisten = fn;
+    });
+    return () => {
+      disposed = true;
+      unlisten?.();
+    };
+  }, [onEscape]);
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -135,10 +192,18 @@ export function AnnotationApp() {
     void getCurrentWindow().setIgnoreCursorEvents(ignore).catch(() => undefined);
   };
 
+  // Native show/hide from Rust (`annotation://visibility`). Keeps `overlayVisible`
+  // in sync so the idle poll below can stop while the overlay is off-screen.
   useEffect(() => {
     let unlisten: (() => void) | undefined;
     let disposed = false;
-    void listen<boolean>("annotation://visibility", (e) => setOverlayVisible(e.payload)).then(
+    void listen<boolean>("annotation://visibility", (e) => {
+      setOverlayVisible(e.payload);
+      if (!e.payload) {
+        setTool("select");
+        setPanel(null);
+      }
+    }).then(
       (fn) => {
         if (disposed) fn();
         else unlisten = fn;
@@ -150,14 +215,23 @@ export function AnnotationApp() {
     };
   }, []);
 
+  // OS click-through while idle. `setIgnoreCursorEvents` blocks ALL hits (including
+  // the toolbar), so we poll the real cursor and temporarily re-enable hits when
+  // it's over the bar / left-side menus. Suspended while the overlay is hidden —
+  // no point running ~37 IPC round-trips/sec against an off-screen window.
   useEffect(() => {
     if (!passThrough || !overlayVisible) {
+      // Only reset click-through when the tool actually allows hits; when merely
+      // hidden, leave the ignore state as-is (it's re-evaluated on re-show).
       if (!passThrough) applyIgnore(false);
       return;
     }
 
     let cancelled = false;
     let timer = 0;
+    // Follow the cursor's display at a slower cadence than hit-testing
+    // (~every 6th tick ≈ 0.5 s): the overlay hops monitors like the recorder
+    // bar, but only in click-through mode — never mid-annotation.
     let displayTick = 0;
 
     const tick = async () => {
@@ -166,6 +240,11 @@ export function AnnotationApp() {
         displayTick = 0;
         void commands.syncAnnotationDisplay().catch(() => undefined);
       }
+      // Never re-evaluate hit-testing mid-drag: the async cursor/rect reads
+      // race the moving bar, and one stale "not over the bar" answer flips
+      // `setIgnoreCursorEvents(true)` under an active pointer capture —
+      // cutting the event stream (the bar stalls) and churning the window's
+      // event shadow every 80 ms (the flicker).
       if (draggingRef.current) {
         applyIgnore(false);
         timer = window.setTimeout(tick, 80);
@@ -188,6 +267,7 @@ export function AnnotationApp() {
         const x = (cursor.x - outer.x) / scale;
         const y = (cursor.y - outer.y) / scale;
         const r = el.getBoundingClientRect();
+        // Extra left pad so color/shape/size menus stay interactive.
         const over =
           x >= r.left - 220 &&
           x <= r.right + 12 &&
@@ -227,11 +307,15 @@ export function AnnotationApp() {
     engine.eraserSize = Math.max(8, brushSize * 2.5);
   }, [brushSize]);
 
+  /** Activate `next`, or return to pass-through if it was already active. */
   const pickTool = (next: ToolId) => {
     setTool((t) => (t === next && next !== "select" ? "select" : next));
     setPanel(null);
   };
 
+  /** End the grip gesture: commit the final offset to state (so re-renders
+   * keep the position) and release the drag refs. Shared by up/cancel/capture
+   * loss so no path can leave the poll pinned in "dragging". */
   const endBarDrag = () => {
     if (!draggingRef.current) return;
     draggingRef.current = false;
@@ -248,6 +332,10 @@ export function AnnotationApp() {
   );
 
   return (
+    // `select-none` is load-bearing: a grip drag otherwise starts a browser
+    // *content selection* that sweeps over the full-viewport canvas — WebKit
+    // paints the blue selection tint across the selected canvas's entire box,
+    // i.e. the whole screen, until mouse-up.
     <div className="annotation-shell relative h-screen w-screen overflow-hidden bg-transparent select-none">
       <canvas
         ref={canvasRef}
@@ -259,6 +347,13 @@ export function AnnotationApp() {
 
       <div
         ref={toolbarElRef}
+        // `will-change-transform` promotes the bar to its own compositor
+        // layer: moving it re-composites only the bar. Without it, WebKit can
+        // repaint the whole viewport for a fixed-position transform change —
+        // on a transparent overlay window that full-surface repaint flashes
+        // the desktop through for a frame.
+        // Vertically centered: the bar is tall, and anchoring it low (was 72%)
+        // clipped the bottom tools into the Dock on smaller displays.
         className="fixed top-1/2 right-6 z-10 flex w-12 flex-col items-center gap-0.5 rounded-2xl border border-border bg-card p-1.5 shadow-xl will-change-transform"
         style={{ transform: barTransform(barOffset.x, barOffset.y) }}
         onPointerDown={(e) => e.stopPropagation()}
@@ -267,6 +362,8 @@ export function AnnotationApp() {
           className="flex h-8 w-full cursor-grab items-center justify-center text-muted-foreground active:cursor-grabbing"
           title="Drag"
           onPointerDown={(e) => {
+            // Belt and braces with the shell's select-none: never let the
+            // grip press begin a selection or native content drag.
             e.preventDefault();
             e.currentTarget.setPointerCapture(e.pointerId);
             draggingRef.current = true;
@@ -281,11 +378,14 @@ export function AnnotationApp() {
           onPointerMove={(e) => {
             const d = dragRef.current;
             if (!d) return;
+            // Keep the grip below the macOS menu bar so the bar stays draggable.
             const nextY = d.origY + (e.clientY - d.startY);
             dragOffsetRef.current = {
               x: d.origX + (e.clientX - d.startX),
               y: Math.max(nextY, -window.innerHeight * 0.2),
             };
+            // Mutate the style directly, coalesced to one update per frame —
+            // a React re-render per pointermove is what made the drag lag.
             if (dragRafRef.current === 0) {
               dragRafRef.current = requestAnimationFrame(() => {
                 dragRafRef.current = 0;
@@ -346,6 +446,7 @@ export function AnnotationApp() {
               active={tool === "shape" || panel === "shape"}
               icon={shapeIcon}
               onClick={(e) => {
+                // Second click on an active shape tool → back to click-through.
                 if (tool === "shape") {
                   e.preventDefault();
                   setTool("select");
@@ -525,12 +626,8 @@ export function AnnotationApp() {
         <Divider />
 
         <ToolBtn
-          label="Close"
-          onClick={() => {
-            void emit("annotation://closed");
-            void getCurrentWindow().hide();
-            void commands.hideAnnotationOverlay().catch(() => undefined);
-          }}
+          label="Close (Esc)"
+          onClick={closeOverlay}
           icon={<X className="size-4" />}
         />
       </div>
