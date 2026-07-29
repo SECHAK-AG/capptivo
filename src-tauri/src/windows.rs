@@ -182,13 +182,36 @@ fn set_follows_spaces(win: &tauri::WebviewWindow, follows: bool) {
 fn set_follows_spaces(_win: &tauri::WebviewWindow, _follows: bool) {}
 
 /// Capptivo chrome that must stay visible to the user but out of `screen.mp4`.
-/// macOS solves this with SCK `excluded_targets`; Windows.Graphics.Capture
-/// cannot exclude arbitrary windows, so on Windows our own overlay windows opt
-/// *out* of capture via `WDA_EXCLUDEFROMCAPTURE` while a recording runs (the
-/// same mechanism OBS/Zoom use). The annotation overlay is deliberately not
-/// listed — ink is meant to land in the recording. No-op elsewhere.
-#[cfg(target_os = "windows")]
+/// Annotation is deliberately omitted — ink is meant to land in the recording.
+/// Editor / library are never listed (title-based matching used to collide with
+/// the HUD's `"Capptivo"` title and black out fullscreen shells).
+#[cfg(any(target_os = "macos", target_os = "windows"))]
 const CAPTURE_EXCLUDED_LABELS: &[&str] = &[RECORDER_LABEL, CAMERA_LABEL];
+
+/// macOS: CGWindowIDs (`NSWindow.windowNumber`) for SCK `excluded_targets`.
+/// Prefer this over window *titles* — titles change (library `setTitle`, rename).
+#[cfg(target_os = "macos")]
+pub fn overlay_cgwindow_ids(app: &AppHandle) -> Vec<u32> {
+    use objc::runtime::Object;
+    use objc::{msg_send, sel, sel_impl};
+
+    let mut ids = Vec::with_capacity(CAPTURE_EXCLUDED_LABELS.len());
+    for label in CAPTURE_EXCLUDED_LABELS {
+        let Some(win) = app.get_webview_window(label) else {
+            continue;
+        };
+        let Ok(ptr) = win.ns_window() else {
+            continue;
+        };
+        let ns_window = ptr as *mut Object;
+        // windowNumber == CGWindowID == scap Target::Window.id
+        let number: isize = unsafe { msg_send![ns_window, windowNumber] };
+        if number > 0 {
+            ids.push(number as u32);
+        }
+    }
+    ids
+}
 
 #[cfg(target_os = "windows")]
 pub fn set_capture_exclusion(app: &AppHandle, excluded: bool) {
@@ -1129,7 +1152,7 @@ pub fn open_library(app: AppHandle) -> tauri::Result<()> {
         &app,
         LIBRARY_LABEL,
         "editor.html?view=library",
-        "Capptivo",
+        "Capptivo Library",
     )?;
     Ok(())
 }

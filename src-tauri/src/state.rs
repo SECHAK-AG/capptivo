@@ -58,7 +58,7 @@ impl AppState {
             }
         });
 
-        let recorder = Arc::new(RecorderController::new(make_backend(), emit));
+        let recorder = Arc::new(RecorderController::new(make_backend(app), emit));
 
         Self {
             recorder,
@@ -77,7 +77,7 @@ impl AppState {
 /// Windows.Graphics.Capture on Windows, the xdg-desktop-portal + PipeWire path
 /// on Linux. Falls back to the synthetic test pattern when capture isn't
 /// supported (old OS, CI, no portal) so the app still boots and the UI is usable.
-fn make_backend() -> Box<dyn CaptureBackend> {
+fn make_backend(app: &AppHandle) -> Box<dyn CaptureBackend> {
     // macOS additionally routes `device:` sources to CoreMediaIO/AVFoundation for
     // iPhone & iPad screen capture — a different framework with different
     // permissions, so it is composed in rather than folded into the screen
@@ -87,21 +87,25 @@ fn make_backend() -> Box<dyn CaptureBackend> {
         use crate::recorder::backend::{AvfDeviceBackend, RoutingBackend, DEVICE_ID_PREFIX};
         let device = Box::new(AvfDeviceBackend::new());
         return Box::new(RoutingBackend::new(
-            make_screen_backend(),
+            make_screen_backend(app),
             device,
             DEVICE_ID_PREFIX,
         ));
     }
     #[cfg(not(target_os = "macos"))]
-    make_screen_backend()
+    make_screen_backend(app)
 }
 
 /// The display/window backend for this OS.
-fn make_screen_backend() -> Box<dyn CaptureBackend> {
+///
+/// `app` is only read on macOS (SCK overlay CGWindowIDs). Other targets keep the
+/// same signature so the call sites stay identical across platforms.
+#[allow(unused_variables)]
+fn make_screen_backend(app: &AppHandle) -> Box<dyn CaptureBackend> {
     #[cfg(all(target_os = "macos", feature = "scap-capture"))]
     {
         use crate::recorder::backend::ScapBackend;
-        let scap = ScapBackend::new();
+        let scap = ScapBackend::new(app.clone());
         if scap.is_supported() {
             tracing::info!("using ScreenCaptureKit capture backend");
             return Box::new(scap);

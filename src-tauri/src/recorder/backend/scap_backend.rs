@@ -14,6 +14,7 @@ use super::source_preview;
 use super::{CaptureBackend, CaptureHandle, RawFrame, CAPTURE_CHANNEL_CAP};
 use crate::error::{AppError, AppResult};
 use crate::recorder::types::{CaptureSource, CaptureSourceKind, RecorderConfig};
+use crate::windows;
 use core_graphics::display::CGDisplay;
 use scap::capturer::{Area, Capturer, Options, Point, Size};
 use scap::frame::{Frame, FrameType};
@@ -21,12 +22,15 @@ use scap::Target;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
+use tauri::AppHandle;
 
-pub struct ScapBackend;
+pub struct ScapBackend {
+    app: AppHandle,
+}
 
 impl ScapBackend {
-    pub fn new() -> Self {
-        Self
+    pub fn new(app: AppHandle) -> Self {
+        Self { app }
     }
 }
 
@@ -102,6 +106,10 @@ impl CaptureBackend for ScapBackend {
         let fps = config.fps.clamp(1, 120);
         let source_id = config.source_id.clone();
         let crop = config.crop;
+        // Resolve HUD/camera CGWindowIDs on this thread (needs AppHandle) before
+        // the producer moves — never match by title (library used to setTitle
+        // "Capptivo" and collide with the HUD, blacking fullscreen takes).
+        let exclude_ids = windows::overlay_cgwindow_ids(&self.app);
 
         let (tx, rx) = crossbeam_channel::bounded::<RawFrame>(CAPTURE_CHANNEL_CAP);
         let (meta_tx, meta_rx) =
@@ -130,7 +138,7 @@ impl CaptureBackend for ScapBackend {
                     },
                 });
 
-                let excluded_targets = overlay_exclude_targets();
+                let excluded_targets = overlay_exclude_targets(&exclude_ids);
 
                 let options = Options {
                     fps,
@@ -295,24 +303,20 @@ fn resolve_target(source_id: &str) -> AppResult<Target> {
     Err(AppError::InvalidSource(source_id.to_string()))
 }
 
-/// Capptivo chrome that must stay visible to the user but out of `screen.mp4`.
-/// Applied at capturer build time only — windows created after start (the
-/// editor) are not covered; `stop_recording` must halt capture before showing
-/// them.
-fn overlay_exclude_targets() -> Option<Vec<Target>> {
+/// Capptivo chrome (HUD / face-cam) out of `screen.mp4`, keyed by CGWindowID —
+/// never by title. Editor / library / annotation stay capturable.
+fn overlay_exclude_targets(exclude_ids: &[u32]) -> Option<Vec<Target>> {
+    if exclude_ids.is_empty() {
+        return None;
+    }
     let excluded: Vec<Target> = scap::get_all_targets()
         .into_iter()
         .filter(|t| match t {
-            Target::Window(w) => {
-                let title = w.title.as_str();
-                title == "Capptivo Camera"
-                    || title == "Capptivo"
-                    || title == "Capptivo Editor"
-                    || title.starts_with("Capptivo Area")
-            }
+            Target::Window(w) => exclude_ids.contains(&w.id),
             _ => false,
         })
         .collect();
+    tracing::debug!(?exclude_ids, n = excluded.len(), "sck excluded overlays");
     if excluded.is_empty() {
         None
     } else {

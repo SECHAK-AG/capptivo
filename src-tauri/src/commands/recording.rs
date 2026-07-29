@@ -266,8 +266,8 @@ pub async fn finish_mic_file(state: State<'_, AppState>) -> AppResult<Option<Str
 
 /// Stop capture, finalize the project on disk, open the editor, and return the
 /// project id. Screen capture must finish before the editor is shown — the
-/// editor window is not in the SCK exclusion list, so opening it first paints a
-/// blank Capptivo shell into the last frames of the take.
+/// editor is intentionally capturable (for Capptivo demos), so opening it
+/// while SCK is still live would paint the shell into the last frames.
 #[tauri::command]
 pub async fn stop_recording(app: AppHandle, state: State<'_, AppState>) -> AppResult<String> {
     let current = state
@@ -281,9 +281,9 @@ pub async fn stop_recording(app: AppHandle, state: State<'_, AppState>) -> AppRe
     let project_id = current.id.clone();
     let capture_system_audio = current.config.capture_system_audio;
 
-    // Halt ScreenCaptureKit (+ encode drain) while Capptivo chrome is still the
-    // excluded HUD only. Opening the editor before this is what left a blank
-    // "Capptivo Editor" window in the tail of every recording.
+    // Halt ScreenCaptureKit (+ encode drain) before opening the editor. HUD /
+    // camera stay excluded; the editor itself is capturable, so stop-first is
+    // what keeps it out of the take's tail.
     let recorder = state.recorder.clone();
     let store = state.store.clone();
     let config = current.config;
