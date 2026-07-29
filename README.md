@@ -125,12 +125,27 @@ Open the recorder with **⌥⇧R** (**Alt+Shift+R** on Windows/Linux), or click 
 - Microphone capture (device picker)
 - System audio capture
 - Language switch (English / Français)
-- Capture uses fixed defaults (30 fps, balanced); export sets output FPS / encoding
 - Countdown before start
 - Pause / resume
-- On-screen annotations while recording: pen, highlighter, shapes (rect, ellipse, line, arrow)
+- On-screen annotations while recording
 - Native pipeline per OS (ScreenCaptureKit / Windows.Graphics.Capture / PipeWire) → hardware H.264 → crash-safe fragmented MP4
 - 60 Hz cursor + click track saved with the project (`cursor.json`)
+
+### Annotations
+
+Draw on top of the screen while recording — floating toolbar, click-through when idle.
+
+- Select tool (pass clicks through to the desktop)
+- Pen and highlighter
+- Eraser
+- Shapes: rectangle, ellipse, line, arrow
+- Text
+- Color palette + custom picker
+- Brush size
+- Undo / redo / clear all
+- Draggable toolbar; Escape peels panels then closes
+
+![On-screen annotations while recording](assets/annotation-demo.gif)
 
 ### Zoom & motion
 
@@ -144,6 +159,8 @@ Open the recorder with **⌥⇧R** (**Alt+Shift+R** on Windows/Linux), or click 
 - Shrink face-cam during zoom (size at peak zoom)
 - Automatic motion between fragments
 
+![Follow-cursor zoom and motion](assets/zoom-demo.gif)
+
 ### Cursor
 
 - Show / hide composited cursor
@@ -152,6 +169,8 @@ Open the recorder with **⌥⇧R** (**Alt+Shift+R** on Windows/Linux), or click 
 - Motion blur
 - Click bounce + bounce speed
 - Cursor sway
+
+![Cursor style and motion](assets/demo-cursor.gif)
 
 ### Look & composition
 
@@ -164,6 +183,8 @@ Open the recorder with **⌥⇧R** (**Alt+Shift+R** on Windows/Linux), or click 
 - Recording shadow
 - Background blur
 - Background darkness
+
+![Backgrounds, padding, and composition](assets/appearance-demo.gif)
 
 ### Face cam
 
@@ -199,6 +220,8 @@ Open the recorder with **⌥⇧R** (**Alt+Shift+R** on Windows/Linux), or click 
 - Frame rate (24 / 30 / 60)
 - Optional voice enhancement (podcast)
 - Progress UI, save dialog, notification + reveal in Finder / Explorer / file manager
+
+![Export demo](assets/export-demo.gif)
 
 ### Local-first
 
