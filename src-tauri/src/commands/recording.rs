@@ -270,14 +270,22 @@ pub async fn finish_mic_file(state: State<'_, AppState>) -> AppResult<Option<Str
 /// while SCK is still live would paint the shell into the last frames.
 #[tauri::command]
 pub async fn stop_recording(app: AppHandle, state: State<'_, AppState>) -> AppResult<String> {
+    // Read, do not take. `current_project` is the only thing preventing a second
+    // `start_recording` (see the `Busy` guard), so it must stay in place until
+    // the capture backend has actually stopped — clearing it up front is what
+    // used to leave the app believing it was idle while the HUD was still up and
+    // capture exclusion still applied. Concurrent stops are still safe:
+    // `RecorderController::stop` claims its own `active` atomically, so the
+    // losing caller gets `NotRecording` from there.
+    //
+    // The guard is dropped at the end of this statement — it must not be held
+    // across the `await` below.
     let current = state
         .current_project
         .lock()
-        .take()
+        .clone()
         .ok_or(AppError::NotRecording)?;
 
-    let _ = state.camera_sink.lock().take();
-    let _ = state.mic_sink.lock().take();
     let project_id = current.id.clone();
     let capture_system_audio = current.config.capture_system_audio;
 
@@ -286,11 +294,34 @@ pub async fn stop_recording(app: AppHandle, state: State<'_, AppState>) -> AppRe
     // what keeps it out of the take's tail.
     let recorder = state.recorder.clone();
     let store = state.store.clone();
-    let config = current.config;
 
-    let artifacts = tauri::async_runtime::spawn_blocking(move || recorder.stop())
+    let stopped = tauri::async_runtime::spawn_blocking(move || recorder.stop())
         .await
-        .map_err(|e| AppError::Other(format!("stop task failed: {e}")))??;
+        .map_err(|e| AppError::Other(format!("stop task failed: {e}")));
+
+    let artifacts = match stopped {
+        Ok(Ok(artifacts)) => artifacts,
+        Ok(Err(e)) | Err(e) => {
+            // Every cleanup line below is about to be skipped, so leave
+            // `current_project` in place: it keeps the `Busy` guard armed against
+            // a second `start_recording` over a backend that may still be live,
+            // and it keeps the still-visible HUD truthful. The camera / mic sinks
+            // are left open for the same reason.
+            tracing::error!(
+                %e,
+                project = %project_id,
+                "stop_recording failed; session left intact"
+            );
+            return Err(e);
+        }
+    };
+
+    // Capture has actually stopped — only now is it safe to retire the session,
+    // its sinks, and the recording chrome.
+    let _ = state.current_project.lock().take();
+    let _ = state.camera_sink.lock().take();
+    let _ = state.mic_sink.lock().take();
+    let config = current.config;
 
     let _ = windows::hide_recorder(app.clone());
     let _ = windows::hide_annotation_overlay(app.clone());
