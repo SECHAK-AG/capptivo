@@ -40,25 +40,135 @@ export const BACKGROUND_IMAGE_FILES = [
   "ventura-2.webp",
   "image-6.webp",
   "image-7.webp",
+  "image-8.jpg",
+  "image-10.jpg",
+  "image-11.jpg",
+  "sonoma-clouds.jpg",
+  "sonoma-dark.jpg",
+  "sonoma-horizon.jpg",
+  "sonoma-light.jpg",
 ] as const;
 
 export const BACKGROUND_GRADIENTS: GradientDefinition[] = [
-  { id: "g-aurora-43", label: "Aurora 43", angle: 43, stops: [{ offset: 0, color: "#4158D0" }, { offset: 46, color: "#C850C0" }, { offset: 100, color: "#FFCC70" }] },
-  { id: "g-violet-sky", label: "Violet Sky", angle: 135, stops: [{ offset: 0, color: "rgb(139, 198, 236)" }, { offset: 100, color: "rgb(149, 153, 226)" }] },
-  { id: "g-pool-dream", label: "Pool Dream", angle: 120, stops: [{ offset: 0, color: "#0EA5E9" }, { offset: 50, color: "#22D3EE" }, { offset: 100, color: "#A78BFA" }] },
-  { id: "g-peach-flare", label: "Peach Flare", angle: 160, stops: [{ offset: 0, color: "#FB7185" }, { offset: 100, color: "#F59E0B" }] },
-  { id: "g-mint-leaf", label: "Mint Leaf", angle: 62, stops: [{ offset: 0, color: "rgb(142, 197, 252)" }, { offset: 100, color: "rgb(224, 195, 252)" }] },
-  { id: "g-midnight-ocean", label: "Midnight Ocean", angle: 130, stops: [{ offset: 0, color: "#0F172A" }, { offset: 55, color: "#1D4ED8" }, { offset: 100, color: "#22D3EE" }] },
-  { id: "g-sunrise-haze", label: "Sunrise Haze", angle: 80, stops: [{ offset: 0, color: "#FEF3C7" }, { offset: 45, color: "#FDBA74" }, { offset: 100, color: "#FB7185" }] },
-  { id: "g-neon-night", label: "Neon Night", angle: 210, stops: [{ offset: 0, color: "#0B1026" }, { offset: 50, color: "#1E3A8A" }, { offset: 100, color: "#9333EA" }] },
-  { id: "g-forest-glow", label: "Forest Glow", angle: 70, stops: [{ offset: 0, color: "#4ADE80" }, { offset: 35, color: "#22C55E" }, { offset: 100, color: "#065F46" }] },
-  { id: "g-pastel-bloom", label: "Pastel Bloom", angle: 35, stops: [{ offset: 0, color: "#FDE68A" }, { offset: 50, color: "#FCA5A5" }, { offset: 100, color: "#C4B5FD" }] },
-  { id: "g-slate-wave", label: "Slate Wave", angle: 190, stops: [{ offset: 0, color: "#1F2937" }, { offset: 100, color: "#4B5563" }] },
+  {
+    id: "g-aurora-43",
+    label: "Aurora 43",
+    angle: 43,
+    stops: [
+      { offset: 0, color: "#4158D0" },
+      { offset: 46, color: "#C850C0" },
+      { offset: 100, color: "#FFCC70" },
+    ],
+  },
+  {
+    id: "g-violet-sky",
+    label: "Violet Sky",
+    angle: 135,
+    stops: [
+      { offset: 0, color: "rgb(139, 198, 236)" },
+      { offset: 100, color: "rgb(149, 153, 226)" },
+    ],
+  },
+  {
+    id: "g-pool-dream",
+    label: "Pool Dream",
+    angle: 120,
+    stops: [
+      { offset: 0, color: "#0EA5E9" },
+      { offset: 50, color: "#22D3EE" },
+      { offset: 100, color: "#A78BFA" },
+    ],
+  },
+  {
+    id: "g-peach-flare",
+    label: "Peach Flare",
+    angle: 160,
+    stops: [
+      { offset: 0, color: "#FB7185" },
+      { offset: 100, color: "#F59E0B" },
+    ],
+  },
+  {
+    id: "g-mint-leaf",
+    label: "Mint Leaf",
+    angle: 62,
+    stops: [
+      { offset: 0, color: "rgb(142, 197, 252)" },
+      { offset: 100, color: "rgb(224, 195, 252)" },
+    ],
+  },
+  {
+    id: "g-midnight-ocean",
+    label: "Midnight Ocean",
+    angle: 130,
+    stops: [
+      { offset: 0, color: "#0F172A" },
+      { offset: 55, color: "#1D4ED8" },
+      { offset: 100, color: "#22D3EE" },
+    ],
+  },
+  {
+    id: "g-sunrise-haze",
+    label: "Sunrise Haze",
+    angle: 80,
+    stops: [
+      { offset: 0, color: "#FEF3C7" },
+      { offset: 45, color: "#FDBA74" },
+      { offset: 100, color: "#FB7185" },
+    ],
+  },
+  {
+    id: "g-neon-night",
+    label: "Neon Night",
+    angle: 210,
+    stops: [
+      { offset: 0, color: "#0B1026" },
+      { offset: 50, color: "#1E3A8A" },
+      { offset: 100, color: "#9333EA" },
+    ],
+  },
+  {
+    id: "g-forest-glow",
+    label: "Forest Glow",
+    angle: 70,
+    stops: [
+      { offset: 0, color: "#4ADE80" },
+      { offset: 35, color: "#22C55E" },
+      { offset: 100, color: "#065F46" },
+    ],
+  },
+  {
+    id: "g-pastel-bloom",
+    label: "Pastel Bloom",
+    angle: 35,
+    stops: [
+      { offset: 0, color: "#FDE68A" },
+      { offset: 50, color: "#FCA5A5" },
+      { offset: 100, color: "#C4B5FD" },
+    ],
+  },
+  {
+    id: "g-slate-wave",
+    label: "Slate Wave",
+    angle: 190,
+    stops: [
+      { offset: 0, color: "#1F2937" },
+      { offset: 100, color: "#4B5563" },
+    ],
+  },
 ];
 
 export const BACKGROUND_COLORS = [
-  "#22C55E", "#06B6D4", "#3B82F6", "#6366F1", "#A855F7",
-  "#F43F5E", "#FB923C", "#FACC15", "#A3E635", "#E5E7EB",
+  "#22C55E",
+  "#06B6D4",
+  "#3B82F6",
+  "#6366F1",
+  "#A855F7",
+  "#F43F5E",
+  "#FB923C",
+  "#FACC15",
+  "#A3E635",
+  "#E5E7EB",
 ];
 
 export const BACKGROUND_TYPE_TABS: { id: BackgroundType; label: string }[] = [
@@ -67,12 +177,14 @@ export const BACKGROUND_TYPE_TABS: { id: BackgroundType; label: string }[] = [
   { id: "color", label: "Color" },
 ];
 
-const clampPercent = (value: number): number => Math.max(0, Math.min(100, value));
+const clampPercent = (value: number): number =>
+  Math.max(0, Math.min(100, value));
 
 export const clampGradientAngle = (value: number): number =>
   Number.isFinite(value) ? Math.max(0, Math.min(360, Math.round(value))) : 135;
 
-export const isHexColor = (value: string): boolean => /^#[0-9A-Fa-f]{6}$/.test(value.trim());
+export const isHexColor = (value: string): boolean =>
+  /^#[0-9A-Fa-f]{6}$/.test(value.trim());
 
 export const gradientToCss = (definition: GradientDefinition): string => {
   const stops = definition.stops
@@ -82,7 +194,11 @@ export const gradientToCss = (definition: GradientDefinition): string => {
 };
 
 /** Rasterize a gradient to a PNG data-URL (used as the render source). */
-export const gradientToDataUrl = (definition: GradientDefinition, width = 1920, height = 1080): string => {
+export const gradientToDataUrl = (
+  definition: GradientDefinition,
+  width = 1920,
+  height = 1080,
+): string => {
   const canvas = document.createElement("canvas");
   canvas.width = width;
   canvas.height = height;
@@ -94,14 +210,20 @@ export const gradientToDataUrl = (definition: GradientDefinition, width = 1920, 
   const [cx, cy] = [width / 2, height / 2];
   const [dx, dy] = [Math.cos(radians) * half, Math.sin(radians) * half];
   const gradient = ctx.createLinearGradient(cx - dx, cy - dy, cx + dx, cy + dy);
-  definition.stops.forEach((stop) => gradient.addColorStop(clampPercent(stop.offset) / 100, stop.color));
+  definition.stops.forEach((stop) =>
+    gradient.addColorStop(clampPercent(stop.offset) / 100, stop.color),
+  );
 
   ctx.fillStyle = gradient;
   ctx.fillRect(0, 0, width, height);
   return canvas.toDataURL("image/png");
 };
 
-export const colorToDataUrl = (color: string, width = 1920, height = 1080): string => {
+export const colorToDataUrl = (
+  color: string,
+  width = 1920,
+  height = 1080,
+): string => {
   const canvas = document.createElement("canvas");
   canvas.width = width;
   canvas.height = height;

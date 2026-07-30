@@ -103,7 +103,7 @@ Capptivo runs on:
 
 - **macOS** 13.0+
 - **Windows** 10 build 1903+ (May 2019 Update)
-- **Linux** on modern distros (X11 and Wayland)
+- **Linux** on modern distros with PipeWire 1.0+ (e.g. Ubuntu 24.04+) — X11 and Wayland
 
 Platform notes:
 

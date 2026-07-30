@@ -24,7 +24,8 @@ jobs:
             args: --target aarch64-apple-darwin
           - platform: macos-latest
             args: --target x86_64-apple-darwin
-          - platform: ubuntu-22.04
+          # 24.04+: pipewire-rs 0.8 needs PipeWire 1.0 headers (22.04 is 0.3.48).
+          - platform: ubuntu-24.04
             args: ""
           - platform: windows-latest
             args: ""
@@ -35,7 +36,7 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Install Linux dependencies
-        if: matrix.platform == 'ubuntu-22.04'
+        if: matrix.platform == 'ubuntu-24.04'
         run: |
           sudo apt-get update
           sudo apt-get install -y \
