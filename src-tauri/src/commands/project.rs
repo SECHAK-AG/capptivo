@@ -48,7 +48,7 @@ pub fn ensure_proxy(
     project_id: String,
 ) -> AppResult<ProxyStatus> {
     let (width, height) = state.store.recording_size(&project_id).unwrap_or((0, 0));
-    let dir = state.store.project_dir(&project_id);
+    let dir = state.store.project_dir(&project_id)?;
 
     if proxy::path_in(&dir).is_file() {
         return Ok(ProxyStatus {

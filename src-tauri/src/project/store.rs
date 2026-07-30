@@ -48,12 +48,17 @@ impl ProjectStore {
         self.root.join("projects")
     }
 
-    fn dir_for(&self, id: &str) -> PathBuf {
-        self.projects_dir().join(id)
+    /// The single chokepoint for turning an id into a path — every path in this
+    /// store goes through it, so [`validate_project_id`] here covers every
+    /// command that takes a `project_id`. Keep it that way: no other call site
+    /// may join an id onto [`Self::projects_dir`].
+    fn dir_for(&self, id: &str) -> AppResult<PathBuf> {
+        validate_project_id(id)?;
+        Ok(self.projects_dir().join(id))
     }
 
     /// Absolute path to a project directory (for camera / media writers).
-    pub fn project_dir(&self, id: &str) -> PathBuf {
+    pub fn project_dir(&self, id: &str) -> AppResult<PathBuf> {
         self.dir_for(id)
     }
 
@@ -62,7 +67,7 @@ impl ProjectStore {
     /// writes a minimal manifest at start so the editor can open before finalize.
     pub fn create(&self) -> AppResult<(String, PathBuf)> {
         let id = new_project_id();
-        let dir = self.dir_for(&id);
+        let dir = self.dir_for(&id)?;
         fs::create_dir_all(&dir)?;
         Ok((id, dir))
     }
@@ -95,7 +100,7 @@ impl ProjectStore {
         config: &RecorderConfig,
         artifacts: &RecordingArtifacts,
     ) -> AppResult<Project> {
-        let dir = self.dir_for(id);
+        let dir = self.dir_for(id)?;
         if !dir.is_dir() {
             return Err(AppError::Project(format!("project {id} does not exist")));
         }
@@ -143,7 +148,7 @@ impl ProjectStore {
     }
 
     pub fn load(&self, id: &str) -> AppResult<Project> {
-        let path = self.dir_for(id).join("project.json");
+        let path = self.dir_for(id)?.join("project.json");
         let bytes = fs::read(&path).map_err(|e| {
             AppError::Project(format!("cannot read project {id}: {e}"))
         })?;
@@ -175,7 +180,7 @@ impl ProjectStore {
     }
 
     pub fn delete(&self, id: &str) -> AppResult<()> {
-        let dir = self.dir_for(id);
+        let dir = self.dir_for(id)?;
         if dir.is_dir() {
             fs::remove_dir_all(&dir)?;
         }
@@ -185,7 +190,7 @@ impl ProjectStore {
     /// Ensure `thumbnail.jpg` exists (one-shot FFmpeg backfill for older projects).
     /// Returns the relative file name when a poster is available.
     pub fn ensure_thumbnail(&self, id: &str) -> AppResult<Option<String>> {
-        let dir = self.dir_for(id);
+        let dir = self.dir_for(id)?;
         let thumb = dir.join(super::thumbnail::THUMBNAIL_FILE);
         if thumb.is_file() {
             return Ok(Some(super::thumbnail::THUMBNAIL_FILE.to_string()));
@@ -222,12 +227,18 @@ impl ProjectStore {
             let Some(id) = entry.file_name().to_str().map(str::to_string) else {
                 continue;
             };
+            // Ids come from `read_dir`, not IPC, so they are trustworthy — but a
+            // directory a user created by hand can still fail validation. Skip
+            // it rather than failing the whole listing.
+            let Ok(dir) = self.dir_for(&id) else {
+                continue;
+            };
             // Skip half-written projects (no manifest yet).
             let Ok(project) = self.load(&id) else {
                 continue;
             };
             let duration = self.read_meta(&id).map(|m| m.duration_seconds).unwrap_or(0.0);
-            let thumb = self.dir_for(&id).join(super::thumbnail::THUMBNAIL_FILE);
+            let thumb = dir.join(super::thumbnail::THUMBNAIL_FILE);
             summaries.push(ProjectSummary {
                 id: project.id,
                 title: project.title,
@@ -243,7 +254,7 @@ impl ProjectStore {
     }
 
     fn read_meta(&self, id: &str) -> AppResult<Meta> {
-        let bytes = fs::read(self.dir_for(id).join("meta.json"))?;
+        let bytes = fs::read(self.dir_for(id)?.join("meta.json"))?;
         Ok(serde_json::from_slice(&bytes)?)
     }
 
@@ -258,7 +269,7 @@ impl ProjectStore {
     /// `DesktopEditorHost` metadata load in Phase 4.)
     #[allow(dead_code)]
     pub fn load_cursor(&self, id: &str) -> AppResult<Option<CursorTrack>> {
-        let path = self.dir_for(id).join("cursor.json");
+        let path = self.dir_for(id)?.join("cursor.json");
         if !path.exists() {
             return Ok(None);
         }
@@ -267,11 +278,14 @@ impl ProjectStore {
     }
 
     fn write_project(&self, project: &Project) -> AppResult<()> {
-        let path = self.dir_for(&project.id).join("project.json");
+        let path = self.dir_for(&project.id)?.join("project.json");
         write_json_atomic(&path, project)
     }
 
     /// The absolute projects root; the media protocol scopes reads to this.
+    ///
+    /// Never join a caller-supplied `project_id` onto this — that bypasses the
+    /// validation in [`Self::dir_for`]. Use [`Self::project_dir`] instead.
     #[allow(dead_code)] // the media protocol resolves this itself today.
     pub fn projects_root(&self) -> PathBuf {
         self.projects_dir()
@@ -284,6 +298,32 @@ fn new_project_id() -> String {
     let date = chrono::Local::now().format("%Y-%m-%d");
     let short = uuid::Uuid::new_v4().simple().to_string();
     format!("{date}-{}", &short[..6])
+}
+
+/// Reject any `project_id` that is not a bare directory name.
+///
+/// `project_id` arrives from the WebView as an arbitrary string, and ids are
+/// generated by [`new_project_id`] as `YYYY-MM-DD-xxxxxx`, so an
+/// ASCII-alphanumeric-plus-hyphen allowlist accepts every real project while
+/// closing two escapes that `Path::join` would otherwise honor:
+///
+/// - `"../../etc"` — traversal above the projects root.
+/// - `"/Users/me/Documents"` — an **absolute** path makes `join` discard the
+///   base entirely, so the id becomes the whole path. A `..`-only check misses
+///   this, and the sink is `fs::remove_dir_all`.
+///
+/// Rejecting `.` outright also rules out `.`, `..` and extension trickery; the
+/// allowlist additionally excludes `/`, `\`, `:` (Windows drive letters) and NUL.
+fn validate_project_id(id: &str) -> AppResult<()> {
+    let ok = !id.is_empty()
+        && id.len() <= 64
+        && id
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_');
+    if !ok {
+        return Err(AppError::Project(format!("invalid project id: {id:?}")));
+    }
+    Ok(())
 }
 
 fn now_rfc3339() -> String {
@@ -346,6 +386,61 @@ mod tests {
             .write_recording_stub(&id, &config)
             .expect("write manifest stub");
         (store, id, root)
+    }
+
+    /// `project_id` arrives from the WebView as an arbitrary string. `dir_for`
+    /// is the chokepoint that has to reject anything that is not a bare
+    /// directory name, because the worst sink downstream is `remove_dir_all`.
+    #[test]
+    fn rejects_traversal_and_absolute_project_ids() {
+        let (store, _id, root) = store_with_project();
+
+        // `..` escapes the projects root.
+        assert!(store.load("../../etc").is_err());
+        assert!(store.delete("../../../tmp").is_err());
+        // An absolute path makes `Path::join` discard the base entirely — this
+        // is the case a `..`-only check would let through, and `delete` is
+        // `fs::remove_dir_all`.
+        assert!(store.delete("/tmp").is_err());
+        assert!(store.load("/etc/passwd").is_err());
+        // Separators and dots in any position.
+        assert!(store.load("a/b").is_err());
+        assert!(store.load("a\\b").is_err());
+        assert!(store.load(".").is_err());
+        assert!(store.load("").is_err());
+        assert!(store.save_editor_state("../x", serde_json::json!({})).is_err());
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    /// Regression guard on the other direction: the allowlist must not have
+    /// become strict enough to lock users out of their own projects.
+    #[test]
+    fn accepts_generated_project_ids() {
+        let (store, id, root) = store_with_project();
+        // The id `store_with_project` created came from `new_project_id()`.
+        let loaded = store.load(&id);
+        let _ = fs::remove_dir_all(&root);
+        assert!(loaded.is_ok(), "a generated id must still validate: {id}");
+    }
+
+    /// The end-to-end proof that the `fs::remove_dir_all` sink is closed: an
+    /// absolute id used to make `projects_dir().join(id)` evaluate to `id`.
+    #[test]
+    fn delete_cannot_remove_a_directory_outside_the_store() {
+        let (store, _id, root) = store_with_project();
+        let bystander = std::env::temp_dir()
+            .join(format!("capptivo-bystander-{}", uuid::Uuid::new_v4().simple()));
+        fs::create_dir_all(&bystander).expect("create bystander dir");
+
+        let result = store.delete(bystander.to_str().expect("utf8 path"));
+
+        let survived = bystander.is_dir();
+        let _ = fs::remove_dir_all(&bystander);
+        let _ = fs::remove_dir_all(&root);
+
+        assert!(result.is_err(), "absolute project id must be rejected");
+        assert!(survived, "delete escaped the projects root");
     }
 
     /// `save_editor_state` and `rename` are load → mutate → write sequences.

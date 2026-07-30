@@ -42,7 +42,7 @@ pub async fn mux_export_audio(
     if audio_source.contains(['/', '\\']) || audio_source.contains("..") {
         return Err(AppError::Other("invalid export audio source".into()));
     }
-    let audio_path = state.store.project_dir(&project_id).join(&audio_source);
+    let audio_path = state.store.project_dir(&project_id)?.join(&audio_source);
     let video = PathBuf::from(video_path);
     let segs: Vec<(f64, f64)> = segments
         .into_iter()
@@ -78,9 +78,9 @@ pub async fn prepare_export_audio(
     if out_name.contains(['/', '\\']) || out_name.contains("..") {
         return Err(AppError::Other("invalid export audio out name".into()));
     }
-    let out = state.store.project_dir(&project_id).join(&out_name);
+    let out = state.store.project_dir(&project_id)?.join(&out_name);
     let out_for_return = out.clone();
-    let audio_path = state.store.project_dir(&project_id).join(&audio_source);
+    let audio_path = state.store.project_dir(&project_id)?.join(&audio_source);
     let segs: Vec<(f64, f64)> = segments
         .into_iter()
         .map(|s| (s.start.max(0.0), s.end.max(0.0)))
@@ -140,7 +140,7 @@ pub async fn ensure_seekable_recording(
     state: State<'_, AppState>,
     project_id: String,
 ) -> AppResult<()> {
-    let screen = state.store.project_dir(&project_id).join("screen.mp4");
+    let screen = state.store.project_dir(&project_id)?.join("screen.mp4");
     tauri::async_runtime::spawn_blocking(move || {
         crate::recorder::encoder::finalize_recording_mp4(&screen)
     })

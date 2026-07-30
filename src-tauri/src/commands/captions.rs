@@ -26,10 +26,10 @@ pub async fn generate_captions(
     project_id: String,
     language: Option<String>,
 ) -> AppResult<WhisperTranscriptArtifacts> {
-    let projects_root = state.store.projects_root();
+    let project_dir = state.store.project_dir(&project_id)?;
     let lang = language;
     tauri::async_runtime::spawn_blocking(move || {
-        captions::generate(&app, &projects_root, &project_id, lang.as_deref())
+        captions::generate(&app, &project_dir, lang.as_deref())
     })
     .await
     .map_err(|e| crate::error::AppError::Other(format!("caption task: {e}")))?

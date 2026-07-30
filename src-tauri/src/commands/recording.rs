@@ -132,7 +132,7 @@ pub fn begin_camera_file(
             return Err(AppError::Other("camera project mismatch".into()));
         }
     }
-    let path = state.store.project_dir(&project_id).join(&filename);
+    let path = state.store.project_dir(&project_id)?.join(&filename);
     let file = std::fs::File::create(&path)?;
     *state.camera_sink.lock() = Some(ExportSink { file, path });
     Ok(())
@@ -212,7 +212,7 @@ pub fn begin_mic_file(
             return Err(AppError::Other("mic project mismatch".into()));
         }
     }
-    let path = state.store.project_dir(&project_id).join(&filename);
+    let path = state.store.project_dir(&project_id)?.join(&filename);
     let file = std::fs::File::create(&path)?;
     *state.mic_sink.lock() = Some(ExportSink { file, path });
     Ok(())
@@ -304,7 +304,7 @@ pub async fn stop_recording(app: AppHandle, state: State<'_, AppState>) -> AppRe
         tracing::warn!(%e, "failed to open editor window");
     }
 
-    let mic_path = state.store.project_dir(&project_id).join("mic.webm");
+    let mic_path = state.store.project_dir(&project_id)?.join("mic.webm");
     if mic_path.is_file() {
         if let Err(e) = tauri::async_runtime::spawn_blocking({
             let screen = artifacts.screen_path.clone();

@@ -10,15 +10,15 @@ use tauri::{AppHandle, Emitter};
 const SILENCE_NOISE_DB: &str = "-30";
 const SILENCE_DETECT_MIN_S: &str = "0.5";
 
+/// `project_dir` must come from `ProjectStore::project_dir`, which is what
+/// validates the id it was built from — do not re-derive it by joining a raw
+/// `project_id` onto the projects root.
 pub fn generate(
     app: &AppHandle,
-    projects_root: &Path,
-    project_id: &str,
+    project_dir: &Path,
     language: Option<&str>,
 ) -> AppResult<WhisperTranscriptArtifacts> {
-    let screen = projects_root
-        .join(project_id)
-        .join("screen.mp4");
+    let screen = project_dir.join("screen.mp4");
     if !screen.is_file() {
         return Err(AppError::Other("screen recording not found".into()));
     }
