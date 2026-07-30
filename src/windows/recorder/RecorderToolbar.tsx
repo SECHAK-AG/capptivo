@@ -46,13 +46,14 @@ const CTRL = "h-9";
 const MENU_CONTENT =
   "rounded-xl border-border/80 bg-popover p-1.5 shadow-lg ring-1 ring-border/40";
 
-/** Tauri clips the WebView to the native window — grow before showing menus. */
-async function applyRecorderLayout(sourceOpen: boolean, auxOpen: boolean) {
-  if (sourceOpen) await commands.setRecorderLayout("menu");
-  else if (auxOpen) await commands.setRecorderLayout("dropdown");
-  else if (useRecorderStore.getState().lastError)
-    await commands.setRecorderLayout("alert");
-  else await commands.setRecorderLayout("setup");
+/** Tauri clips the WebView to the native window — grow when menus open. */
+function applyRecorderLayout(sourceOpen: boolean, auxOpen: boolean) {
+  if (sourceOpen) return commands.setRecorderLayout("menu");
+  if (auxOpen) return commands.setRecorderLayout("dropdown");
+  if (useRecorderStore.getState().lastError) {
+    return commands.setRecorderLayout("alert");
+  }
+  return commands.setRecorderLayout("setup");
 }
 
 export function RecorderToolbar({ onRecord }: { onRecord: () => void }) {
@@ -68,24 +69,27 @@ export function RecorderToolbar({ onRecord }: { onRecord: () => void }) {
     "camera" | "mic" | "audio" | "settings" | null
   >(null);
 
-  const setSourceMenuOpen = async (open: boolean) => {
+  // Controlled `open` must flip in the same turn as Radix's pointerdown.
+  // Awaiting layout first deferred mount until mid-gesture, so the same
+  // pointerup landed on a menu item and looked like a flash-select.
+  const setSourceMenuOpen = (open: boolean) => {
     if (open) {
-      await applyRecorderLayout(true, auxMenu !== null);
+      void applyRecorderLayout(true, auxMenu !== null);
       setSourceOpen(true);
       return;
     }
     setSourceOpen(false);
-    await applyRecorderLayout(false, auxMenu !== null);
+    void applyRecorderLayout(false, auxMenu !== null);
   };
 
-  const setAuxMenuOpen = async (id: typeof auxMenu) => {
+  const setAuxMenuOpen = (id: typeof auxMenu) => {
     if (id) {
-      await applyRecorderLayout(sourceOpen, true);
+      void applyRecorderLayout(sourceOpen, true);
       setAuxMenu(id);
       return;
     }
     setAuxMenu(null);
-    await applyRecorderLayout(sourceOpen, false);
+    void applyRecorderLayout(sourceOpen, false);
   };
 
   const canRecord =
@@ -174,9 +178,9 @@ export function RecorderToolbar({ onRecord }: { onRecord: () => void }) {
             icon={<Monitor className="size-3.5" />}
             active={captureMode === "display"}
             open={sourceOpen && captureMode === "display"}
-            onOpenChange={async (open) => {
+            onOpenChange={(open) => {
               if (open) useRecorderStore.getState().setCaptureMode("display");
-              await setSourceMenuOpen(open);
+              setSourceMenuOpen(open);
             }}
           />
           {caps?.canEnumerateSources !== false ? (
@@ -186,9 +190,9 @@ export function RecorderToolbar({ onRecord }: { onRecord: () => void }) {
               icon={<AppWindowIcon />}
               active={captureMode === "window"}
               open={sourceOpen && captureMode === "window"}
-              onOpenChange={async (open) => {
+              onOpenChange={(open) => {
                 if (open) useRecorderStore.getState().setCaptureMode("window");
-                await setSourceMenuOpen(open);
+                setSourceMenuOpen(open);
               }}
             />
           ) : null}
@@ -204,9 +208,9 @@ export function RecorderToolbar({ onRecord }: { onRecord: () => void }) {
           {caps?.canCaptureDevice ? (
             <DeviceMenu
               open={sourceOpen && captureMode === "device"}
-              onOpenChange={async (open) => {
+              onOpenChange={(open) => {
                 if (open) useRecorderStore.getState().setCaptureMode("device");
-                await setSourceMenuOpen(open);
+                setSourceMenuOpen(open);
               }}
             />
           ) : null}
@@ -217,15 +221,15 @@ export function RecorderToolbar({ onRecord }: { onRecord: () => void }) {
         <div className="flex shrink-0 items-center gap-0.5">
           <CameraMenu
             open={auxMenu === "camera"}
-            onOpenChange={(open) => void setAuxMenuOpen(open ? "camera" : null)}
+            onOpenChange={(open) => setAuxMenuOpen(open ? "camera" : null)}
           />
           <MicMenu
             open={auxMenu === "mic"}
-            onOpenChange={(open) => void setAuxMenuOpen(open ? "mic" : null)}
+            onOpenChange={(open) => setAuxMenuOpen(open ? "mic" : null)}
           />
           <AudioMenu
             open={auxMenu === "audio"}
-            onOpenChange={(open) => void setAuxMenuOpen(open ? "audio" : null)}
+            onOpenChange={(open) => setAuxMenuOpen(open ? "audio" : null)}
           />
         </div>
 
@@ -250,7 +254,7 @@ export function RecorderToolbar({ onRecord }: { onRecord: () => void }) {
 
         <SettingsMenu
           open={auxMenu === "settings"}
-          onOpenChange={(open) => void setAuxMenuOpen(open ? "settings" : null)}
+          onOpenChange={(open) => setAuxMenuOpen(open ? "settings" : null)}
         />
 
         <Button
@@ -417,10 +421,20 @@ function CameraMenu({
   const setCameraEnabled = useRecorderStore((s) => s.setCameraEnabled);
   const setCameraDeviceId = useRecorderStore((s) => s.setCameraDeviceId);
   const ensureCameraDevices = useRecorderStore((s) => s.ensureCameraDevices);
+  const [devicesReady, setDevicesReady] = useState(false);
 
   useEffect(() => {
-    if (!open) return;
-    void ensureCameraDevices();
+    if (!open) {
+      setDevicesReady(false);
+      return;
+    }
+    let cancelled = false;
+    void ensureCameraDevices().finally(() => {
+      if (!cancelled) setDevicesReady(true);
+    });
+    return () => {
+      cancelled = true;
+    };
   }, [open, ensureCameraDevices]);
 
   const value = !cameraEnabled ? "off" : (cameraDeviceId ?? "off");
@@ -462,7 +476,10 @@ function CameraMenu({
             {cam.label}
           </SelectMenuItem>
         ))}
-        {cameras.length === 0 ? (
+        {!devicesReady && cameras.length === 0 ? (
+          <p className="px-2 py-2 text-xs text-muted-foreground">{t("app.loading")}</p>
+        ) : null}
+        {devicesReady && cameras.length === 0 ? (
           <button
             type="button"
             className="w-full px-2 py-2 text-left text-xs text-primary hover:underline"
@@ -492,10 +509,20 @@ function MicMenu({
   const ensureMicrophoneDevices = useRecorderStore(
     (s) => s.ensureMicrophoneDevices,
   );
+  const [devicesReady, setDevicesReady] = useState(false);
 
   useEffect(() => {
-    if (!open) return;
-    void ensureMicrophoneDevices();
+    if (!open) {
+      setDevicesReady(false);
+      return;
+    }
+    let cancelled = false;
+    void ensureMicrophoneDevices().finally(() => {
+      if (!cancelled) setDevicesReady(true);
+    });
+    return () => {
+      cancelled = true;
+    };
   }, [open, ensureMicrophoneDevices]);
 
   const selectedMic = microphones.find((m) => m.deviceId === micDeviceId);
@@ -542,7 +569,10 @@ function MicMenu({
             {mic.label}
           </SelectMenuItem>
         ))}
-        {microphones.length === 0 ? (
+        {!devicesReady && microphones.length === 0 ? (
+          <p className="px-2 py-2 text-xs text-muted-foreground">{t("app.loading")}</p>
+        ) : null}
+        {devicesReady && microphones.length === 0 ? (
           <button
             type="button"
             className="w-full px-2 py-2 text-left text-xs text-primary hover:underline"
