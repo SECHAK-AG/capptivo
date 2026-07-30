@@ -5,8 +5,15 @@
 
 import { Monitor, Moon, Sun, type LucideIcon } from "lucide-react";
 
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { cn } from "@/lib/utils";
-import { LANGUAGES, type TranslationKey } from "@/lib/i18n";
+import { LANGUAGES, type Language, type TranslationKey } from "@/lib/i18n";
 import { useI18n, useTheme } from "@/lib/settings";
 import type { ThemeMode } from "@/lib/theme";
 
@@ -55,48 +62,25 @@ export function ConfigPanel({ visible = true }: { visible?: boolean }) {
       <section className="space-y-2">
         <SectionLabel>{t("config.language.title")}</SectionLabel>
         <p className="text-xs text-muted-foreground">{t("config.language.desc")}</p>
-        <div
-          role="radiogroup"
-          aria-label={t("config.language.title")}
-          className="inline-flex w-full items-center rounded-xl bg-muted p-1"
+        <Select
+          value={language}
+          onValueChange={(v) => setLanguage(v as Language)}
         >
-          {LANGUAGES.map(({ id, label }) => (
-            <LanguagePill
-              key={id}
-              label={label}
-              selected={language === id}
-              onSelect={() => setLanguage(id)}
-            />
-          ))}
-        </div>
+          <SelectTrigger
+            className="h-9 w-full"
+            aria-label={t("config.language.title")}
+          >
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            {LANGUAGES.map(({ id, label }) => (
+              <SelectItem key={id} value={id}>
+                {label}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
       </section>
     </div>
-  );
-}
-
-function LanguagePill({
-  label,
-  selected,
-  onSelect,
-}: {
-  label: string;
-  selected: boolean;
-  onSelect: () => void;
-}) {
-  return (
-    <button
-      type="button"
-      role="radio"
-      aria-checked={selected}
-      onClick={onSelect}
-      className={cn(
-        "min-w-0 flex-1 rounded-lg px-3 py-1.5 text-sm font-medium transition-colors",
-        selected
-          ? "bg-background text-foreground shadow-sm"
-          : "text-muted-foreground hover:text-foreground",
-      )}
-    >
-      <span className="truncate">{label}</span>
-    </button>
   );
 }

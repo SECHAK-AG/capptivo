@@ -12,6 +12,7 @@ import {
 import {
   DEFAULT_LANGUAGE,
   getStoredLanguage,
+  languageDir,
   storeLanguage,
   translate,
   type Language,
@@ -67,7 +68,10 @@ export function SettingsProvider({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     storeLanguage(language);
-    if (typeof document !== "undefined") document.documentElement.lang = language;
+    if (typeof document !== "undefined") {
+      document.documentElement.lang = language;
+      document.documentElement.dir = languageDir(language);
+    }
   }, [language]);
 
   const setLanguage = useCallback((next: Language) => setLanguageState(next), []);
