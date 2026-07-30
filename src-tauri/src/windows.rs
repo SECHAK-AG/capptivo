@@ -277,12 +277,30 @@ mod fullscreen_bits {
     pub const ALLOWS_TILING: usize = 1 << 11;
     pub const DISALLOWS_TILING: usize = 1 << 12;
 
+    /// Bit that lets a window appear over *another app's* native-fullscreen
+    /// Space. `CanJoinAllSpaces` alone only covers standard Spaces, which is
+    /// why the ink overlay used to stay on the primary display whenever the
+    /// target display was showing a fullscreen app.
+    pub const CAN_JOIN_ALL_SPACES: usize = 1 << 0;
+    /// AppKit documents `CanJoinAllSpaces` and `MoveToActiveSpace` as mutually
+    /// exclusive, so the overlay policy has to clear this rather than OR around
+    /// it — `set_visible_on_all_workspaces(false)` on hide can leave it set.
+    pub const MOVE_TO_ACTIVE_SPACE: usize = 1 << 1;
+
     /// Force expand-arrow fullscreen: clear auxiliary / disallow-tiling, set
     /// primary + allows-tiling. Sequoia otherwise uses a flaky heuristic that
     /// intermittently reverts the green button to "+".
     pub fn with_native_fullscreen(existing: usize) -> usize {
         let cleared = existing & !(AUXILIARY | DISALLOWS_TILING);
         cleared | PRIMARY | ALLOWS_TILING
+    }
+
+    /// Overlay policy: reachable on every Space, including fullscreen ones.
+    /// `PRIMARY` must be cleared — a window that is itself fullscreen-primary
+    /// gets its own Space instead of floating over someone else's.
+    pub fn with_overlay_spaces(existing: usize) -> usize {
+        let cleared = existing & !(PRIMARY | DISALLOWS_TILING | MOVE_TO_ACTIVE_SPACE);
+        cleared | AUXILIARY | CAN_JOIN_ALL_SPACES
     }
 }
 
@@ -318,8 +336,38 @@ fn apply_native_fullscreen(win: &tauri::WebviewWindow) {
     }
 }
 
+/// Give the annotation overlay `FullScreenAuxiliary | CanJoinAllSpaces` so it
+/// can be moved onto a display whose Space belongs to a fullscreen app.
+/// Main-thread only — see `enable_native_fullscreen`.
+///
+/// Deliberately *not* `with_native_fullscreen`: that policy serves the editor /
+/// library shells' green expand arrows and clears the very bit the overlay needs.
+#[cfg(target_os = "macos")]
+fn apply_overlay_spaces(win: &tauri::WebviewWindow) {
+    use objc::runtime::Object;
+    use objc::{msg_send, sel, sel_impl};
+
+    let Ok(ptr) = win.ns_window() else {
+        return;
+    };
+    if ptr.is_null() {
+        return;
+    }
+    let ns_window = ptr as *mut Object;
+    unsafe {
+        let existing: usize = msg_send![ns_window, collectionBehavior];
+        let next = fullscreen_bits::with_overlay_spaces(existing);
+        if next != existing {
+            let _: () = msg_send![ns_window, setCollectionBehavior: next];
+        }
+    }
+}
+
 #[cfg(not(target_os = "macos"))]
 fn enable_native_fullscreen(_win: &tauri::WebviewWindow) {}
+
+#[cfg(not(target_os = "macos"))]
+fn apply_overlay_spaces(_win: &tauri::WebviewWindow) {}
 
 /// Current mouse location in global top-left coordinates (same space as Tauri
 /// window positions), if CoreGraphics will give it to us.
@@ -694,20 +742,44 @@ pub fn emit_mic_capture_start(app: &AppHandle, project_id: &str) {
     let _ = app.emit(MIC_CAPTURE_START, project_id);
 }
 
+/// Move + resize the ink overlay to cover one whole display.
+///
+/// **Ordering is load-bearing.** `tao` converts a `Size::Physical` using the
+/// window's *current* scale factor, so setting the size while the window still
+/// sits on the old display applies the wrong logical size on a mixed-DPI pair.
+/// Position first, then size, then re-assert the Spaces policy — macOS can drop
+/// collection behavior across a resize.
+///
+/// **Thread is load-bearing.** Every call in here is AppKit window mutation and
+/// must run on the main thread; `-[NSWindow setCollectionBehavior:]` aborts with
+/// "Must only be used from the main thread" otherwise. The 300 ms follow loop
+/// runs on its own `std::thread`, so it reaches this through `run_on_main_thread`.
 fn position_annotation_on_active_display(
     app: &AppHandle,
     win: &tauri::WebviewWindow,
 ) -> tauri::Result<()> {
-    let monitor = match active_monitor(app).or_else(|| app.primary_monitor().ok().flatten()) {
-        Some(m) => m,
-        None => return Ok(()),
+    // `active_monitor` already ends in `primary_monitor()`, so there is no outer
+    // fallback to add here.
+    let Some(monitor) = active_monitor(app) else {
+        return Ok(());
     };
-    let pos = monitor.position();
-    let size = monitor.size();
-    win.set_size(tauri::Size::Physical(*size))?;
-    win.set_position(tauri::Position::Physical(*pos))?;
-    // Same as the recorder bar: macOS can drop CanJoinAllSpaces after resize.
-    pin_to_all_spaces_if_shown(win);
+    let pos = *monitor.position();
+    let size = *monitor.size();
+    let win = win.clone();
+    let _ = win.clone().run_on_main_thread(move || {
+        // The closure returns `()`, so every failure is logged rather than
+        // propagated — do not introduce `?` in here.
+        if let Err(e) = win.set_position(tauri::Position::Physical(pos)) {
+            tracing::warn!(%e, label = win.label(), "annotation: set_position failed");
+        }
+        if let Err(e) = win.set_size(tauri::Size::Physical(size)) {
+            tracing::warn!(%e, label = win.label(), "annotation: set_size failed");
+        }
+        if win.is_visible().unwrap_or(false) {
+            set_follows_spaces(&win, true);
+            apply_overlay_spaces(&win);
+        }
+    });
     Ok(())
 }
 
@@ -721,7 +793,11 @@ static ANNOTATION_FOLLOW_GEN: AtomicU32 = AtomicU32::new(0);
 static ANNOTATION_FOLLOW_DISPLAY: AtomicBool = AtomicBool::new(true);
 
 fn start_annotation_display_follow(app: &AppHandle) {
-    ANNOTATION_FOLLOW_DISPLAY.store(true, Ordering::Relaxed);
+    // Deliberately does *not* reset `ANNOTATION_FOLLOW_DISPLAY`: a re-show while
+    // the user has a pen armed must not resume hopping mid-stroke. The static
+    // defaults to `true` for the genuine first show, `hide_annotation_overlay`
+    // resets it for the next session, and `set_annotation_display_follow` is the
+    // only other writer.
     if ANNOTATION_FOLLOW_ON.swap(true, Ordering::SeqCst) {
         return;
     }
@@ -803,7 +879,13 @@ pub fn toggle_annotation_overlay(app: &AppHandle) -> tauri::Result<()> {
 pub fn show_annotation_overlay(app: AppHandle) -> tauri::Result<()> {
     if let Some(win) = app.get_webview_window(ANNOTATION_LABEL) {
         position_annotation_on_active_display(&app, &win)?;
-        set_follows_spaces(&win, true);
+        // `position_…` only re-asserts the policy when the window is already
+        // visible, which it is not here — so apply it explicitly before showing.
+        let w = win.clone();
+        let _ = win.clone().run_on_main_thread(move || {
+            set_follows_spaces(&w, true);
+            apply_overlay_spaces(&w);
+        });
         win.show()?;
         let _ = app.emit(ANNOTATION_VISIBILITY_EVENT, true);
         arm_annotation_escape(&app);
@@ -832,7 +914,13 @@ pub fn show_annotation_overlay(app: AppHandle) -> tauri::Result<()> {
     .build()?;
 
     position_annotation_on_active_display(&app, &win)?;
-    set_follows_spaces(&win, true);
+    // `ns_window()` only exists once `build()` has returned, so the Spaces policy
+    // has to be applied here rather than through the builder.
+    let w = win.clone();
+    let _ = win.clone().run_on_main_thread(move || {
+        set_follows_spaces(&w, true);
+        apply_overlay_spaces(&w);
+    });
     win.show()?;
     let _ = app.emit(ANNOTATION_VISIBILITY_EVENT, true);
     arm_annotation_escape(&app);
@@ -857,6 +945,10 @@ fn raise_recording_chrome(app: &AppHandle) {
 #[tauri::command]
 pub fn hide_annotation_overlay(app: AppHandle) -> tauri::Result<()> {
     stop_annotation_display_follow();
+    // Next show starts following again; the WebView re-reports on mount when a
+    // tool is armed. Resetting on hide (not show) means a re-show mid-draw
+    // cannot yank the canvas out from under the stroke.
+    ANNOTATION_FOLLOW_DISPLAY.store(true, Ordering::Relaxed);
     if let Some(win) = app.get_webview_window(ANNOTATION_LABEL) {
         set_follows_spaces(&win, false);
         win.hide()?;
@@ -1217,5 +1309,56 @@ mod tests {
             fullscreen_bits::with_native_fullscreen(MANAGED) & MANAGED,
             MANAGED
         );
+    }
+
+    #[test]
+    fn overlay_bits_reach_fullscreen_spaces() {
+        let got = fullscreen_bits::with_overlay_spaces(0);
+        // Both bits are required: Auxiliary to enter a fullscreen app's Space,
+        // CanJoinAllSpaces to be present on every standard Space.
+        assert_ne!(got & fullscreen_bits::AUXILIARY, 0);
+        assert_ne!(got & fullscreen_bits::CAN_JOIN_ALL_SPACES, 0);
+        // Primary would give the overlay its own Space instead of floating.
+        assert_eq!(got & fullscreen_bits::PRIMARY, 0);
+    }
+
+    #[test]
+    fn overlay_bits_clear_primary_when_already_set() {
+        let existing = fullscreen_bits::PRIMARY | fullscreen_bits::DISALLOWS_TILING;
+        let got = fullscreen_bits::with_overlay_spaces(existing);
+        assert_eq!(got & fullscreen_bits::PRIMARY, 0);
+        assert_eq!(got & fullscreen_bits::DISALLOWS_TILING, 0);
+        assert_ne!(got & fullscreen_bits::AUXILIARY, 0);
+    }
+
+    /// AppKit treats `CanJoinAllSpaces` and `MoveToActiveSpace` as mutually
+    /// exclusive, and hiding the overlay can leave the latter set.
+    #[test]
+    fn overlay_bits_drop_move_to_active_space() {
+        let got = fullscreen_bits::with_overlay_spaces(fullscreen_bits::MOVE_TO_ACTIVE_SPACE);
+        assert_eq!(got & fullscreen_bits::MOVE_TO_ACTIVE_SPACE, 0);
+        assert_ne!(got & fullscreen_bits::CAN_JOIN_ALL_SPACES, 0);
+    }
+
+    #[test]
+    fn overlay_bits_preserve_unrelated_bits() {
+        const MANAGED: usize = 1 << 2;
+        assert_eq!(
+            fullscreen_bits::with_overlay_spaces(MANAGED) & MANAGED,
+            MANAGED
+        );
+    }
+
+    #[test]
+    fn overlay_and_native_fullscreen_policies_are_disjoint() {
+        // Guard rail: the editor shells' policy and the overlay's policy must
+        // never converge. If someone "simplifies" these into one function, this
+        // test fails.
+        let overlay = fullscreen_bits::with_overlay_spaces(0);
+        let shell = fullscreen_bits::with_native_fullscreen(0);
+        assert_ne!(overlay & fullscreen_bits::AUXILIARY, 0);
+        assert_eq!(shell & fullscreen_bits::AUXILIARY, 0);
+        assert_eq!(overlay & fullscreen_bits::PRIMARY, 0);
+        assert_ne!(shell & fullscreen_bits::PRIMARY, 0);
     }
 }
