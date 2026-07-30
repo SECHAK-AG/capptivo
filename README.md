@@ -38,8 +38,6 @@ No more paying $29/month for video editing software. I hope you enjoy it, and co
   <a href="#license">License</a>
 </p>
 
----
-
 
 https://github.com/user-attachments/assets/246054fe-8604-4ea0-ae7b-701eaafc25bf
 
