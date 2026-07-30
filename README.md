@@ -64,18 +64,36 @@ Captions need a system [whisper.cpp](https://github.com/ggerganov/whisper.cpp)
 
 ### Maintainers: cutting a release
 
+GitHub Actions builds macOS (Intel + Apple Silicon), Windows, and Linux
+installers — no local Windows/Linux machines needed.
+
 1. Bump `version` in `package.json`, `src-tauri/tauri.conf.json`, and
    `src-tauri/Cargo.toml` (keep them identical).
-2. Build installers locally with `pnpm tauri build` on each target platform
-   (or your own release process).
-3. Commit, tag, and push, then attach the installers to a
-   [GitHub Release](https://github.com/SECHAK-AG/capptivo/releases):
+2. Commit and push to `main`, then tag and push the tag (must match the
+   version, e.g. `0.1.0` → `v0.1.0`):
 
 ```bash
 git tag v0.1.0
 git push origin main
 git push origin v0.1.0
 ```
+
+3. The [Release](https://github.com/SECHAK-AG/capptivo/actions/workflows/release.yml)
+   workflow builds all platforms and opens a **draft** GitHub Release with the
+   installers attached. Review the draft, then publish it.
+
+You can also run the workflow manually from the Actions tab
+(`workflow_dispatch`) without pushing a tag.
+
+**Signing:** builds are unsigned for now. macOS users may need right-click →
+Open once. When you have Apple / Windows certificates, add the usual Tauri
+signing secrets (`APPLE_CERTIFICATE`, `APPLE_CERTIFICATE_PASSWORD`,
+`APPLE_SIGNING_IDENTITY`, `APPLE_ID`, `APPLE_PASSWORD`, `APPLE_TEAM_ID`,
+and/or Windows `TAURI_SIGNING_*`) in the repo Settings → Secrets.
+
+**Permissions:** if the workflow fails with “Resource not accessible by
+integration”, set Settings → Actions → General → Workflow permissions to
+**Read and write**.
 
 ---
 
@@ -126,7 +144,7 @@ Open the recorder with **⌥⇧R** (**Alt+Shift+R** on Windows/Linux), or click 
 - Face-cam overlay while recording
 - Microphone capture (device picker)
 - System audio capture
-- Language switch (English / Français / Español / Italiano / Arabic / 中文)
+- Language switch (English / Français / Español / Italiano / Deutsch / Português / Русский / 日本語 / 한국어 / 中文 / العربية)
 - Countdown before start
 - Pause / resume
 - On-screen annotations while recording
@@ -236,7 +254,7 @@ Draw on top of the screen while recording — floating toolbar, click-through wh
 - In-app recordings library
 - Rename projects
 - No account required to record or edit
-- UI languages: English, Français, Español, Italiano, Arabic , 中文
+- UI languages: English, Français, Español, Italiano, Deutsch, Português, Русский, 日本語, 한국어, 中文, العربية
 
 ---
 

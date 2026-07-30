@@ -1,14 +1,30 @@
 /** Tiny typed i18n with English fallback and `{name}` interpolation. */
 import { ar } from "./ar";
+import { de } from "./de";
 import { en, type TranslationKey } from "./en";
 import { es } from "./es";
 import { fr } from "./fr";
 import { it } from "./it";
+import { ja } from "./ja";
+import { ko } from "./ko";
+import { pt } from "./pt";
+import { ru } from "./ru";
 import { zh } from "./zh";
 
 export type { TranslationKey };
 
-export type Language = "en" | "fr" | "es" | "it" | "ar" | "zh";
+export type Language =
+  | "en"
+  | "fr"
+  | "es"
+  | "it"
+  | "de"
+  | "pt"
+  | "ru"
+  | "ja"
+  | "ko"
+  | "zh"
+  | "ar";
 
 /** Native labels — shown in the picker so users can find their language. */
 export const LANGUAGES: { readonly id: Language; readonly label: string }[] = [
@@ -16,8 +32,13 @@ export const LANGUAGES: { readonly id: Language; readonly label: string }[] = [
   { id: "fr", label: "Français" },
   { id: "es", label: "Español" },
   { id: "it", label: "Italiano" },
-  { id: "ar", label: "العربية" },
+  { id: "de", label: "Deutsch" },
+  { id: "pt", label: "Português" },
+  { id: "ru", label: "Русский" },
+  { id: "ja", label: "日本語" },
+  { id: "ko", label: "한국어" },
   { id: "zh", label: "中文" },
+  { id: "ar", label: "العربية" },
 ];
 
 export const DEFAULT_LANGUAGE: Language = "en";
@@ -27,8 +48,13 @@ const DICTIONARIES: Record<Language, Record<TranslationKey, string>> = {
   fr,
   es,
   it,
-  ar,
+  de,
+  pt,
+  ru,
+  ja,
+  ko,
   zh,
+  ar,
 };
 
 const LANGUAGE_IDS = new Set<string>(LANGUAGES.map((l) => l.id));

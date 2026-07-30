@@ -25,12 +25,20 @@ import { SectionLabel } from "./ui";
 import { CaptionStyleControls } from "./CaptionStyleControls";
 import { CaptionEditSheet } from "./CaptionEditSheet";
 
+/** Speech languages for Whisper — curated list, not tied to UI locale. Default stays `auto`. */
 const WHISPER_LANGUAGES: { value: string; labelKey: TranslationKey }[] = [
   { value: "auto", labelKey: "captions.lang.auto" },
   { value: "en", labelKey: "captions.lang.en" },
   { value: "fr", labelKey: "captions.lang.fr" },
   { value: "es", labelKey: "captions.lang.es" },
+  { value: "it", labelKey: "captions.lang.it" },
   { value: "de", labelKey: "captions.lang.de" },
+  { value: "pt", labelKey: "captions.lang.pt" },
+  { value: "ru", labelKey: "captions.lang.ru" },
+  { value: "ja", labelKey: "captions.lang.ja" },
+  { value: "ko", labelKey: "captions.lang.ko" },
+  { value: "zh", labelKey: "captions.lang.zh" },
+  { value: "ar", labelKey: "captions.lang.ar" },
 ];
 
 export function CaptionsPanel({ visible }: { visible: boolean }) {
