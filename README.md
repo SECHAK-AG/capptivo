@@ -38,9 +38,7 @@ No more paying $29/month for video editing software. I hope you enjoy it, and co
   <a href="#license">License</a>
 </p>
 
-
 https://github.com/user-attachments/assets/246054fe-8604-4ea0-ae7b-701eaafc25bf
-
 
 ---
 
@@ -209,6 +207,8 @@ Draw on top of the screen while recording — floating toolbar, click-through wh
 - On-device speech-to-text (Whisper via whisper.cpp)
 - Downloadable model, no cloud required
 - Generate, style, and burn captions into preview + export
+
+![Captions demo](assets/captions-demo.gif)
 
 ### Timeline
 
