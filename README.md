@@ -126,7 +126,7 @@ Open the recorder with **⌥⇧R** (**Alt+Shift+R** on Windows/Linux), or click 
 - Face-cam overlay while recording
 - Microphone capture (device picker)
 - System audio capture
-- Language switch (English / Français)
+- Language switch (English / Français / Español / Italiano / Arabic / 中文)
 - Countdown before start
 - Pause / resume
 - On-screen annotations while recording
@@ -236,7 +236,7 @@ Draw on top of the screen while recording — floating toolbar, click-through wh
 - In-app recordings library
 - Rename projects
 - No account required to record or edit
-- English / French UI
+- UI languages: English, Français, Español, Italiano, Arabic , 中文
 
 ---
 

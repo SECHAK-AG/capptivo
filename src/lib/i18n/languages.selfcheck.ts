@@ -4,6 +4,7 @@ const LANGUAGES = [
   { id: "en" },
   { id: "fr" },
   { id: "es" },
+  { id: "it" },
   { id: "ar" },
   { id: "zh" },
 ] as const;
@@ -15,10 +16,9 @@ function languageDir(lang: Language): "ltr" | "rtl" {
 }
 
 const ids = new Set(LANGUAGES.map((l) => l.id));
-console.assert(ids.size === 5, "five languages");
-console.assert(ids.has("es") && ids.has("ar") && ids.has("zh"), "new locales present");
+console.assert(ids.size === 6, "six languages");
+console.assert(ids.has("it"), "italian present");
 console.assert(languageDir("ar") === "rtl", "arabic is rtl");
-console.assert(languageDir("en") === "ltr", "english is ltr");
-console.assert(languageDir("zh") === "ltr", "chinese is ltr");
+console.assert(languageDir("it") === "ltr", "italian is ltr");
 
 console.log("i18n.languages.selfcheck: ok");

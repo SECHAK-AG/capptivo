@@ -77,6 +77,11 @@ export const en = {
   "export.fps": "FPS",
   "export.type": "Type",
   "export.confirm": "Export",
+  "export.enhanceVoice": "Enhance voice",
+  "export.enhanceVoice.off": "Off",
+  "export.enhanceVoice.on": "On",
+  "export.enhanceVoice.hint":
+    "Denoise, compress, and level narration for clearer speech.",
   "encoding.fast": "Fast",
   "encoding.balanced": "Balanced",
   "encoding.quality": "Quality",
@@ -169,8 +174,6 @@ export const en = {
   "cursor.sway.hint":
     "Leans into turns from cursor velocity, then settles when still. Zero keeps the glyph upright.",
   "cursor.clickEffect": "Click effect",
-  "cursor.clickEffect.hint":
-    "Optional ring at the click tip for demos. Does not move the pointer. Default is none.",
   "cursor.clickEffect.none": "None",
   "cursor.clickEffect.ripple": "Ripple",
   "cursor.clickEffect.spotlight": "Spotlight",

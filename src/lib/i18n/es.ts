@@ -82,6 +82,11 @@ export const es: Record<TranslationKey, string> = {
   "export.fps": "FPS",
   "export.type": "Tipo",
   "export.confirm": "Exportar",
+  "export.enhanceVoice": "Mejorar voz",
+  "export.enhanceVoice.off": "Desactivado",
+  "export.enhanceVoice.on": "Activado",
+  "export.enhanceVoice.hint":
+    "Reduce el ruido, comprime y nivela la narración para un habla más clara.",
   "encoding.fast": "Rápido",
   "encoding.balanced": "Equilibrado",
   "encoding.quality": "Calidad",
@@ -181,8 +186,6 @@ export const es: Record<TranslationKey, string> = {
   "cursor.sway.hint":
     "Se inclina en los giros según la velocidad y se estabiliza al detenerse. Cero mantiene el glifo erguido.",
   "cursor.clickEffect": "Efecto de clic",
-  "cursor.clickEffect.hint":
-    "Anillo opcional en la punta del clic para demos. No mueve el puntero. Por defecto: ninguno.",
   "cursor.clickEffect.none": "Ninguno",
   "cursor.clickEffect.ripple": "Onda",
   "cursor.clickEffect.spotlight": "Foco",

@@ -83,6 +83,11 @@ export const fr: Record<TranslationKey, string> = {
   "export.fps": "IPS",
   "export.type": "Type",
   "export.confirm": "Exporter",
+  "export.enhanceVoice": "Améliorer la voix",
+  "export.enhanceVoice.off": "Désactivé",
+  "export.enhanceVoice.on": "Activé",
+  "export.enhanceVoice.hint":
+    "Réduit le bruit, compresse et nivelle la narration pour une voix plus claire.",
   "encoding.fast": "Rapide",
   "encoding.balanced": "Équilibré",
   "encoding.quality": "Qualité",
@@ -182,8 +187,6 @@ export const fr: Record<TranslationKey, string> = {
   "cursor.sway.hint":
     "Incline le glyphe selon la vitesse du curseur, puis se stabilise à l'arrêt. Zéro garde le glyphe droit.",
   "cursor.clickEffect": "Effet de clic",
-  "cursor.clickEffect.hint":
-    "Anneau optionnel à la pointe du clic pour les démos. Ne déplace pas le pointeur. Par défaut : aucun.",
   "cursor.clickEffect.none": "Aucun",
   "cursor.clickEffect.ripple": "Ondulation",
   "cursor.clickEffect.spotlight": "Halo",

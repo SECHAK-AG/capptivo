@@ -1,6 +1,13 @@
 import { useEffect, useState } from "react";
 
 import { FieldLabelWithHint } from "@/components/ui/field-label-with-hint";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
 import { Slider } from "@/components/ui/slider";
 import {
@@ -253,31 +260,24 @@ export function CursorPanel({ visible = true }: { visible?: boolean }) {
 
       <section className="space-y-2">
         <SectionLabel>{t("cursor.clickEffect")}</SectionLabel>
-        <p className="text-xs text-muted-foreground">{t("cursor.clickEffect.hint")}</p>
-        <div className="grid grid-cols-4 gap-2">
-          {CURSOR_CLICK_EFFECT_IDS.map((id) => {
-            const selected = cursorSettings.clickEffect === id;
-            return (
-              <button
-                key={id}
-                type="button"
-                title={t(CLICK_EFFECT_LABEL_KEYS[id])}
-                aria-label={t(CLICK_EFFECT_LABEL_KEYS[id])}
-                aria-pressed={selected}
-                disabled={!hasTrack || !cursorSettings.showCursor}
-                onClick={() => setCursorSettings({ clickEffect: id })}
-                className={cn(
-                  "flex min-h-9 min-w-0 items-center justify-center rounded-[10px] border px-2 text-xs transition-colors disabled:opacity-40",
-                  selected
-                    ? "border-primary bg-muted/30 ring-1 ring-primary/40"
-                    : "border-border bg-muted/30 hover:border-foreground/25",
-                )}
-              >
+        <Select
+          value={cursorSettings.clickEffect}
+          onValueChange={(v) =>
+            setCursorSettings({ clickEffect: v as CursorClickEffectId })
+          }
+          disabled={!hasTrack || !cursorSettings.showCursor}
+        >
+          <SelectTrigger className="h-9 w-full">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            {CURSOR_CLICK_EFFECT_IDS.map((id) => (
+              <SelectItem key={id} value={id}>
                 {t(CLICK_EFFECT_LABEL_KEYS[id])}
-              </button>
-            );
-          })}
-        </div>
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
       </section>
     </div>
   );

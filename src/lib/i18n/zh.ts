@@ -77,6 +77,10 @@ export const zh: Record<TranslationKey, string> = {
   "export.fps": "帧率",
   "export.type": "类型",
   "export.confirm": "导出",
+  "export.enhanceVoice": "增强人声",
+  "export.enhanceVoice.off": "关",
+  "export.enhanceVoice.on": "开",
+  "export.enhanceVoice.hint": "降噪、压缩并平衡旁白音量，使语音更清晰。",
   "encoding.fast": "快速",
   "encoding.balanced": "均衡",
   "encoding.quality": "高质量",
@@ -166,8 +170,6 @@ export const zh: Record<TranslationKey, string> = {
   "cursor.sway.hint":
     "根据速度在转弯时倾斜，静止后回正。零保持直立。",
   "cursor.clickEffect": "点击效果",
-  "cursor.clickEffect.hint":
-    "演示用可选点击环。不移动指针。默认为无。",
   "cursor.clickEffect.none": "无",
   "cursor.clickEffect.ripple": "涟漪",
   "cursor.clickEffect.spotlight": "聚光",

@@ -3,17 +3,19 @@ import { ar } from "./ar";
 import { en, type TranslationKey } from "./en";
 import { es } from "./es";
 import { fr } from "./fr";
+import { it } from "./it";
 import { zh } from "./zh";
 
 export type { TranslationKey };
 
-export type Language = "en" | "fr" | "es" | "ar" | "zh";
+export type Language = "en" | "fr" | "es" | "it" | "ar" | "zh";
 
 /** Native labels — shown in the picker so users can find their language. */
 export const LANGUAGES: { readonly id: Language; readonly label: string }[] = [
   { id: "en", label: "English" },
   { id: "fr", label: "Français" },
   { id: "es", label: "Español" },
+  { id: "it", label: "Italiano" },
   { id: "ar", label: "العربية" },
   { id: "zh", label: "中文" },
 ];
@@ -24,6 +26,7 @@ const DICTIONARIES: Record<Language, Record<TranslationKey, string>> = {
   en,
   fr,
   es,
+  it,
   ar,
   zh,
 };

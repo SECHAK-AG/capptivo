@@ -47,9 +47,9 @@ type ExportSettingsDialogProps = {
 const ENCODINGS: ExportEncoding[] = ["fast", "balanced", "quality"];
 const FPS_OPTIONS: ExportFps[] = [24, 30, 60];
 const CONTAINERS: ExportContainer[] = ["mp4", "webm"];
-const AUDIO_ENHANCE_OPTIONS: { id: ExportAudioEnhance; label: string }[] = [
-  { id: "off", label: "Off" },
-  { id: "podcast", label: "On" },
+const AUDIO_ENHANCE_OPTIONS: { id: ExportAudioEnhance; labelKey: TranslationKey }[] = [
+  { id: "off", labelKey: "export.enhanceVoice.off" },
+  { id: "podcast", labelKey: "export.enhanceVoice.on" },
 ];
 
 const selectedRing = "border-primary ring-2 ring-primary/40";
@@ -151,14 +151,17 @@ export function ExportSettingsDialog({
                 options={CONTAINERS.map((id) => ({ id, label: id }))}
               />
             </Field>
-            <Field label="Enhance voice">
+            <Field label={t("export.enhanceVoice")}>
               <PillGroup
                 value={settings.audioEnhance}
                 onChange={(v) => patch("audioEnhance", v)}
-                options={AUDIO_ENHANCE_OPTIONS}
+                options={AUDIO_ENHANCE_OPTIONS.map((o) => ({
+                  id: o.id,
+                  label: t(o.labelKey),
+                }))}
               />
               <p className="text-[11px] leading-snug text-muted-foreground">
-                Denoise, compress, and level narration for clearer speech.
+                {t("export.enhanceVoice.hint")}
               </p>
             </Field>
           </>

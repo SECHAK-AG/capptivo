@@ -80,6 +80,11 @@ export const ar: Record<TranslationKey, string> = {
   "export.fps": "إطار/ث",
   "export.type": "النوع",
   "export.confirm": "تصدير",
+  "export.enhanceVoice": "تحسين الصوت",
+  "export.enhanceVoice.off": "إيقاف",
+  "export.enhanceVoice.on": "تشغيل",
+  "export.enhanceVoice.hint":
+    "إزالة الضوضاء وضغط وتسوية السرد لصوت أوضح.",
   "encoding.fast": "سريع",
   "encoding.balanced": "متوازن",
   "encoding.quality": "جودة",
@@ -175,8 +180,6 @@ export const ar: Record<TranslationKey, string> = {
   "cursor.sway.hint":
     "يميل مع المنعطفات حسب السرعة ثم يستقر عند التوقف. صفر يبقي الرمز مستقيمًا.",
   "cursor.clickEffect": "تأثير النقر",
-  "cursor.clickEffect.hint":
-    "حلقة اختيارية عند طرف النقر للعروض. لا تحرّك المؤشر. الافتراضي: لا شيء.",
   "cursor.clickEffect.none": "لا شيء",
   "cursor.clickEffect.ripple": "تموج",
   "cursor.clickEffect.spotlight": "إضاءة",
