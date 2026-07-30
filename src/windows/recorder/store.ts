@@ -101,6 +101,14 @@ interface RecorderStore {
   setAnnotationVisible: (visible: boolean) => void;
   setCameraDeviceId: (id: string | null) => void;
   setMicDeviceId: (id: string | null) => void;
+  /**
+   * Bring up mic / face-cam ahead of `startRecording`. Called when the countdown
+   * *starts*, so both `getUserMedia` calls happen during the 3 seconds we are
+   * already spending instead of after it — they are not part of screen capture
+   * and nothing about them needs the countdown to have finished.
+   * Safe to skip: `startRecording` runs the same work if this never ran.
+   */
+  prewarmCapture: () => Promise<void>;
   startRecording: () => Promise<void>;
   stopRecording: () => Promise<void>;
   togglePause: () => Promise<void>;
@@ -114,6 +122,12 @@ const DEFAULT_OPTIONS: CaptureOptions = {
 };
 
 let subscribed = false;
+
+/**
+ * In-flight `prewarmCapture()` work, so `startRecording` can await it instead of
+ * repeating it. Cleared once consumed.
+ */
+let prewarmInFlight: Promise<void> | null = null;
 
 /** Nudge face-cam after recorder-side mic GUM tore down its AVCapture session. */
 function reviveCameraPreview(cameraEnabled: boolean): Promise<void> {
@@ -459,6 +473,20 @@ export const useRecorderStore = create<RecorderStore>((set, get) => ({
     }
   },
 
+  prewarmCapture() {
+    const { micEnabled, micDeviceId, cameraEnabled, cameraDeviceId } = get();
+    prewarmInFlight = (async () => {
+      if (micEnabled && micDeviceId) {
+        await prepareMic(micDeviceId).catch(() => undefined);
+      }
+      // Keep the floating bubble where it is — capture re-acquires inside that window.
+      if (cameraEnabled && cameraDeviceId) {
+        await commands.showCameraPreview(cameraDeviceId).catch(() => undefined);
+      }
+    })();
+    return prewarmInFlight;
+  },
+
   async startRecording() {
     const {
       selectedSourceId,
@@ -527,13 +555,11 @@ export const useRecorderStore = create<RecorderStore>((set, get) => ({
       // this store flag survives, leaving the HUD state stale).
       set({ annotationVisible: false });
       void commands.hideAnnotationOverlay().catch(() => undefined);
-      if (captureMicrophone && micDeviceId) {
-        await prepareMic(micDeviceId).catch(() => undefined);
-      }
-      // Keep the floating bubble where it is — capture re-acquires inside that window.
-      if (cameraEnabled && cameraDeviceId) {
-        await commands.showCameraPreview(cameraDeviceId).catch(() => undefined);
-      }
+      // Mic / face-cam were started when the countdown began; this resolves
+      // immediately in that case. Falls back to doing the work when there was no
+      // countdown (a direct `startRecording()` call).
+      await (prewarmInFlight ?? get().prewarmCapture());
+      prewarmInFlight = null;
       await commands.startRecording(config);
       if (captureMode === "area" && areaSelection) {
         await commands.showAreaFrameGuide(areaSelection).catch(() => undefined);

@@ -1,6 +1,6 @@
 /** Recorder popover — setup bar, countdown, or in-record HUD. */
 
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { GripVertical, Pencil, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { useI18n } from "@/lib/settings";
@@ -16,7 +16,13 @@ export function RecorderApp() {
   const lastError = useRecorderStore((s) => s.lastError);
   const setAnnotationVisible = useRecorderStore((s) => s.setAnnotationVisible);
   const start = useRecorderStore((s) => s.startRecording);
+  const prewarmCapture = useRecorderStore((s) => s.prewarmCapture);
   const [counting, setCounting] = useState(false);
+  // The capture pipeline takes ~330ms to come up, and `status` only flips to
+  // "recording" at the end of it. Gating the HUD on that left the window showing
+  // nothing between the badge hitting zero and the recorder going live. This
+  // renders the HUD immediately instead, and the pipeline finishes behind it.
+  const [starting, setStarting] = useState(false);
   const wasLiveRef = useRef(false);
 
   useEffect(() => {
@@ -41,13 +47,24 @@ export function RecorderApp() {
 
   const live =
     status === "recording" || status === "paused" || status === "finalizing";
+  // What the window shows. `starting` covers the pipeline bring-up window so the
+  // HUD is on screen the instant the countdown ends.
+  const showHud = live || starting;
+
+  // Hand off from the optimistic HUD to the real one: `live` means the recorder
+  // came up, `lastError` means it did not (`startRecording` swallows failures
+  // into that field). Pressing Record clears any stale error, so this cannot
+  // trip on one left over from a previous attempt.
+  useEffect(() => {
+    if (starting && (live || lastError)) setStarting(false);
+  }, [starting, live, lastError]);
 
   useEffect(() => {
     if (counting) void commands.setRecorderLayout("countdown");
-    else if (live) void commands.setRecorderLayout("hud");
+    else if (showHud) void commands.setRecorderLayout("hud");
     else if (lastError) void commands.setRecorderLayout("alert");
     else void commands.setRecorderLayout("setup");
-  }, [live, counting, lastError]);
+  }, [showHud, counting, lastError]);
 
   useEffect(() => {
     const inkLive = status === "recording" || status === "paused";
@@ -57,28 +74,46 @@ export function RecorderApp() {
     wasLiveRef.current = inkLive;
   }, [status, setAnnotationVisible]);
 
+  // Stable identity: `start` is a zustand action, so this is created once. The
+  // countdown latches its own fire, but a stable prop means its ref-sync effect
+  // never re-runs either.
+  const onCountdownDone = useCallback(() => {
+    // Swap straight to the HUD; do not wait for `start()` to resolve.
+    setStarting(true);
+    setCounting(false);
+    void start();
+  }, [start]);
+
+  const onRecord = useCallback(() => {
+    // Clear a stale error before counting, so the `starting` hand-off above
+    // cannot mistake it for this attempt failing.
+    useRecorderStore.setState({ lastError: null });
+    setCounting(true);
+    // Mic / face-cam come up during the countdown rather than after it.
+    void prewarmCapture();
+  }, [prewarmCapture]);
+
   return (
     <div className="bg-transparent font-sans text-foreground">
-      {live ? (
-        <RecordingHud />
+      {showHud ? (
+        <RecordingHud starting={starting} />
       ) : counting ? (
-        <Countdown
-          onDone={() => {
-            void (async () => {
-              await start();
-              setCounting(false);
-            })();
-          }}
-        />
+        <Countdown onDone={onCountdownDone} />
       ) : (
-        <RecorderToolbar onRecord={() => setCounting(true)} />
+        <RecorderToolbar onRecord={onRecord} />
       )}
       <ErrorToast />
     </div>
   );
 }
 
-function RecordingHud() {
+/**
+ * `starting` is the optimistic window: the HUD is on screen but the capture
+ * pipeline is still coming up, so the controls are disabled the same way they are
+ * during finalize. Without that, a Stop pressed inside those ~330ms would reach a
+ * recorder that is not live yet and surface a `NotRecording` error.
+ */
+function RecordingHud({ starting }: { starting: boolean }) {
   const { t } = useI18n();
   const status = useRecorderStore((s) => s.state.status);
   const elapsed = useRecorderStore((s) => s.elapsed);
@@ -89,6 +124,8 @@ function RecordingHud() {
 
   const finalizing = status === "finalizing";
   const paused = status === "paused";
+  /** Controls are unusable while the pipeline is coming up or tearing down. */
+  const busy = finalizing || starting;
   const annotateLabel = annotationVisible
     ? t("recorder.hud.annotate.hide")
     : t("recorder.hud.annotate.show");
@@ -124,7 +161,7 @@ function RecordingHud() {
       <button
         type="button"
         data-tauri-drag-region="false"
-        disabled={finalizing}
+        disabled={busy}
         title={annotateLabel}
         aria-label={annotateLabel}
         aria-pressed={annotationVisible}
@@ -141,7 +178,7 @@ function RecordingHud() {
       <button
         type="button"
         data-tauri-drag-region="false"
-        disabled={finalizing}
+        disabled={busy}
         onClick={() => void togglePause()}
         className={cn(
           "h-9 rounded-xl border border-border bg-transparent px-3 text-xs font-medium text-foreground transition-colors",
@@ -156,7 +193,7 @@ function RecordingHud() {
         type="button"
         size="sm"
         data-tauri-drag-region="false"
-        disabled={finalizing}
+        disabled={busy}
         onClick={() => void stop()}
         className="h-9 gap-1.5 rounded-xl px-3 font-semibold"
       >

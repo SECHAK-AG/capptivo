@@ -96,6 +96,23 @@ pub fn run() {
             tray::build(&handle)?;
             register_global_hotkey(&handle);
 
+            // Warm the H.264 encoder probe off the critical path.
+            //
+            // `hw_encoder::pick` is `OnceLock`-cached, but filling it spawns an
+            // FFmpeg process that encodes two synthetic frames — ~145 ms. Left
+            // lazy, that cost lands on the user's *first* recording, inside
+            // `recorder.start()`, between the countdown ending and capture being
+            // live. Doing it here moves it into idle startup time; every later
+            // `pick()` is then a cache read. Best-effort on a detached thread:
+            // it must not delay launch, and on failure `pick()` simply probes
+            // lazily as before.
+            std::thread::Builder::new()
+                .name("encoder-probe-warm".into())
+                .spawn(|| {
+                    let _ = recorder::hw_encoder::pick(&recorder::encoder::ffmpeg_path());
+                })
+                .ok();
+
             // Start menubar-only; `windows::sync_dock_policy` flips to
             // Regular while a library or editor window is open (native
             // fullscreen + green expand arrows need Regular) and back
