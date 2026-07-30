@@ -189,6 +189,7 @@ export async function createExportCompositorFromMedia(
       // Fixed output size: MSAA + per-upload mipmap regen are pure cost.
       antialias: false,
       mipmaps: false,
+      gpuPreference: ["webgl", "webgpu"] as const,
       profile: true,
     });
   } catch (e) {
