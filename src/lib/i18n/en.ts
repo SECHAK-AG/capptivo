@@ -87,6 +87,7 @@ export const en = {
   "bg.color": "Color",
   "look.custom": "Custom",
   "look.uploadImage": "Upload image",
+  "look.deleteImage": "Delete image",
   "look.start": "Start",
   "look.end": "End",
   "look.angle": "Angle",

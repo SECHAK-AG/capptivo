@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-list-custom-backgrounds"
+description = "Enables the list_custom_backgrounds command without any pre-configured scope."
+commands.allow = ["list_custom_backgrounds"]
+
+[[permission]]
+identifier = "deny-list-custom-backgrounds"
+description = "Denies the list_custom_backgrounds command without any pre-configured scope."
+commands.deny = ["list_custom_backgrounds"]

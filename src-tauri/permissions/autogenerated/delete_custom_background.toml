@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-delete-custom-background"
+description = "Enables the delete_custom_background command without any pre-configured scope."
+commands.allow = ["delete_custom_background"]
+
+[[permission]]
+identifier = "deny-delete-custom-background"
+description = "Denies the delete_custom_background command without any pre-configured scope."
+commands.deny = ["delete_custom_background"]

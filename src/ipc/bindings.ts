@@ -105,6 +105,16 @@ export const commands = {
   ensureThumbnail: (id: string) =>
     invoke<string | null>("ensure_thumbnail", { id }),
 
+  /** Persist a custom background into the global app-data library. */
+  saveCustomBackground: (bytes: Uint8Array, ext: string) =>
+    invoke<{ id: string; fileName: string }>("save_custom_background", bytes, {
+      headers: { "x-background-ext": ext },
+    }),
+  listCustomBackgrounds: () =>
+    invoke<{ id: string; fileName: string }[]>("list_custom_backgrounds"),
+  deleteCustomBackground: (id: string) =>
+    invoke<void>("delete_custom_background", { id }),
+
   // Save path: use `@tauri-apps/plugin-dialog` `save()` — never a blocking Rust picker.
   beginExport: (path: string) => invoke<number>("begin_export", { path }),
   // Chunk is the whole invoke arg; handle/position ride in headers for out-of-order muxers.

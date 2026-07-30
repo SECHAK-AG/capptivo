@@ -1,10 +1,13 @@
 //! `media://` custom protocol with HTTP Range support (§10). The editor's
 //! `<video>` elements and mediabunny's chunked reads need byte-range requests;
 //! without them, every seek in a multi-GB recording re-reads the whole file and
-//! export crawls. Reads are strictly scoped inside the projects directory.
+//! export crawls.
 //!
-//! URL shape: `media://localhost/<projectId>/<file>` (e.g. `.../screen.mp4`).
+//! URL shapes (both rooted under the app data dir):
+//! - `media://localhost/<projectId>/<file>` → `projects/<projectId>/<file>`
+//! - `media://localhost/_backgrounds/<file>` → `backgrounds/<file>`
 
+use crate::backgrounds::MEDIA_PREFIX;
 use std::io::{Read, Seek, SeekFrom};
 use std::path::{Component, Path, PathBuf};
 use tauri::http::{header, Request, Response, StatusCode};
@@ -15,10 +18,10 @@ const WHOLE_FILE_CAP: u64 = 16 * 1024 * 1024;
 /// The window returned for an over-cap no-Range GET.
 const WHOLE_FILE_WINDOW: u64 = 8 * 1024 * 1024;
 
-/// Serve a `media://` request from within `projects_root`. Honors a single
+/// Serve a `media://` request from within `app_data`. Honors a single
 /// `Range: bytes=start-end` header with a `206 Partial Content` response.
-pub fn serve(projects_root: &Path, request: &Request<Vec<u8>>) -> Response<Vec<u8>> {
-    let Some(path) = resolve_path(projects_root, request.uri().path()) else {
+pub fn serve(app_data: &Path, request: &Request<Vec<u8>>) -> Response<Vec<u8>> {
+    let Some(path) = resolve_path(app_data, request.uri().path()) else {
         return error(StatusCode::FORBIDDEN, "invalid media path");
     };
 
@@ -114,28 +117,46 @@ fn cors(builder: tauri::http::response::Builder) -> tauri::http::response::Build
         )
 }
 
-/// Resolve a request path to an absolute file **strictly inside** `projects_root`.
-/// Rejects `..`, absolute segments, and anything that escapes the root.
-fn resolve_path(projects_root: &Path, uri_path: &str) -> Option<PathBuf> {
+/// Resolve a request path to an absolute file **strictly inside** a known
+/// subdirectory of `app_data`. Rejects `..`, absolute segments, nesting under
+/// `_backgrounds`, and anything that escapes the chosen root.
+fn resolve_path(app_data: &Path, uri_path: &str) -> Option<PathBuf> {
     let decoded = percent_decode(uri_path);
     let rel = decoded.trim_start_matches('/');
     if rel.is_empty() {
         return None;
     }
 
-    let mut resolved = projects_root.to_path_buf();
+    let mut segs: Vec<&std::ffi::OsStr> = Vec::new();
     for component in Path::new(rel).components() {
         match component {
-            Component::Normal(part) => resolved.push(part),
+            Component::Normal(part) => segs.push(part),
             // Any parent/root/prefix component is a traversal attempt.
             _ => return None,
         }
     }
+    if segs.is_empty() {
+        return None;
+    }
 
-    // Defense in depth: the canonical path must still live under the root.
-    let canonical_root = projects_root.canonicalize().ok()?;
+    let (root, rest) = if segs[0] == MEDIA_PREFIX {
+        // Exactly one filename under backgrounds/ — no nested paths.
+        if segs.len() != 2 {
+            return None;
+        }
+        (app_data.join("backgrounds"), &segs[1..])
+    } else {
+        (app_data.join("projects"), segs.as_slice())
+    };
+
+    let mut resolved = root;
+    for part in rest {
+        resolved.push(part);
+    }
+
+    let app_canon = app_data.canonicalize().ok()?;
     let canonical = resolved.canonicalize().ok()?;
-    if canonical.starts_with(&canonical_root) {
+    if canonical.starts_with(&app_canon) {
         Some(canonical)
     } else {
         None
@@ -187,6 +208,7 @@ fn content_type_for(path: &Path) -> &'static str {
         Some("json") => "application/json",
         Some("jpg") | Some("jpeg") => "image/jpeg",
         Some("png") => "image/png",
+        Some("webp") => "image/webp",
         _ => "application/octet-stream",
     }
 }
@@ -228,6 +250,37 @@ mod tests {
         assert!(resolve_path(&root, "/../etc/passwd").is_none());
         assert!(resolve_path(&root, "/a/../../b").is_none());
         assert!(resolve_path(&root, "/").is_none());
+        assert!(resolve_path(&root, "/_backgrounds/../secret").is_none());
+        assert!(resolve_path(&root, "/_backgrounds/a/b.jpg").is_none());
+    }
+
+    #[test]
+    fn resolves_background_and_project_paths() {
+        let root = std::env::temp_dir().join(format!(
+            "capptivo-media-{}-{}",
+            std::process::id(),
+            uuid::Uuid::new_v4().simple()
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+        let bg_dir = root.join("backgrounds");
+        let proj_dir = root.join("projects").join("2026-01-01-abcdef");
+        std::fs::create_dir_all(&bg_dir).unwrap();
+        std::fs::create_dir_all(&proj_dir).unwrap();
+        let bg_file = bg_dir.join("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.jpg");
+        let proj_file = proj_dir.join("screen.mp4");
+        std::fs::write(&bg_file, b"bg").unwrap();
+        std::fs::write(&proj_file, b"vid").unwrap();
+
+        let got_bg = resolve_path(
+            &root,
+            "/_backgrounds/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.jpg",
+        );
+        assert_eq!(got_bg.unwrap(), bg_file.canonicalize().unwrap());
+
+        let got_proj = resolve_path(&root, "/2026-01-01-abcdef/screen.mp4");
+        assert_eq!(got_proj.unwrap(), proj_file.canonicalize().unwrap());
+
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]

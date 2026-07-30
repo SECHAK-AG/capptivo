@@ -63,6 +63,7 @@ export interface EditorPreset {
 const BACKGROUND_SELECTIONS: readonly PersistedBackground["selection"][] = [
   "none",
   "preset",
+  "custom-image",
   "custom-color",
   "custom-gradient",
 ];

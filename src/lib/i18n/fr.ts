@@ -93,6 +93,7 @@ export const fr: Record<TranslationKey, string> = {
   "bg.color": "Couleur",
   "look.custom": "Personnalisé",
   "look.uploadImage": "Importer une image",
+  "look.deleteImage": "Supprimer l'image",
   "look.start": "Début",
   "look.end": "Fin",
   "look.angle": "Angle",

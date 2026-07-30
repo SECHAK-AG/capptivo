@@ -48,6 +48,11 @@ impl ProjectStore {
         }
     }
 
+    /// App data root — shared by projects, captions models, custom backgrounds.
+    pub fn app_data_dir(&self) -> &Path {
+        &self.root
+    }
+
     fn projects_dir(&self) -> PathBuf {
         self.root.join("projects")
     }

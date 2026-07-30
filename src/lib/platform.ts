@@ -12,7 +12,15 @@ export const MEDIA_PROTOCOL_BASE = isWindows
   ? "http://media.localhost"
   : "media://localhost";
 
+/** Reserved first path segment for the global custom-background library. */
+export const CUSTOM_BACKGROUND_MEDIA_PREFIX = "_backgrounds";
+
 /** media base + `/<projectId>/<file>` — served with HTTP Range by Rust. */
 export function mediaUrl(projectId: string, file: string): string {
   return `${MEDIA_PROTOCOL_BASE}/${projectId}/${file}`;
+}
+
+/** Global custom background file under `{app_data}/backgrounds/`. */
+export function customBackgroundUrl(fileName: string): string {
+  return `${MEDIA_PROTOCOL_BASE}/${CUSTOM_BACKGROUND_MEDIA_PREFIX}/${fileName}`;
 }

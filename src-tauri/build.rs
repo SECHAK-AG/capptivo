@@ -57,6 +57,10 @@ fn main() {
         "rename_project",
         "delete_project",
         "ensure_thumbnail",
+        // custom backgrounds
+        "save_custom_background",
+        "list_custom_backgrounds",
+        "delete_custom_background",
         // export
         "ensure_seekable_recording",
         "begin_export",

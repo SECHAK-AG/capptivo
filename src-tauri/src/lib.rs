@@ -54,6 +54,7 @@ mod area_picker {
     }
     pub fn hide_area_frame_guide(_app: &AppHandle) {}
 }
+mod backgrounds;
 mod cursor;
 mod error;
 mod media_protocol;
@@ -79,15 +80,15 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
-        // media://<projectId>/<file> — Range-capable local media (§10).
+        // media:// — Range-capable local media (§10). Project files under
+        // `projects/<id>/…`; custom backgrounds under `_backgrounds/<file>`.
         .register_uri_scheme_protocol("media", |ctx, request| {
             let app = ctx.app_handle();
-            let projects_root = app
+            let app_data = app
                 .path()
                 .app_data_dir()
-                .map(|dir| dir.join("projects"))
-                .unwrap_or_else(|_| std::env::temp_dir().join("Capptivo").join("projects"));
-            media_protocol::serve(&projects_root, &request)
+                .unwrap_or_else(|_| std::env::temp_dir().join("Capptivo"));
+            media_protocol::serve(&app_data, &request)
         })
         .setup(|app| {
             let handle = app.handle().clone();

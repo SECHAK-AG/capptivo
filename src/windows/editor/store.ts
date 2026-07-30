@@ -85,8 +85,24 @@ import { updateCaptionListText } from "@/captions/editCueText";
 import { listen } from "@tauri-apps/api/event";
 
 /** Re-export; platform-aware media URL lives in `@/lib/platform`. */
-import { mediaUrl } from "@/lib/platform";
+import { customBackgroundUrl, mediaUrl, MEDIA_PROTOCOL_BASE } from "@/lib/platform";
 export { mediaUrl };
+
+export interface CustomBackgroundInfo {
+  id: string;
+  fileName: string;
+}
+
+export function customBackgroundPreset(info: CustomBackgroundInfo): BackgroundPreset {
+  const src = customBackgroundUrl(info.fileName);
+  return {
+    id: info.id,
+    label: "Custom",
+    type: "image",
+    src,
+    previewCss: `url("${src}")`,
+  };
+}
 
 export interface LookParams {
   devicePadding: number;
@@ -144,7 +160,7 @@ function parseFaceCamCorner(raw: unknown): FaceCamCorner {
 /** Persisted background selection (ids/params only; src regenerated on load). */
 export interface PersistedBackground {
   type: BackgroundType;
-  selection: "none" | "preset" | "custom-color" | "custom-gradient";
+  selection: "none" | "preset" | "custom-image" | "custom-color" | "custom-gradient";
   presetId: string | null;
   customColor: string;
   customGradientStart: string;
@@ -164,12 +180,16 @@ function snapshotBackground(s: EditorStore): PersistedBackground {
     if (preset) {
       selection = "preset";
       presetId = preset.id;
-    } else if (s.customImageBackground && src === s.customImageBackground.src) {
-      selection = "none";
-    } else if (s.backgroundType === "gradient") {
-      selection = "custom-gradient";
-    } else if (s.backgroundType === "color") {
-      selection = "custom-color";
+    } else {
+      const custom = s.customImageBackgrounds.find((p) => p.src === src);
+      if (custom) {
+        selection = "custom-image";
+        presetId = custom.id;
+      } else if (s.backgroundType === "gradient") {
+        selection = "custom-gradient";
+      } else if (s.backgroundType === "color") {
+        selection = "custom-color";
+      }
     }
   }
 
@@ -187,6 +207,7 @@ function snapshotBackground(s: EditorStore): PersistedBackground {
 const BACKGROUND_SELECTIONS: readonly PersistedBackground["selection"][] = [
   "none",
   "preset",
+  "custom-image",
   "custom-color",
   "custom-gradient",
 ];
@@ -357,8 +378,8 @@ interface EditorStore {
   imagePresets: BackgroundPreset[];
   gradientPresets: BackgroundPreset[];
   colorPresets: BackgroundPreset[];
-  /** User-uploaded image background (object URL), shown alongside the presets. */
-  customImageBackground: BackgroundPreset | null;
+  /** User-uploaded images from the global app-data library. */
+  customImageBackgrounds: BackgroundPreset[];
 
   init: (projectId: string) => Promise<void>;
   onVideoLoaded: (width: number, height: number, duration: number) => void;
@@ -366,7 +387,8 @@ interface EditorStore {
   selectBackground: (preset: BackgroundPreset) => void;
   /** Clear the composition background (clicking the active swatch again). */
   clearBackground: () => void;
-  uploadCustomBackground: (file: File) => void;
+  uploadCustomBackground: (file: File) => Promise<void>;
+  deleteCustomBackground: (id: string) => Promise<void>;
   setCustomColor: (color: string) => void;
   applyCustomGradient: (angle: number, start: string, end: string) => void;
   setLook: <K extends keyof LookParams>(key: K, value: number) => void;
@@ -463,10 +485,20 @@ function scheduleProxyWaitTimeout(projectId: string, get: () => EditorStore): vo
 function loadImage(src: string): Promise<HTMLImageElement> {
   return new Promise((resolve, reject) => {
     const img = new Image();
+    // media:// is cross-origin on WKWebView; CORS is advertised by the protocol.
+    if (src.startsWith(MEDIA_PROTOCOL_BASE) || src.startsWith("media:")) {
+      img.crossOrigin = "anonymous";
+    }
     img.onload = () => resolve(img);
     img.onerror = () => reject(new Error(`failed to load background: ${src}`));
     img.src = src;
   });
+}
+
+function extensionFromFileName(name: string): string {
+  const dot = name.lastIndexOf(".");
+  if (dot < 0) return "jpg";
+  return name.slice(dot + 1).toLowerCase() || "jpg";
 }
 
 function snapshotOf(s: EditorStore): TimelineSnapshot {
@@ -760,7 +792,7 @@ export const useEditorStore = create<EditorStore>((set, get) => ({
   imagePresets: buildImageBackgroundPresets(),
   gradientPresets: buildGradientBackgroundPresets(),
   colorPresets: buildColorBackgroundPresets(),
-  customImageBackground: null,
+  customImageBackgrounds: [],
 
   async init(projectId) {
     await flushPersist(get);
@@ -803,11 +835,15 @@ export const useEditorStore = create<EditorStore>((set, get) => ({
       customGradientStart: "#8BC6EC",
       customGradientEnd: "#9599E2",
       customGradientAngle: 135,
+      customImageBackgrounds: [],
       inspectorPanel: get().inspectorPanel === "camera" ? "look" : get().inspectorPanel,
     });
     invalidateZoomKeyframesCache();
     try {
-      const project = await commands.loadProject(projectId);
+      const [project, customs] = await Promise.all([
+        commands.loadProject(projectId),
+        commands.listCustomBackgrounds().catch(() => [] as CustomBackgroundInfo[]),
+      ]);
       set({
         projectId,
         project,
@@ -815,6 +851,7 @@ export const useEditorStore = create<EditorStore>((set, get) => ({
         cameraUrl: project.files.camera
           ? mediaUrl(projectId, project.files.camera)
           : null,
+        customImageBackgrounds: customs.map(customBackgroundPreset),
         ready: true,
         error: null,
       });
@@ -883,6 +920,13 @@ export const useEditorStore = create<EditorStore>((set, get) => ({
           (p) => p.id === bg.presetId,
         );
         if (preset) get().selectBackground(preset);
+        else {
+          const first = get().imagePresets[0];
+          if (first) get().selectBackground(first);
+        }
+      } else if (bg.selection === "custom-image" && bg.presetId) {
+        const custom = get().customImageBackgrounds.find((p) => p.id === bg.presetId);
+        if (custom) get().selectBackground(custom);
         else {
           const first = get().imagePresets[0];
           if (first) get().selectBackground(first);
@@ -975,19 +1019,31 @@ export const useEditorStore = create<EditorStore>((set, get) => ({
   },
 
   uploadCustomBackground(file) {
-    const previous = get().customImageBackground;
-    if (previous) URL.revokeObjectURL(previous.src);
+    const ext = extensionFromFileName(file.name);
+    return file.arrayBuffer().then(async (buf) => {
+      const saved = await commands.saveCustomBackground(new Uint8Array(buf), ext);
+      const preset = customBackgroundPreset(saved);
+      set((s) => ({
+        customImageBackgrounds: [
+          preset,
+          ...s.customImageBackgrounds.filter((p) => p.id !== preset.id),
+        ],
+      }));
+      get().selectBackground(preset);
+    });
+  },
 
-    const src = URL.createObjectURL(file);
-    const preset: BackgroundPreset = {
-      id: "img-custom",
-      label: file.name || "Custom",
-      type: "image",
-      src,
-      previewCss: `url("${src}")`,
-    };
-    set({ customImageBackground: preset });
-    get().selectBackground(preset);
+  async deleteCustomBackground(id) {
+    await commands.deleteCustomBackground(id);
+    const removed = get().customImageBackgrounds.find((p) => p.id === id);
+    set((s) => ({
+      customImageBackgrounds: s.customImageBackgrounds.filter((p) => p.id !== id),
+    }));
+    if (removed && get().selectedBackground === removed.src) {
+      get().clearBackground();
+    } else {
+      schedulePersist(get);
+    }
   },
 
   setCustomColor(color) {
@@ -1516,7 +1572,7 @@ export const useEditorStore = create<EditorStore>((set, get) => ({
 
   applyEditorPresetSnapshot(snapshot) {
     const bg = snapshot.background;
-    const { imagePresets, gradientPresets, colorPresets } = get();
+    const { imagePresets, gradientPresets, colorPresets, customImageBackgrounds } = get();
 
     let selectedBackground: string | null = null;
     let backgroundSrcToLoad: string | null = null;
@@ -1528,6 +1584,12 @@ export const useEditorStore = create<EditorStore>((set, get) => ({
       if (preset) {
         selectedBackground = preset.src;
         backgroundSrcToLoad = preset.src;
+      }
+    } else if (bg.selection === "custom-image" && bg.presetId) {
+      const custom = customImageBackgrounds.find((p) => p.id === bg.presetId);
+      if (custom) {
+        selectedBackground = custom.src;
+        backgroundSrcToLoad = custom.src;
       }
     } else if (bg.selection === "custom-color") {
       selectedBackground = colorToDataUrl(bg.customColor);

@@ -2,8 +2,9 @@
 //! adapter over a domain module. Registered in one place via
 //! [`generate_handler!`](crate::commands::handlers).
 
-pub mod export;
+pub mod backgrounds;
 pub mod captions;
+pub mod export;
 pub mod project;
 pub mod recording;
 
@@ -65,6 +66,10 @@ macro_rules! command_handlers {
             $crate::commands::project::rename_project,
             $crate::commands::project::delete_project,
             $crate::commands::project::ensure_thumbnail,
+            // custom backgrounds (global library under app data)
+            $crate::commands::backgrounds::save_custom_background,
+            $crate::commands::backgrounds::list_custom_backgrounds,
+            $crate::commands::backgrounds::delete_custom_background,
             // export
             $crate::commands::export::ensure_seekable_recording,
             $crate::commands::export::begin_export,

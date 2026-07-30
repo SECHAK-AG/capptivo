@@ -105,41 +105,65 @@ function ImageGrid() {
   const presets = useEditorStore((s) => s.imagePresets);
   const selected = useEditorStore((s) => s.selectedBackground);
   const select = useEditorStore((s) => s.selectBackground);
-  const customImage = useEditorStore((s) => s.customImageBackground);
-  const uploadCustomBackground = useEditorStore(
-    (s) => s.uploadCustomBackground,
+  const customs = useEditorStore((s) => s.customImageBackgrounds);
+  const uploadCustomBackground = useEditorStore((s) => s.uploadCustomBackground);
+  const deleteCustomBackground = useEditorStore((s) => s.deleteCustomBackground);
+  const [menu, setMenu] = useState<{ id: string; x: number; y: number } | null>(
+    null,
   );
 
   const onPickFile = (e: ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
-    if (file) uploadCustomBackground(file);
+    if (file) void uploadCustomBackground(file);
     e.target.value = ""; // let the same file be re-picked
   };
 
-  const swatch = (preset: BackgroundPreset) => (
+  const closeMenu = () => setMenu(null);
+
+  const swatch = (preset: BackgroundPreset, custom: boolean) => (
     <button
       key={preset.id}
       type="button"
       title={preset.label}
-      onClick={() => select(preset)}
+      onClick={() => {
+        closeMenu();
+        select(preset);
+      }}
+      onContextMenu={
+        custom
+          ? (e) => {
+              e.preventDefault();
+              setMenu({ id: preset.id, x: e.clientX, y: e.clientY });
+            }
+          : undefined
+      }
       className={cn(
         "relative aspect-4/3 w-full overflow-hidden rounded-lg border text-left transition-colors",
         selected === preset.src ? selectedRing : idleRing,
       )}
     >
       {/* Inner layer: bg must not share the bordered box — avoids 1px edge blur in WKWebView. */}
-      <span
-        className="absolute inset-0 bg-cover bg-center"
-        style={{ backgroundImage: preset.previewCss }}
-        aria-hidden
-      />
+      {custom ? (
+        <img
+          src={preset.src}
+          alt=""
+          className="absolute inset-0 h-full w-full object-cover"
+          draggable={false}
+        />
+      ) : (
+        <span
+          className="absolute inset-0 bg-cover bg-center"
+          style={{ backgroundImage: preset.previewCss }}
+          aria-hidden
+        />
+      )}
     </button>
   );
 
   return (
     <div className="grid grid-cols-6 gap-1.5">
-      {presets.map(swatch)}
-      {customImage && swatch(customImage)}
+      {presets.map((p) => swatch(p, false))}
+      {customs.map((p) => swatch(p, true))}
 
       <label
         title={t("look.uploadImage")}
@@ -150,13 +174,44 @@ function ImageGrid() {
       >
         <input
           type="file"
-          accept="image/*"
+          accept="image/jpeg,image/png,image/webp,.jpg,.jpeg,.png,.webp"
           onChange={onPickFile}
           className="sr-only"
         />
         <Plus className="size-5" strokeWidth={2} />
         <span className="sr-only">{t("look.uploadImage")}</span>
       </label>
+
+      {menu ? (
+        <>
+          <div
+            className="fixed inset-0 z-40"
+            onClick={closeMenu}
+            onContextMenu={(e) => {
+              e.preventDefault();
+              closeMenu();
+            }}
+          />
+          <div
+            role="menu"
+            className="fixed z-50 min-w-32 rounded-md border border-border bg-popover p-1 text-popover-foreground shadow-lg"
+            style={{ left: menu.x, top: menu.y }}
+          >
+            <button
+              type="button"
+              role="menuitem"
+              className="flex w-full cursor-default items-center rounded-sm px-2 py-1.5 text-sm text-destructive outline-none hover:bg-accent"
+              onClick={() => {
+                const id = menu.id;
+                closeMenu();
+                void deleteCustomBackground(id);
+              }}
+            >
+              {t("look.deleteImage")}
+            </button>
+          </div>
+        </>
+      ) : null}
     </div>
   );
 }
