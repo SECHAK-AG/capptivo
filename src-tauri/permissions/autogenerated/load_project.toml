@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-load-project"
+description = "Enables the load_project command without any pre-configured scope."
+commands.allow = ["load_project"]
+
+[[permission]]
+identifier = "deny-load-project"
+description = "Denies the load_project command without any pre-configured scope."
+commands.deny = ["load_project"]

@@ -1,0 +1,7 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "area-picker",
+  "description": "Region picker: commit or cancel the pending area selection only.",
+  "windows": ["area-picker"],
+  "permissions": ["allow-complete-area-pick", "allow-cancel-area-pick"]
+}

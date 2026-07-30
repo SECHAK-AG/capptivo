@@ -92,7 +92,7 @@ export function EditorApp() {
   // before destroy so the last edit lands.
   //
   // `onCloseRequested` intercepts the close; we `preventDefault`, persist, then
-  // `destroy()`. Needs `core:window:allow-destroy` (capabilities/default.json).
+  // `destroy()`. Needs `core:window:allow-destroy` (capabilities/editor.json).
   useEffect(() => {
     const flush = () => useEditorStore.getState().flushEditorPersist();
     const onPageHide = () => {

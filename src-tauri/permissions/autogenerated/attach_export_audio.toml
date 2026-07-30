@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-attach-export-audio"
+description = "Enables the attach_export_audio command without any pre-configured scope."
+commands.allow = ["attach_export_audio"]
+
+[[permission]]
+identifier = "deny-attach-export-audio"
+description = "Denies the attach_export_audio command without any pre-configured scope."
+commands.deny = ["attach_export_audio"]

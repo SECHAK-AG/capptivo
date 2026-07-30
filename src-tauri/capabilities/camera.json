@@ -1,0 +1,12 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "camera",
+  "description": "Camera bubble: write camera WebM chunks only. No recording control or project delete.",
+  "windows": ["camera"],
+  "permissions": [
+    "core:window:allow-start-dragging",
+    "allow-begin-camera-file",
+    "allow-write-camera-chunk",
+    "allow-finish-camera-file"
+  ]
+}

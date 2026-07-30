@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-begin-export"
+description = "Enables the begin_export command without any pre-configured scope."
+commands.allow = ["begin_export"]
+
+[[permission]]
+identifier = "deny-begin-export"
+description = "Denies the begin_export command without any pre-configured scope."
+commands.deny = ["begin_export"]

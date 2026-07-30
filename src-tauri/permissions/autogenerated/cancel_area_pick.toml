@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-cancel-area-pick"
+description = "Enables the cancel_area_pick command without any pre-configured scope."
+commands.allow = ["cancel_area_pick"]
+
+[[permission]]
+identifier = "deny-cancel-area-pick"
+description = "Denies the cancel_area_pick command without any pre-configured scope."
+commands.deny = ["cancel_area_pick"]

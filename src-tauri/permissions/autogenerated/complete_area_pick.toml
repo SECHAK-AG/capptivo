@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-complete-area-pick"
+description = "Enables the complete_area_pick command without any pre-configured scope."
+commands.allow = ["complete_area_pick"]
+
+[[permission]]
+identifier = "deny-complete-area-pick"
+description = "Denies the complete_area_pick command without any pre-configured scope."
+commands.deny = ["complete_area_pick"]

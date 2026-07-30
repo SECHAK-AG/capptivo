@@ -8,7 +8,8 @@ pub mod project;
 pub mod recording;
 
 /// The full invoke handler. Referenced from `lib.rs`. Adding a command means
-/// adding it here and nowhere else.
+/// adding it here, to `COMMANDS` in `build.rs`, and to the matching capability
+/// under `capabilities/` (ACL is deny-by-default once `AppManifest::commands` is set).
 #[macro_export]
 macro_rules! command_handlers {
     () => {

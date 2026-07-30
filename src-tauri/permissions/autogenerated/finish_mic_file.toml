@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-finish-mic-file"
+description = "Enables the finish_mic_file command without any pre-configured scope."
+commands.allow = ["finish_mic_file"]
+
+[[permission]]
+identifier = "deny-finish-mic-file"
+description = "Denies the finish_mic_file command without any pre-configured scope."
+commands.deny = ["finish_mic_file"]

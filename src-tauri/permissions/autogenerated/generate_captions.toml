@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-generate-captions"
+description = "Enables the generate_captions command without any pre-configured scope."
+commands.allow = ["generate_captions"]
+
+[[permission]]
+identifier = "deny-generate-captions"
+description = "Denies the generate_captions command without any pre-configured scope."
+commands.deny = ["generate_captions"]

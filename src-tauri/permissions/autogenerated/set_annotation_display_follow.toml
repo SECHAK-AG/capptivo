@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-set-annotation-display-follow"
+description = "Enables the set_annotation_display_follow command without any pre-configured scope."
+commands.allow = ["set_annotation_display_follow"]
+
+[[permission]]
+identifier = "deny-set-annotation-display-follow"
+description = "Denies the set_annotation_display_follow command without any pre-configured scope."
+commands.deny = ["set_annotation_display_follow"]

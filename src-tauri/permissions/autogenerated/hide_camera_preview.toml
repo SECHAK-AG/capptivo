@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-hide-camera-preview"
+description = "Enables the hide_camera_preview command without any pre-configured scope."
+commands.allow = ["hide_camera_preview"]
+
+[[permission]]
+identifier = "deny-hide-camera-preview"
+description = "Denies the hide_camera_preview command without any pre-configured scope."
+commands.deny = ["hide_camera_preview"]

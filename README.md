@@ -68,16 +68,16 @@ Captions need a system [whisper.cpp](https://github.com/ggerganov/whisper.cpp)
 
 1. Bump `version` in `package.json`, `src-tauri/tauri.conf.json`, and
    `src-tauri/Cargo.toml` (keep them identical).
-2. Commit, then tag and push:
+2. Build installers locally with `pnpm tauri build` on each target platform
+   (or your own release process).
+3. Commit, tag, and push, then attach the installers to a
+   [GitHub Release](https://github.com/SECHAK-AG/capptivo/releases):
 
 ```bash
 git tag v0.1.0
 git push origin main
 git push origin v0.1.0
 ```
-
-3. The **Release** workflow builds macOS / Windows / Linux and opens a **draft**
-   GitHub Release with the installers. Review assets → Publish.
 
 ---
 
@@ -266,12 +266,9 @@ src-tauri/src/
 
 ```bash
 pnpm tauri dev                 # app + Vite
-cd src-tauri && cargo test     # pipeline tests (needs ffmpeg)
+cd src-tauri && cargo test --no-default-features
 cargo check --no-default-features
 ```
-
-CI runs frontend typecheck and `cargo check` / `cargo test --no-default-features`
-on every PR. Tagged releases (`v*`) build installers via `.github/workflows/release.yml`.
 
 ---
 

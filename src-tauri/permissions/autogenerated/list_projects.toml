@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-list-projects"
+description = "Enables the list_projects command without any pre-configured scope."
+commands.allow = ["list_projects"]
+
+[[permission]]
+identifier = "deny-list-projects"
+description = "Denies the list_projects command without any pre-configured scope."
+commands.deny = ["list_projects"]

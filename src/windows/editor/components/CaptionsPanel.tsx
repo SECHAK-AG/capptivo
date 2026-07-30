@@ -21,6 +21,7 @@ import { useEditorStore } from "../store";
 import { cn } from "../lib/cn";
 import { SectionLabel } from "./ui";
 import { CaptionStyleControls } from "./CaptionStyleControls";
+import { CaptionEditSheet } from "./CaptionEditSheet";
 
 const LANGUAGES = [
   { value: "auto", label: "Auto detect" },
@@ -38,6 +39,9 @@ export function CaptionsPanel({ visible }: { visible: boolean }) {
   const setCaptionSettings = useEditorStore((s) => s.setCaptionSettings);
   const generateCaptions = useEditorStore((s) => s.generateCaptions);
   const clearCaptions = useEditorStore((s) => s.clearCaptions);
+  const updateCaptionTexts = useEditorStore((s) => s.updateCaptionTexts);
+  const setCurrentTime = useEditorStore((s) => s.setCurrentTime);
+  const setPlaying = useEditorStore((s) => s.setPlaying);
 
   const [modelReady, setModelReady] = useState(false);
   const [downloadPct, setDownloadPct] = useState(0);
@@ -189,6 +193,15 @@ export function CaptionsPanel({ visible }: { visible: boolean }) {
           </p>
         ) : null}
       </section>
+
+      <CaptionEditSheet
+        captions={captions}
+        onSubmit={updateCaptionTexts}
+        onSeek={(timeSec) => {
+          setPlaying(false);
+          setCurrentTime(timeSec);
+        }}
+      />
 
       <CaptionStyleControls
         hasCaptions={cueCount > 0}

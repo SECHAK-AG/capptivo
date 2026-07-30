@@ -81,6 +81,7 @@ import {
   parseCaptionSettings,
 } from "@/captions/types";
 import { buildCaptionsFromWhisper } from "@/captions/pipeline";
+import { updateCaptionListText } from "@/captions/editCueText";
 import { listen } from "@tauri-apps/api/event";
 
 /** Re-export; platform-aware media URL lives in `@/lib/platform`. */
@@ -377,6 +378,10 @@ interface EditorStore {
   setCaptionSettings: (patch: Partial<CaptionSettings>) => void;
   generateCaptions: () => Promise<void>;
   clearCaptions: () => void;
+  /** Fix Whisper typos; timings kept when token count still matches. */
+  updateCaptionText: (cueId: string, text: string) => void;
+  /** Batch edits from the caption sheet — one persist. */
+  updateCaptionTexts: (updates: { id: string; text: string }[]) => void;
   setPlaying: (playing: boolean) => void;
   setCurrentTime: (time: number) => void;
   setMuted: (muted: boolean) => void;
@@ -1104,6 +1109,29 @@ export const useEditorStore = create<EditorStore>((set, get) => ({
       captionSettings: { ...get().captionSettings, enabled: false },
       captionError: null,
     });
+    schedulePersist(get);
+  },
+
+  updateCaptionText(cueId, text) {
+    const captions = updateCaptionListText(get().captions, cueId, text);
+    if (captions === get().captions) return;
+    set({ captions });
+    schedulePersist(get);
+  },
+
+  updateCaptionTexts(updates) {
+    if (updates.length === 0) return;
+    let captions = get().captions;
+    let changed = false;
+    for (const { id, text } of updates) {
+      const next = updateCaptionListText(captions, id, text);
+      if (next !== captions) {
+        captions = next;
+        changed = true;
+      }
+    }
+    if (!changed) return;
+    set({ captions });
     schedulePersist(get);
   },
 

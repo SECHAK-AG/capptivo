@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-finish-export"
+description = "Enables the finish_export command without any pre-configured scope."
+commands.allow = ["finish_export"]
+
+[[permission]]
+identifier = "deny-finish-export"
+description = "Denies the finish_export command without any pre-configured scope."
+commands.deny = ["finish_export"]

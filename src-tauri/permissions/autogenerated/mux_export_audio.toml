@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-mux-export-audio"
+description = "Enables the mux_export_audio command without any pre-configured scope."
+commands.allow = ["mux_export_audio"]
+
+[[permission]]
+identifier = "deny-mux-export-audio"
+description = "Denies the mux_export_audio command without any pre-configured scope."
+commands.deny = ["mux_export_audio"]

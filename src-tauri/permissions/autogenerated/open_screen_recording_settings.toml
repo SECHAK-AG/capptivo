@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-open-screen-recording-settings"
+description = "Enables the open_screen_recording_settings command without any pre-configured scope."
+commands.allow = ["open_screen_recording_settings"]
+
+[[permission]]
+identifier = "deny-open-screen-recording-settings"
+description = "Denies the open_screen_recording_settings command without any pre-configured scope."
+commands.deny = ["open_screen_recording_settings"]

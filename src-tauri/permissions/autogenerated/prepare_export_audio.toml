@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-prepare-export-audio"
+description = "Enables the prepare_export_audio command without any pre-configured scope."
+commands.allow = ["prepare_export_audio"]
+
+[[permission]]
+identifier = "deny-prepare-export-audio"
+description = "Denies the prepare_export_audio command without any pre-configured scope."
+commands.deny = ["prepare_export_audio"]

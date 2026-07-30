@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-show-area-frame-guide"
+description = "Enables the show_area_frame_guide command without any pre-configured scope."
+commands.allow = ["show_area_frame_guide"]
+
+[[permission]]
+identifier = "deny-show-area-frame-guide"
+description = "Denies the show_area_frame_guide command without any pre-configured scope."
+commands.deny = ["show_area_frame_guide"]

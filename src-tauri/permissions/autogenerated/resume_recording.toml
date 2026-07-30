@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-resume-recording"
+description = "Enables the resume_recording command without any pre-configured scope."
+commands.allow = ["resume_recording"]
+
+[[permission]]
+identifier = "deny-resume-recording"
+description = "Denies the resume_recording command without any pre-configured scope."
+commands.deny = ["resume_recording"]

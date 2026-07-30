@@ -1,0 +1,15 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "core",
+  "description": "Baseline IPC every Capptivo webview needs (events, path helpers, read-only window queries). Destructive plugins and app commands live in per-window capabilities.",
+  "windows": [
+    "recorder",
+    "library",
+    "camera",
+    "annotation",
+    "editor:*",
+    "area-picker",
+    "area-frame"
+  ],
+  "permissions": ["core:default"]
+}

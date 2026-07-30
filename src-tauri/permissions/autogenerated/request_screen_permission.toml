@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-request-screen-permission"
+description = "Enables the request_screen_permission command without any pre-configured scope."
+commands.allow = ["request_screen_permission"]
+
+[[permission]]
+identifier = "deny-request-screen-permission"
+description = "Denies the request_screen_permission command without any pre-configured scope."
+commands.deny = ["request_screen_permission"]

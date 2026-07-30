@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-begin-mic-file"
+description = "Enables the begin_mic_file command without any pre-configured scope."
+commands.allow = ["begin_mic_file"]
+
+[[permission]]
+identifier = "deny-begin-mic-file"
+description = "Denies the begin_mic_file command without any pre-configured scope."
+commands.deny = ["begin_mic_file"]

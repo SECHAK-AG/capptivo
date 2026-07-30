@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-flush-mic-capture"
+description = "Enables the flush_mic_capture command without any pre-configured scope."
+commands.allow = ["flush_mic_capture"]
+
+[[permission]]
+identifier = "deny-flush-mic-capture"
+description = "Denies the flush_mic_capture command without any pre-configured scope."
+commands.deny = ["flush_mic_capture"]

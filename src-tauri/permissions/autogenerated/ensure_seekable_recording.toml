@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-ensure-seekable-recording"
+description = "Enables the ensure_seekable_recording command without any pre-configured scope."
+commands.allow = ["ensure_seekable_recording"]
+
+[[permission]]
+identifier = "deny-ensure-seekable-recording"
+description = "Denies the ensure_seekable_recording command without any pre-configured scope."
+commands.deny = ["ensure_seekable_recording"]

@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-get-whisper-model-status"
+description = "Enables the get_whisper_model_status command without any pre-configured scope."
+commands.allow = ["get_whisper_model_status"]
+
+[[permission]]
+identifier = "deny-get-whisper-model-status"
+description = "Denies the get_whisper_model_status command without any pre-configured scope."
+commands.deny = ["get_whisper_model_status"]

@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-save-editor-state"
+description = "Enables the save_editor_state command without any pre-configured scope."
+commands.allow = ["save_editor_state"]
+
+[[permission]]
+identifier = "deny-save-editor-state"
+description = "Denies the save_editor_state command without any pre-configured scope."
+commands.deny = ["save_editor_state"]

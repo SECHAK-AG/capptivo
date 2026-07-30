@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-present-window"
+description = "Enables the present_window command without any pre-configured scope."
+commands.allow = ["present_window"]
+
+[[permission]]
+identifier = "deny-present-window"
+description = "Denies the present_window command without any pre-configured scope."
+commands.deny = ["present_window"]

@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-platform-capabilities"
+description = "Enables the platform_capabilities command without any pre-configured scope."
+commands.allow = ["platform_capabilities"]
+
+[[permission]]
+identifier = "deny-platform-capabilities"
+description = "Denies the platform_capabilities command without any pre-configured scope."
+commands.deny = ["platform_capabilities"]
