@@ -17,21 +17,24 @@ import {
 import { FieldLabelWithHint } from "@/components/ui/field-label-with-hint";
 import { commands } from "@/ipc/bindings";
 import { captionsHaveWordTimings } from "@/captions/captionTiming";
+import type { TranslationKey } from "@/lib/i18n";
+import { useI18n } from "@/lib/settings";
 import { useEditorStore } from "../store";
 import { cn } from "../lib/cn";
 import { SectionLabel } from "./ui";
 import { CaptionStyleControls } from "./CaptionStyleControls";
 import { CaptionEditSheet } from "./CaptionEditSheet";
 
-const LANGUAGES = [
-  { value: "auto", label: "Auto detect" },
-  { value: "en", label: "English" },
-  { value: "fr", label: "French" },
-  { value: "es", label: "Spanish" },
-  { value: "de", label: "German" },
+const WHISPER_LANGUAGES: { value: string; labelKey: TranslationKey }[] = [
+  { value: "auto", labelKey: "captions.lang.auto" },
+  { value: "en", labelKey: "captions.lang.en" },
+  { value: "fr", labelKey: "captions.lang.fr" },
+  { value: "es", labelKey: "captions.lang.es" },
+  { value: "de", labelKey: "captions.lang.de" },
 ];
 
 export function CaptionsPanel({ visible }: { visible: boolean }) {
+  const { t } = useI18n();
   const captionSettings = useEditorStore((s) => s.captionSettings);
   const captions = useEditorStore((s) => s.captions);
   const captionGenerating = useEditorStore((s) => s.captionGenerating);
@@ -103,12 +106,11 @@ export function CaptionsPanel({ visible }: { visible: boolean }) {
   return (
     <div className={cn("flex flex-col gap-4", !visible && "hidden")}>
       <p className="text-[11px] leading-snug text-muted-foreground">
-        Transcribes audio from the screen recording (where the mic is muxed). Shown in preview
-        and burned into export when enabled.
+        {t("captions.desc")}
       </p>
 
       <section className="space-y-2">
-        <SectionLabel>Language</SectionLabel>
+        <SectionLabel>{t("captions.language")}</SectionLabel>
         <Select
           value={captionSettings.language}
           onValueChange={(v) => setCaptionSettings({ language: v })}
@@ -117,9 +119,9 @@ export function CaptionsPanel({ visible }: { visible: boolean }) {
             <SelectValue />
           </SelectTrigger>
           <SelectContent>
-            {LANGUAGES.map((l) => (
+            {WHISPER_LANGUAGES.map((l) => (
               <SelectItem key={l.value} value={l.value}>
-                {l.label}
+                {t(l.labelKey)}
               </SelectItem>
             ))}
           </SelectContent>
@@ -127,8 +129,8 @@ export function CaptionsPanel({ visible }: { visible: boolean }) {
       </section>
 
       <section className="space-y-2">
-        <FieldLabelWithHint className="text-xs" hint="One-time download for on-device transcription.">
-          Speech model
+        <FieldLabelWithHint className="text-xs" hint={t("captions.model.hint")}>
+          {t("captions.model")}
         </FieldLabelWithHint>
         <div className="flex flex-wrap gap-2">
           <Button
@@ -139,10 +141,10 @@ export function CaptionsPanel({ visible }: { visible: boolean }) {
             onClick={() => void commands.downloadWhisperModel().then(() => refreshModel())}
           >
             {downloading
-              ? `Downloading ${downloadPct}%`
+              ? t("captions.model.downloading", { percent: downloadPct })
               : modelReady
-                ? "Model ready"
-                : "Download model"}
+                ? t("captions.model.ready")
+                : t("captions.model.download")}
           </Button>
           {modelReady ? (
             <Button
@@ -152,7 +154,7 @@ export function CaptionsPanel({ visible }: { visible: boolean }) {
               className="text-muted-foreground"
               onClick={() => void commands.deleteWhisperModel().then(() => refreshModel())}
             >
-              Remove model
+              {t("captions.model.remove")}
             </Button>
           ) : null}
         </div>
@@ -169,12 +171,14 @@ export function CaptionsPanel({ visible }: { visible: boolean }) {
             {captionGenerating ? (
               <>
                 <Loader2 className="size-3.5 animate-spin" />
-                {genPhase === "transcribing" ? "Transcribing…" : "Preparing…"}
+                {genPhase === "transcribing"
+                  ? t("captions.transcribing")
+                  : t("captions.preparing")}
               </>
             ) : cueCount > 0 ? (
-              "Regenerate captions"
+              t("captions.regenerate")
             ) : (
-              "Generate captions"
+              t("captions.generate")
             )}
           </Button>
           <Button
@@ -184,7 +188,7 @@ export function CaptionsPanel({ visible }: { visible: boolean }) {
             disabled={cueCount === 0 || captionGenerating}
             onClick={() => clearCaptions()}
           >
-            Clear
+            {t("captions.clear")}
           </Button>
         </div>
         {captionError ? (
