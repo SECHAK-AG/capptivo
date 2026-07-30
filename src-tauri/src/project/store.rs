@@ -14,6 +14,10 @@ use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 
+/// The per-project manifest. [`write_json_atomic`] stages it through
+/// `project.tmp`, which is why concurrent writers must share `manifest_write`.
+const PROJECT_FILE: &str = "project.json";
+
 pub struct ProjectStore {
     root: PathBuf,
     /// Serializes the read-modify-write sequences on `project.json`.
@@ -129,26 +133,61 @@ impl ProjectStore {
             files.camera = Some("camera.mp4".into());
         }
 
-        let project = Project {
-            schema_version: SCHEMA_VERSION,
-            id: id.to_string(),
-            title: None,
-            created_at: now_rfc3339(),
-            capture: CaptureSnapshot {
-                source_title: config.source_id.clone(),
-                fps: config.fps,
-                captured_system_audio: config.capture_system_audio,
-                shows_system_cursor: false,
-            },
-            files,
-            editor_state: None,
+        // `files` / `capture` / `schema_version` are ours to own — they describe
+        // the finished capture. `editor_state`, `title` and `created_at` belong
+        // to whoever already touched the manifest: `write_recording_stub` set
+        // `created_at` at record start, and the editor window is opened *before*
+        // this runs (see `stop_recording`), so it may already have autosaved
+        // edits and a rename. Writing a fresh `Project` here erased them.
+        //
+        // Going through `update_project` also takes `manifest_write`, which
+        // serializes this against a concurrent `save_editor_state` and stops the
+        // two of us from fighting over the shared `project.tmp` staging file.
+        let capture = CaptureSnapshot {
+            source_title: config.source_id.clone(),
+            fps: config.fps,
+            captured_system_audio: config.capture_system_audio,
+            shows_system_cursor: false,
         };
-        self.write_project(&project)?;
-        Ok(project)
+        let merged = self.update_project(id, {
+            let capture = capture.clone();
+            let files = files.clone();
+            move |project| {
+                project.schema_version = SCHEMA_VERSION;
+                project.capture = capture;
+                project.files = files;
+                // Keep the manifest's identity pinned to the directory it was
+                // read from — `write_project` derives its path from this field.
+                project.id = id.to_string();
+            }
+        });
+
+        match merged {
+            Ok(()) => self.load(id),
+            // No manifest to merge into (the record-start stub never landed), so
+            // there are genuinely no edits to preserve — the only case in which
+            // `finalize` may originate a null editor state. Every other failure
+            // (a corrupt manifest, a failed write) must propagate rather than
+            // silently overwrite whatever is on disk.
+            Err(_) if !dir.join(PROJECT_FILE).is_file() => {
+                let project = Project {
+                    schema_version: SCHEMA_VERSION,
+                    id: id.to_string(),
+                    title: None,
+                    created_at: now_rfc3339(),
+                    capture,
+                    files,
+                    editor_state: None,
+                };
+                self.write_project(&project)?;
+                Ok(project)
+            }
+            Err(e) => Err(e),
+        }
     }
 
     pub fn load(&self, id: &str) -> AppResult<Project> {
-        let path = self.dir_for(id)?.join("project.json");
+        let path = self.dir_for(id)?.join(PROJECT_FILE);
         let bytes = fs::read(&path).map_err(|e| {
             AppError::Project(format!("cannot read project {id}: {e}"))
         })?;
@@ -278,7 +317,7 @@ impl ProjectStore {
     }
 
     fn write_project(&self, project: &Project) -> AppResult<()> {
-        let path = self.dir_for(&project.id)?.join("project.json");
+        let path = self.dir_for(&project.id)?.join(PROJECT_FILE);
         write_json_atomic(&path, project)
     }
 
@@ -373,7 +412,31 @@ mod tests {
             .join(format!("capptivo-store-test-{}", uuid::Uuid::new_v4().simple()));
         let store = ProjectStore::new(root.clone());
         let (id, _dir) = store.create().expect("create project dir");
-        let config = RecorderConfig {
+        store
+            .write_recording_stub(&id, &test_config())
+            .expect("write manifest stub");
+        (store, id, root)
+    }
+
+    /// The recorder's output, with every field at a trivial value. `finalize`
+    /// only reads dimensions / stats / cursor off this, so zeros are enough.
+    fn finalize_artifacts() -> RecordingArtifacts {
+        RecordingArtifacts {
+            screen_path: PathBuf::from("screen.mp4"),
+            cursor: CursorTrack {
+                scale_factor: 1.0,
+                ..Default::default()
+            },
+            stats: Default::default(),
+            width: 1920,
+            height: 1080,
+            fps: 30,
+        }
+    }
+
+    /// The config `stop_recording` hands to `finalize`.
+    fn test_config() -> RecorderConfig {
+        RecorderConfig {
             source_id: "display:test".into(),
             crop: None,
             fps: 30,
@@ -381,11 +444,105 @@ mod tests {
             capture_system_audio: false,
             capture_microphone: false,
             quality: QualityPreset::default(),
-        };
+        }
+    }
+
+    /// `stop_recording` opens the editor window *before* it calls `finalize`
+    /// (the editor is capturable, so it must not appear in the recording's
+    /// tail). The editor autosaves while the mic mux and progressive remux run,
+    /// so `finalize` must merge into whatever is already on disk rather than
+    /// writing a fresh manifest.
+    #[test]
+    fn finalize_preserves_editor_state_and_title() {
+        let (store, id, root) = store_with_project();
+
+        // Stand in for the editor autosaving + the user renaming while the
+        // FFmpeg passes in `stop_recording` are still running.
         store
-            .write_recording_stub(&id, &config)
-            .expect("write manifest stub");
-        (store, id, root)
+            .save_editor_state(&id, serde_json::json!({ "segments": [{ "start": 1.0 }] }))
+            .expect("save editor state");
+        store.rename(&id, Some("My take".into())).expect("rename");
+        let created_before = store.load(&id).expect("load").created_at;
+
+        let finalized = store.finalize(&id, &test_config(), &finalize_artifacts());
+
+        let reloaded = store.load(&id);
+        let _ = fs::remove_dir_all(&root);
+
+        let finalized = finalized.expect("finalize");
+        let reloaded = reloaded.expect("manifest parses after finalize");
+
+        assert!(
+            reloaded.editor_state.is_some(),
+            "finalize erased the editor state the user had already saved",
+        );
+        assert_eq!(
+            reloaded.title.as_deref(),
+            Some("My take"),
+            "finalize erased the user's rename",
+        );
+        assert_eq!(
+            reloaded.created_at, created_before,
+            "finalize reset created_at to finalize time",
+        );
+        // The fields finalize *does* own must still be applied.
+        assert_eq!(finalized.capture.fps, 30);
+        assert_eq!(reloaded.capture.fps, 30);
+    }
+
+    /// The fallback path: a project directory with no manifest at all (the
+    /// record-start stub never landed). `finalize` must still produce a complete
+    /// project rather than failing, since there are no edits to preserve.
+    #[test]
+    fn finalize_writes_a_full_manifest_when_the_stub_never_landed() {
+        let (store, id, root) = store_with_project();
+        fs::remove_file(store.dir_for(&id).expect("dir").join(PROJECT_FILE))
+            .expect("remove manifest");
+
+        let finalized = store.finalize(&id, &test_config(), &finalize_artifacts());
+        let reloaded = store.load(&id);
+        let _ = fs::remove_dir_all(&root);
+
+        let finalized = finalized.expect("finalize must not fail without a stub");
+        assert_eq!(finalized.id, id);
+        assert!(finalized.editor_state.is_none());
+        assert_eq!(reloaded.expect("manifest written").capture.fps, 30);
+    }
+
+    /// `finalize` used to call `write_project` directly, so it did not hold
+    /// `manifest_write` — and `write_json_atomic` stages through a fixed
+    /// `project.tmp`, so a concurrent autosave could observe a half-written
+    /// manifest.
+    #[test]
+    fn finalize_does_not_race_concurrent_editor_saves() {
+        let (store, id, root) = store_with_project();
+        let store = Arc::new(store);
+
+        let saver = {
+            let store = Arc::clone(&store);
+            let id = id.clone();
+            std::thread::spawn(move || {
+                for i in 0..50 {
+                    let _ = store.save_editor_state(&id, serde_json::json!({ "i": i }));
+                }
+            })
+        };
+
+        let config = test_config();
+        let artifacts = finalize_artifacts();
+        for _ in 0..10 {
+            let _ = store.finalize(&id, &config, &artifacts);
+        }
+        saver.join().expect("saver panicked");
+
+        let reloaded = store.load(&id);
+        let _ = fs::remove_dir_all(&root);
+
+        let project = reloaded.expect("manifest still parses after concurrent finalize + saves");
+        assert!(
+            project.editor_state.is_some(),
+            "an editor save was lost to a concurrent finalize",
+        );
     }
 
     /// `project_id` arrives from the WebView as an arbitrary string. `dir_for`
