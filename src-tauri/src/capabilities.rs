@@ -1,7 +1,7 @@
 //! What this build/OS combination can actually do. The frontend reads this once
 //! at boot and feature-gates UI from it, instead of scattering platform sniffs —
-//! every honest per-platform degradation (Wayland has no global cursor, Linux
-//! can't enumerate sources, …) hangs off exactly one of these flags.
+//! every honest per-platform degradation (Wayland hotkeys, Linux portal picker,
+//! …) hangs off exactly one of these flags.
 
 use serde::Serialize;
 
@@ -16,7 +16,7 @@ pub struct PlatformCapabilities {
     /// The drag-a-region area picker is available.
     pub can_pick_area: bool,
     /// Global cursor position/clicks can be sampled for cursor replay and
-    /// zoom-follow. False on Wayland (the compositor hides the pointer).
+    /// zoom-follow. On Wayland this uses portal Metadata when available.
     pub can_track_cursor: bool,
     /// System (desktop) audio can be captured alongside the screen.
     pub can_capture_system_audio: bool,
@@ -72,8 +72,9 @@ impl PlatformCapabilities {
                 // Region selection over a portal-owned capture isn't reliable;
                 // crop lives in the editor instead (v1).
                 can_pick_area: false,
-                // X11 exposes the global pointer; Wayland does not.
-                can_track_cursor: !wayland,
+                // X11: global pointer probe. Wayland: PipeWire SPA_META_Cursor
+                // when the portal advertises Metadata (else empty track).
+                can_track_cursor: true,
                 can_capture_system_audio: true,
                 can_exclude_overlays: false,
                 has_global_shortcut: !wayland,

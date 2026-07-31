@@ -15,11 +15,12 @@
 //! bounded channel; stop is delivered via a `pipewire::channel` (the only
 //! Send-safe way to quit a PipeWire loop from outside).
 //!
-//! Cursor: on X11 sessions the pointer is polled globally (see
-//! `cursor::x11_probe`), so the portal is asked to *hide* the cursor and the
-//! editor replays it. Wayland exposes no global pointer — the portal *embeds*
-//! the cursor into the frames instead, and `capabilities` reports
-//! `can_track_cursor: false` so the editor hides cursor-dependent tooling.
+//! Cursor:
+//! - **X11:** portal uses `Hidden`; `cursor::x11_probe` samples the pointer.
+//! - **Wayland:** prefer portal `Metadata` (`SPA_META_Cursor` on each buffer)
+//!   → publish into [`crate::cursor::portal_cursor_feed`] for the shared 60 Hz
+//!   sampler. Fall back to `Embedded` when Metadata isn't advertised (no track;
+//!   `tracks_cursor` stays false).
 
 use super::pulse_audio::PulseMonitorTap;
 use super::{CaptureBackend, CaptureHandle, RawFrame, CAPTURE_CHANNEL_CAP};
@@ -96,6 +97,8 @@ impl CaptureBackend for PortalBackend {
         // error of a few ms, vs the hundreds of ms a first-frame rebase cost.
         let epoch = Instant::now();
 
+        crate::cursor::portal_cursor_feed().clear();
+
         let producer_dropped = dropped.clone();
         std::thread::Builder::new()
             .name("portal-capture".into())
@@ -103,6 +106,7 @@ impl CaptureBackend for PortalBackend {
                 if let Err(e) = run_session(tx, meta_tx, producer_dropped, quit_rx, epoch) {
                     tracing::warn!(%e, "portal capture session ended with error");
                 }
+                crate::cursor::portal_cursor_feed().clear();
             })
             .map_err(|e| AppError::Other(format!("failed to spawn capture thread: {e}")))?;
 
@@ -128,6 +132,8 @@ impl CaptureBackend for PortalBackend {
         };
         handle.scale_factor = 1.0;
         handle.epoch = epoch;
+        // X11 probe always tracks; Wayland only when Metadata was negotiated.
+        handle.tracks_cursor = meta.tracks_cursor;
 
         if config.capture_system_audio {
             match PulseMonitorTap::start() {
@@ -155,8 +161,9 @@ struct ReadyMeta {
     width: u32,
     height: u32,
     /// Stream origin in compositor coordinates (matches the X11 pointer space
-    /// on X11 sessions; informational on Wayland).
+    /// on X11 sessions; added to stream-local Metadata cursor coords on Wayland).
     position: (f64, f64),
+    tracks_cursor: bool,
 }
 
 /// Portal negotiation result handed from async-land to the PipeWire loop.
@@ -164,6 +171,8 @@ struct Negotiated {
     node_id: u32,
     fd: OwnedFd,
     position: (f64, f64),
+    /// PipeWire buffers carry `SPA_META_Cursor` — publish into the cursor feed.
+    cursor_via_metadata: bool,
 }
 
 fn run_session(
@@ -201,13 +210,8 @@ async fn negotiate_portal() -> AppResult<Negotiated> {
     let proxy = Screencast::new().await.map_err(portal_err)?;
     let session = proxy.create_session().await.map_err(portal_err)?;
 
-    // X11: hide the cursor (the X11 sampler + editor replay own it).
-    // Wayland: embed it — there is no global pointer to sample.
-    let cursor_mode = if crate::capabilities::is_wayland() {
-        CursorMode::Embedded
-    } else {
-        CursorMode::Hidden
-    };
+    let (cursor_mode, cursor_via_metadata) = pick_cursor_mode(&proxy).await;
+    tracing::info!(?cursor_mode, cursor_via_metadata, "portal cursor mode");
 
     let restore_token = load_restore_token();
     proxy
@@ -252,14 +256,33 @@ async fn negotiate_portal() -> AppResult<Negotiated> {
         node_id: stream.pipe_wire_node_id(),
         fd,
         position,
+        cursor_via_metadata,
     })
 }
 
+/// X11 → Hidden (X11 probe owns the track). Wayland → Metadata when the portal
+/// advertises it, else Embedded (cursor painted in; no follow-zoom).
+async fn pick_cursor_mode(proxy: &Screencast<'_>) -> (CursorMode, bool) {
+    if !crate::capabilities::is_wayland() {
+        return (CursorMode::Hidden, false);
+    }
+    match proxy.available_cursor_modes().await {
+        Ok(modes) if modes.contains(CursorMode::Metadata) => (CursorMode::Metadata, true),
+        Ok(_) => (CursorMode::Embedded, false),
+        Err(e) => {
+            tracing::debug!(%e, "available_cursor_modes failed; using Embedded");
+            (CursorMode::Embedded, false)
+        }
+    }
+}
+
 /// Shared state for the PipeWire stream callbacks.
-#[derive(Default)]
 struct StreamState {
     format: Option<pipewire::spa::param::video::VideoInfoRaw>,
     announced: bool,
+    cursor_via_metadata: bool,
+    /// Stream origin — added to stream-local Metadata cursor coords.
+    stream_origin: (f64, f64),
 }
 
 fn run_pipewire(
@@ -297,8 +320,17 @@ fn run_pipewire(
     .map_err(pw_err)?;
 
     let position = negotiated.position;
+    let cursor_via_metadata = negotiated.cursor_via_metadata;
+    // X11 always tracks via probe; Wayland only with Metadata.
+    let tracks_cursor = cursor_via_metadata || !crate::capabilities::is_wayland();
+
     let _listener = stream
-        .add_local_listener_with_user_data(StreamState::default())
+        .add_local_listener_with_user_data(StreamState {
+            format: None,
+            announced: false,
+            cursor_via_metadata,
+            stream_origin: position,
+        })
         .param_changed(move |_stream, state, id, param| {
             let Some(param) = param else { return };
             if id != spa::param::ParamType::Format.as_raw() {
@@ -323,7 +355,8 @@ fn run_pipewire(
                     let _ = meta_tx.send(SessionMeta::Ready(ReadyMeta {
                         width: info.size().width,
                         height: info.size().height,
-                        position,
+                        position: state.stream_origin,
+                        tracks_cursor,
                     }));
                 }
                 state.format = Some(info);
@@ -332,41 +365,72 @@ fn run_pipewire(
         .process(move |stream, state| {
             let Some(format) = state.format else { return };
             let (width, height) = (format.size().width, format.size().height);
-            while let Some(mut buffer) = stream.dequeue_buffer() {
-                let datas = buffer.datas_mut();
-                let Some(data) = datas.first_mut() else { continue };
-                let chunk_size = data.chunk().size() as usize;
-                let stride = data.chunk().stride();
-                let bytes_per_row = if stride > 0 {
-                    stride as u32
-                } else {
-                    width * 4
-                };
-                let Some(slice) = data.data() else { continue };
-                if chunk_size == 0 || slice.is_empty() {
-                    continue;
+            // Raw dequeue so we can read SPA_META_Cursor (pipewire 0.8 Buffer
+            // has no find_meta helper).
+            loop {
+                let raw = unsafe { stream.dequeue_raw_buffer() };
+                if raw.is_null() {
+                    break;
                 }
-                let frame = RawFrame {
-                    width,
-                    height,
-                    bytes_per_row,
-                    data: slice[..chunk_size.min(slice.len())].to_vec(),
-                    timestamp: epoch.elapsed(),
-                };
-                match tx.try_send(frame) {
-                    Ok(()) => {}
-                    Err(crossbeam_channel::TrySendError::Full(_)) => {
-                        dropped.fetch_add(1, Ordering::Relaxed);
+                unsafe {
+                    if state.cursor_via_metadata {
+                        publish_cursor_meta(raw, state.stream_origin);
                     }
-                    Err(crossbeam_channel::TrySendError::Disconnected(_)) => return,
+                    if let Some(frame) = raw_frame_from_pw(raw, width, height, epoch) {
+                        match tx.try_send(frame) {
+                            Ok(()) => {}
+                            Err(crossbeam_channel::TrySendError::Full(_)) => {
+                                dropped.fetch_add(1, Ordering::Relaxed);
+                            }
+                            Err(crossbeam_channel::TrySendError::Disconnected(_)) => {
+                                stream.queue_raw_buffer(raw);
+                                return;
+                            }
+                        }
+                    }
+                    stream.queue_raw_buffer(raw);
                 }
             }
         })
         .register()
         .map_err(pw_err)?;
 
-    // Offer BGRx/BGRA (what compositors deliver; the encoder eats BGRA and
-    // ignores the alpha byte) over a broad size/framerate range.
+    // Format + (when Metadata) cursor meta request — same idea as OBS.
+    let format_bytes = build_format_pod()?;
+    let meta_bytes = cursor_via_metadata
+        .then(build_cursor_meta_pod)
+        .transpose()?;
+    let format_pod = spa::pod::Pod::from_bytes(&format_bytes)
+        .ok_or_else(|| AppError::Other("format pod parse".into()))?;
+    let meta_pod = meta_bytes
+        .as_ref()
+        .map(|b| {
+            spa::pod::Pod::from_bytes(b)
+                .ok_or_else(|| AppError::Other("cursor meta pod parse".into()))
+        })
+        .transpose()?;
+
+    let mut params: Vec<&spa::pod::Pod> = Vec::with_capacity(2);
+    params.push(format_pod);
+    if let Some(p) = meta_pod {
+        params.push(p);
+    }
+
+    stream
+        .connect(
+            spa::utils::Direction::Input,
+            Some(negotiated.node_id),
+            StreamFlags::AUTOCONNECT | StreamFlags::MAP_BUFFERS,
+            params.as_mut_slice(),
+        )
+        .map_err(pw_err)?;
+
+    mainloop.run();
+    Ok(())
+}
+
+fn build_format_pod() -> AppResult<Vec<u8>> {
+    use pipewire::spa;
     let obj = spa::pod::object!(
         spa::utils::SpaTypes::ObjectParamFormat,
         spa::param::ParamType::EnumFormat,
@@ -420,27 +484,98 @@ fn run_pipewire(
             }
         ),
     );
-    let values = spa::pod::serialize::PodSerializer::serialize(
+    spa::pod::serialize::PodSerializer::serialize(
         std::io::Cursor::new(Vec::new()),
         &spa::pod::Value::Object(obj),
     )
-    .map_err(|e| AppError::Other(format!("format pod: {e:?}")))?
-    .0
-    .into_inner();
-    let mut params = [spa::pod::Pod::from_bytes(&values)
-        .ok_or_else(|| AppError::Other("format pod parse".into()))?];
+    .map(|v| v.0.into_inner())
+    .map_err(|e| AppError::Other(format!("format pod: {e:?}")))
+}
 
-    stream
-        .connect(
-            spa::utils::Direction::Input,
-            Some(negotiated.node_id),
-            StreamFlags::AUTOCONNECT | StreamFlags::MAP_BUFFERS,
-            &mut params,
-        )
-        .map_err(pw_err)?;
+/// Ask PipeWire for `SPA_META_Cursor` on buffers (OBS does the same).
+fn build_cursor_meta_pod() -> AppResult<Vec<u8>> {
+    use pipewire::spa;
+    use pipewire::spa::sys as spa_sys;
 
-    mainloop.run();
-    Ok(())
+    // spa_meta_cursor + spa_meta_bitmap + 64×64 ARGB — enough for position;
+    // bitmap is optional for Capptivo (we only need x/y for zoom-follow).
+    let meta_size = (std::mem::size_of::<spa_sys::spa_meta_cursor>()
+        + std::mem::size_of::<spa_sys::spa_meta_bitmap>()
+        + 64 * 64 * 4) as i32;
+
+    let obj = spa::pod::Object {
+        type_: spa::utils::SpaTypes::ObjectParamMeta.as_raw(),
+        id: spa::param::ParamType::Meta.as_raw(),
+        properties: vec![
+            spa::pod::Property::new(
+                spa_sys::SPA_PARAM_META_type,
+                spa::pod::Value::Id(spa::utils::Id(spa_sys::SPA_META_Cursor)),
+            ),
+            spa::pod::Property::new(spa_sys::SPA_PARAM_META_size, spa::pod::Value::Int(meta_size)),
+        ],
+    };
+    spa::pod::serialize::PodSerializer::serialize(
+        std::io::Cursor::new(Vec::new()),
+        &spa::pod::Value::Object(obj),
+    )
+    .map(|v| v.0.into_inner())
+    .map_err(|e| AppError::Other(format!("cursor meta pod: {e:?}")))
+}
+
+/// Publish stream-local cursor metadata into the shared feed (capture-rect space).
+unsafe fn publish_cursor_meta(pw_buf: *mut pipewire::sys::pw_buffer, stream_origin: (f64, f64)) {
+    use pipewire::spa::sys as spa_sys;
+
+    let spa_buf = (*pw_buf).buffer;
+    if spa_buf.is_null() {
+        return;
+    }
+    let meta = spa_sys::spa_buffer_find_meta_data(
+        spa_buf,
+        spa_sys::SPA_META_Cursor,
+        std::mem::size_of::<spa_sys::spa_meta_cursor>(),
+    ) as *const spa_sys::spa_meta_cursor;
+    if meta.is_null() || (*meta).id == 0 {
+        return;
+    }
+    let x = stream_origin.0 + f64::from((*meta).position.x);
+    let y = stream_origin.1 + f64::from((*meta).position.y);
+    crate::cursor::portal_cursor_feed().publish(x, y);
+}
+
+unsafe fn raw_frame_from_pw(
+    pw_buf: *mut pipewire::sys::pw_buffer,
+    width: u32,
+    height: u32,
+    epoch: Instant,
+) -> Option<RawFrame> {
+    let spa_buf = (*pw_buf).buffer;
+    if spa_buf.is_null() || (*spa_buf).n_datas == 0 || (*spa_buf).datas.is_null() {
+        return None;
+    }
+    let data = &*(*spa_buf).datas;
+    if data.data.is_null() || data.chunk.is_null() {
+        return None;
+    }
+    let chunk = &*data.chunk;
+    let chunk_size = chunk.size as usize;
+    if chunk_size == 0 {
+        return None;
+    }
+    let bytes_per_row = if chunk.stride > 0 {
+        chunk.stride as u32
+    } else {
+        width * 4
+    };
+    let slice = std::slice::from_raw_parts(data.data as *const u8, data.maxsize as usize);
+    let len = chunk_size.min(slice.len());
+    Some(RawFrame {
+        width,
+        height,
+        bytes_per_row,
+        data: slice[..len].to_vec(),
+        timestamp: epoch.elapsed(),
+    })
 }
 
 // --- restore-token persistence (skip re-prompting the portal dialog) --------

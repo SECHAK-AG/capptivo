@@ -114,9 +114,10 @@ Platform notes:
   system audio via **WASAPI loopback**.
 - **Linux** captures through **xdg-desktop-portal + PipeWire** — the screen/window is
   picked in the system dialog. System audio comes from the PulseAudio/PipeWire
-  monitor. Cursor effects (replay, zoom-follow) work on X11 sessions; on Wayland
-  the cursor is embedded in the recording instead, and area selection isn't
-  available yet.
+  monitor. Cursor replay / follow-zoom use an X11 pointer probe on X11 sessions,
+  and PipeWire cursor **Metadata** on Wayland when the portal supports it
+  (otherwise the cursor is embedded in the recording and zoom-follow is unavailable).
+  Area selection isn't available yet on Linux — crop in the editor instead.
 
 ---
 

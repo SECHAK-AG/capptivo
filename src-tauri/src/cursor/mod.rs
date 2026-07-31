@@ -241,7 +241,7 @@ fn spawn_sampler(
         .name("cursor-tracker".into())
         .spawn(move || match platform_probe() {
             Some(probe) => run_sampler_loop(probe, rect, t0, &stop),
-            // No pointer source on this platform/session (e.g. Wayland).
+            // No pointer source on this platform/session.
             None => Vec::new(),
         })
         .expect("failed to spawn cursor tracker thread")
@@ -259,7 +259,11 @@ fn platform_probe() -> Option<Box<dyn PointerProbe>> {
 
 #[cfg(all(target_os = "linux", feature = "portal-capture"))]
 fn platform_probe() -> Option<Box<dyn PointerProbe>> {
-    x11_probe::X11Probe::new().map(|p| Box::new(p) as Box<dyn PointerProbe>)
+    if let Some(p) = x11_probe::X11Probe::new() {
+        return Some(Box::new(p));
+    }
+    // Wayland: positions come from PipeWire SPA_META_Cursor (portal Metadata mode).
+    Some(Box::new(portal_meta_probe::PortalMetaProbe))
 }
 
 #[cfg(not(any(
@@ -686,10 +690,72 @@ mod win_probe {
 
 // ---------------------------------------------------------------------------
 // Linux (X11 sessions): one XCB round-trip per tick returns position + button
-// mask together. Wayland exposes no global pointer by design → no probe, and
-// the portal backend embeds the cursor into the frames instead (see
-// `capabilities::PlatformCapabilities::can_track_cursor`).
+// mask together. Wayland has no global pointer — the portal Metadata path
+// publishes into [`portal_cursor_feed`] instead (see `portal_backend`).
 // ---------------------------------------------------------------------------
+
+/// Latest cursor position from PipeWire `SPA_META_Cursor` during a portal
+/// Metadata capture. Polled by [`portal_meta_probe`] at 60 Hz — same cadence
+/// as X11/Win/mac, so the editor pipeline stays identical.
+#[cfg(all(target_os = "linux", feature = "portal-capture"))]
+pub struct PortalCursorFeed {
+    latest: parking_lot::Mutex<Option<(f64, f64)>>,
+}
+
+#[cfg(all(target_os = "linux", feature = "portal-capture"))]
+impl PortalCursorFeed {
+    fn new() -> Self {
+        Self {
+            latest: parking_lot::Mutex::new(None),
+        }
+    }
+
+    pub fn clear(&self) {
+        *self.latest.lock() = None;
+    }
+
+    /// Compositor / capture-rect space (same as X11 root coords).
+    pub fn publish(&self, x: f64, y: f64) {
+        *self.latest.lock() = Some((x, y));
+    }
+
+    pub fn peek(&self) -> Option<(f64, f64)> {
+        *self.latest.lock()
+    }
+}
+
+#[cfg(all(target_os = "linux", feature = "portal-capture"))]
+pub fn portal_cursor_feed() -> &'static PortalCursorFeed {
+    use std::sync::OnceLock;
+    static FEED: OnceLock<PortalCursorFeed> = OnceLock::new();
+    FEED.get_or_init(PortalCursorFeed::new)
+}
+
+#[cfg(all(target_os = "linux", feature = "portal-capture"))]
+mod portal_meta_probe {
+    use super::{portal_cursor_feed, ButtonSample, CursorShape, PointerProbe};
+
+    pub struct PortalMetaProbe;
+
+    impl PointerProbe for PortalMetaProbe {
+        fn location(&mut self) -> Option<(f64, f64)> {
+            portal_cursor_feed().peek()
+        }
+
+        fn button(&mut self) -> ButtonSample {
+            // SPA_META_Cursor carries position (and optional bitmap), not buttons.
+            // Zoom-follow works from motion alone.
+            ButtonSample {
+                held: false,
+                missed_taps: 0,
+            }
+        }
+
+        fn shape(&mut self) -> CursorShape {
+            CursorShape::Default
+        }
+    }
+}
 
 #[cfg(all(target_os = "linux", feature = "portal-capture"))]
 mod x11_probe {
@@ -704,7 +770,7 @@ mod x11_probe {
     }
 
     impl X11Probe {
-        /// `None` on Wayland (or headless) — spawns no sampler.
+        /// `None` on Wayland (or headless) — sampler falls back to portal meta.
         pub fn new() -> Option<Self> {
             if crate::capabilities::is_wayland() {
                 return None;
@@ -780,5 +846,16 @@ mod tests {
             assert_eq!(d.feed(CursorShape::Grab), CursorShape::Default);
             assert_eq!(d.feed(CursorShape::Grabbing), CursorShape::Default);
         }
+    }
+
+    #[cfg(all(target_os = "linux", feature = "portal-capture"))]
+    #[test]
+    fn portal_cursor_feed_publish_clear() {
+        let feed = PortalCursorFeed::new();
+        assert!(feed.peek().is_none());
+        feed.publish(10.0, 20.0);
+        assert_eq!(feed.peek(), Some((10.0, 20.0)));
+        feed.clear();
+        assert!(feed.peek().is_none());
     }
 }
