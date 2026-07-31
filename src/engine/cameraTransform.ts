@@ -2,9 +2,9 @@
  * Editor camera: one transform moves video, cursor, and shadow together.
  * `focus` is normalized 0–1 inside the recording rect (same space as zoom keyframes).
  *
- * Follow-cursor ease-in matches the Recordly zoom transform: fixed focus, scale
- * ramps `1→S`, translation is `progress * (centre − focus·S)` so the view zooms
- * in place instead of sliding the crop toward the seed.
+ * Follow-cursor ease-in: fixed focus, scale ramps `1→S`, translation is
+ * `progress * (centre − focus·S)` so the view zooms in place instead of
+ * sliding the crop toward the seed.
  */
 
 export type CameraRect = {
@@ -32,7 +32,7 @@ export type ComputeCameraTransformInput = {
   scale: number;
   /**
    * Full zoom scale while easing in/out. When greater than `scale`, translation
-   * uses progress·(centre − focus·targetScale) — same as Recordly's zoom-in.
+   * uses progress·(centre − focus·targetScale) so ease-in zooms in place.
    * Omit (or pass === scale) for plateau / fixed-rect: classic scale-about-focus.
    */
   targetScale?: number;
@@ -44,8 +44,8 @@ function clamp01(value: number): number {
 
 /**
  * Scale about the stage origin and translate so `focus` lands on the stage
- * centre (plateau). During ease-in with `targetScale`, uses Recordly's
- * progress-scaled final offset so the first zoom does not slide sideways.
+ * centre (plateau). During ease-in with `targetScale`, uses a progress-scaled
+ * final offset so the first zoom does not slide sideways.
  */
 export function computeCameraTransform(
   input: ComputeCameraTransformInput,

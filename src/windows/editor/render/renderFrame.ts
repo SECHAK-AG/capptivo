@@ -44,7 +44,7 @@ export interface RenderFrameInputs {
    */
   zoomFocus?: { x: number; y: number };
   /**
-   * Full follow-cursor target scale while easing. Drives Recordly-style
+   * Full follow-cursor target scale while easing. Drives fixed-focus
    * progress·finalOffset translation in `computeCameraTransform`.
    */
   zoomTargetScale?: number;
@@ -92,7 +92,7 @@ export function resolveZoomReactiveState(
     : 1;
 
   // Follow-cursor ease-in/out: tell the camera the full S so translation can
-  // use Recordly's progress * finalOffset (fixed-rect keeps classic path).
+  // use progress * finalOffset (fixed-rect keeps classic path).
   const zoomTargetScale =
     activeZoom.mode === "follow-cursor"
       ? Math.max(1, activeZoom.targetScale)

@@ -170,7 +170,7 @@ const followEdge: ZoomFragment = {
   for (const k of keys) {
     const env = computeZoomEnvelope(followEdge, k.t);
     const local = k.t - followEdge.start;
-    // Ease-in holds full-S focus while scale climbs (Recordly camera path).
+    // Ease-in holds full-S focus while scale climbs (fixed-focus camera path).
     const clampScale =
       env < 1 && local < followEdge.easeIn
         ? followEdge.targetScale
@@ -192,7 +192,7 @@ const followEdge: ZoomFragment = {
   );
 
   // Ease-in: focus locked on start seed (clamped at full S) — only scale
-  // eases. Camera applies Recordly progress·finalOffset; pan must not slide.
+  // eases. Camera applies progress·finalOffset; pan must not slide.
   const midEase = keys.find((k) => {
     const env = computeZoomEnvelope(followEdge, k.t);
     return env > 0.45 && env < 0.55;

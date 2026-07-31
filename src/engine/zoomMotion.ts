@@ -694,9 +694,9 @@ export function computeZoomKeyframes(
           y: motionState.y,
         });
       } else if (envelope < 1) {
-        // Recordly-style zoom-in: focus stays fixed on the start seed (clamped
-        // at full S). Only scale eases — the camera applies progress·finalOffset
-        // so there is no centre→seed pan slide. Smart-follow starts on plateau.
+        // Fixed-focus zoom-in: focus stays on the start seed (clamped at full S).
+        // Only scale eases — the camera applies progress·finalOffset so there is
+        // no centre→seed pan slide. Smart-follow starts on plateau.
         const seed = easeInSeed ?? { x: cx, y: cy };
         const fullScale = Math.max(1, fragment.targetScale);
         const focus = clampTargetForScale(seed, fullScale);
