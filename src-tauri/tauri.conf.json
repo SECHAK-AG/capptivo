@@ -38,6 +38,8 @@
     "macOS": {
       "minimumSystemVersion": "13.0",
       "entitlements": "entitlements.plist",
+      "signingIdentity": "-",
+      "hardenedRuntime": false,
       "files": {}
     },
     "linux": {

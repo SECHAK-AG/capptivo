@@ -1,10 +1,11 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <!--
-  Hardened-runtime entitlements for signing/notarization (§11). Camera + audio
-  input entitlements are required alongside the Info.plist usage strings. The
-  FFmpeg sidecar needs the JIT / unsigned-executable-memory allowances only if a
-  build uses them; kept out until proven necessary.
+  Used once Apple Developer ID signing + hardened runtime are enabled.
+  Today macOS builds are ad-hoc signed with hardenedRuntime=false (see
+  tauri.conf.json) so TCC gets a stable com.capptivo.desktop identity without
+  breaking the ffmpeg/ffprobe sidecars. Camera + mic still use Info.plist
+  NS*UsageDescription strings.
 -->
 <plist version="1.0">
   <dict>

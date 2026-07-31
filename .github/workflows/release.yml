@@ -1,8 +1,9 @@
 # Build Capptivo installers for macOS (Intel + Apple Silicon), Windows, and Linux.
 # Trigger: push a version tag (v*) or run manually from the Actions tab.
 #
-# Unsigned builds for now — macOS users may need right-click → Open once.
-# Add Apple/Windows signing secrets later when you have certificates.
+# macOS: ad-hoc signed via tauri.conf.json (`signingIdentity: "-"`) so Screen
+# Recording TCC binds to com.capptivo.desktop. Not notarized — users still
+# right-click → Open once. Swap in APPLE_* secrets when you have a cert.
 
 name: Release
 
@@ -79,11 +80,29 @@ jobs:
           releaseBody: |
             Download the installer for your platform below.
 
-            **macOS:** builds are unsigned — right-click the app → Open the first time
-            (or allow it in System Settings → Privacy & Security).
+            **macOS:** first launch — right-click the app → **Open** (Gatekeeper;
+            builds are ad-hoc signed, not notarized). Then grant **Screen
+            Recording** in System Settings and **quit & reopen** Capptivo.
 
             **Captions:** need a system `whisper-cli` binary; the app downloads model
             weights on first use.
           releaseDraft: true
           prerelease: false
           args: ${{ matrix.args }}
+
+      # Catch linker-signed / unbound Info.plist regressions before a draft is published.
+      - name: Verify macOS code identity
+        if: matrix.platform == 'macos-latest'
+        run: |
+          set -euo pipefail
+          APP=$(find src-tauri/target -path '*/bundle/macos/Capptivo.app' -type d | head -1)
+          if [[ -z "$APP" ]]; then
+            echo "Capptivo.app not found under src-tauri/target" >&2
+            exit 1
+          fi
+          echo "Checking $APP"
+          codesign -dv --verbose=4 "$APP" 2>&1 | tee /tmp/codesign.txt
+          grep -q 'Identifier=com.capptivo.desktop' /tmp/codesign.txt
+          ! grep -q 'Info.plist=not bound' /tmp/codesign.txt
+          ! grep -q 'linker-signed' /tmp/codesign.txt
+          echo "macOS code identity OK"
