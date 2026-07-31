@@ -29,6 +29,7 @@ import type { ExportSettings } from "./export/exportSettings";
 import { exportProject } from "./export/exportVideo";
 import { useStageDimensions } from "./lib/useStageDimensions";
 import { presentableVideoTime } from "./lib/presentableVideoTime";
+import { dismissEditorSplash } from "./splash";
 
 const SHOW_LIBRARY_EVENT = "shell://show-library";
 
@@ -74,6 +75,12 @@ export function EditorApp() {
     if (id) void init(id);
     else useEditorStore.setState({ ready: true, error: "No project id in URL." });
   }, [init]);
+
+  // Drop the HTML splash once the shell can paint (library chrome, or editor
+  // after `loadProject`). Idempotent — in-window library switches stay splash-free.
+  useEffect(() => {
+    if (shell === "library" || ready || error) dismissEditorSplash();
+  }, [shell, ready, error]);
 
   useEffect(() => {
     let alive = true;

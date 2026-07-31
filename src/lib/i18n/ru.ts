@@ -301,6 +301,12 @@ export const ru: Record<TranslationKey, string> = {
   "recorder.hud.finalizing": "Завершение…",
   "recorder.hud.annotate.show": "Показать аннотации",
   "recorder.hud.annotate.hide": "Скрыть аннотации",
+  "recorder.hud.mic.mute": "Выключить микрофон",
+  "recorder.hud.mic.unmute": "Включить микрофон",
+  "recorder.hud.mic.unavailable": "В этой записи нет микрофона",
+  "recorder.hud.collapse": "Свернуть панель",
+  "recorder.hud.expand": "Развернуть панель",
+  "recorder.hud.hide": "Скрыть панель",
   "recorder.error.dismiss": "Закрыть",
 
   "library.search.placeholder": "Поиск по имени…",

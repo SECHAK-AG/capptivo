@@ -295,6 +295,12 @@ export const en = {
   "recorder.hud.finalizing": "Finalizing…",
   "recorder.hud.annotate.show": "Show annotations",
   "recorder.hud.annotate.hide": "Hide annotations",
+  "recorder.hud.mic.mute": "Mute microphone",
+  "recorder.hud.mic.unmute": "Unmute microphone",
+  "recorder.hud.mic.unavailable": "No microphone in this recording",
+  "recorder.hud.collapse": "Collapse controls",
+  "recorder.hud.expand": "Expand controls",
+  "recorder.hud.hide": "Hide controls",
   "recorder.error.dismiss": "Dismiss",
 
   "library.search.placeholder": "Search by name…",

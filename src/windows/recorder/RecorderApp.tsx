@@ -1,14 +1,16 @@
 /** Recorder popover — setup bar, countdown, or in-record HUD. */
 
-import { useCallback, useEffect, useRef, useState } from "react";
-import { GripVertical, Pencil, X } from "lucide-react";
-import { Button } from "@/components/ui/button";
+import { useCallback, useEffect, useRef, useState, type ComponentPropsWithoutRef, type ReactNode } from "react";
+import { Maximize2, Mic, MicOff, Minus, Pause, Pencil, Play, Square, X } from "lucide-react";
 import { useI18n } from "@/lib/settings";
 import { cn } from "@/lib/utils";
 import { commands } from "../../ipc/bindings";
 import { useRecorderStore } from "./store";
 import { Countdown } from "./Countdown";
 import { RecorderToolbar } from "./RecorderToolbar";
+
+/** Keep in sync with `duration-300` on `BarPane`. */
+const BAR_CROSSFADE_MS = 300;
 
 export function RecorderApp() {
   const init = useRecorderStore((s) => s.init);
@@ -24,6 +26,15 @@ export function RecorderApp() {
   // renders the HUD immediately instead, and the pipeline finishes behind it.
   const [starting, setStarting] = useState(false);
   const wasLiveRef = useRef(false);
+  /** Skip setup→HUD crossfade when arriving from the countdown badge. */
+  const fromCountdownRef = useRef(false);
+
+  // Crossfade: keep the outgoing pane mounted until the CSS transition ends.
+  const [hudOn, setHudOn] = useState(false);
+  const [mountSetup, setMountSetup] = useState(true);
+  const [mountHud, setMountHud] = useState(false);
+  /** Fade-in only when HUD appears after countdown (no setup pane to crossfade). */
+  const [hudEnter, setHudEnter] = useState(false);
 
   useEffect(() => {
     void init();
@@ -59,11 +70,42 @@ export function RecorderApp() {
     if (starting && (live || lastError)) setStarting(false);
   }, [starting, live, lastError]);
 
+  // Bar mount + native layout in one place so resize timing matches the fade.
   useEffect(() => {
-    if (counting) void commands.setRecorderLayout("countdown");
-    else if (showHud) void commands.setRecorderLayout("hud");
-    else if (lastError) void commands.setRecorderLayout("alert");
+    if (counting) {
+      setHudOn(false);
+      setMountSetup(true);
+      setMountHud(false);
+      void commands.setRecorderLayout("countdown");
+      return;
+    }
+
+    if (showHud) {
+      const snap = fromCountdownRef.current;
+      fromCountdownRef.current = false;
+      setMountHud(true);
+      setHudOn(true);
+      setHudEnter(snap);
+      if (snap) {
+        setMountSetup(false);
+        void commands.setRecorderLayout("hud");
+        return;
+      }
+      // Keep setup window width until the outgoing pane finishes fading.
+      const id = window.setTimeout(() => {
+        setMountSetup(false);
+        void commands.setRecorderLayout("hud");
+      }, BAR_CROSSFADE_MS);
+      return () => window.clearTimeout(id);
+    }
+
+    setMountSetup(true);
+    setHudOn(false);
+    setHudEnter(false);
+    if (lastError) void commands.setRecorderLayout("alert");
     else void commands.setRecorderLayout("setup");
+    const id = window.setTimeout(() => setMountHud(false), BAR_CROSSFADE_MS);
+    return () => window.clearTimeout(id);
   }, [showHud, counting, lastError]);
 
   useEffect(() => {
@@ -78,6 +120,7 @@ export function RecorderApp() {
   // countdown latches its own fire, but a stable prop means its ref-sync effect
   // never re-runs either.
   const onCountdownDone = useCallback(() => {
+    fromCountdownRef.current = true;
     // Swap straight to the HUD; do not wait for `start()` to resolve.
     setStarting(true);
     setCounting(false);
@@ -93,16 +136,69 @@ export function RecorderApp() {
     void prewarmCapture();
   }, [prewarmCapture]);
 
+  if (counting) {
+    return (
+      <div className="relative h-full bg-transparent font-sans text-foreground">
+        <div className="grid h-full place-items-center">
+          <Countdown onDone={onCountdownDone} />
+        </div>
+        <div className="pointer-events-none absolute inset-x-0 bottom-2 flex justify-center">
+          <div className="pointer-events-auto">
+            <ErrorToast />
+          </div>
+        </div>
+      </div>
+    );
+  }
+
   return (
-    <div className="bg-transparent font-sans text-foreground">
-      {showHud ? (
-        <RecordingHud starting={starting} />
-      ) : counting ? (
-        <Countdown onDone={onCountdownDone} />
-      ) : (
-        <RecorderToolbar onRecord={onRecord} />
-      )}
+    <div className="flex h-full w-fit flex-col justify-end bg-transparent font-sans text-foreground">
+      <div className="relative mx-auto w-fit">
+        {mountSetup ? (
+          <BarPane active={!hudOn}>
+            <RecorderToolbar onRecord={onRecord} />
+          </BarPane>
+        ) : null}
+        {mountHud ? (
+          <BarPane active={hudOn} enter={hudEnter}>
+            <RecordingHud starting={starting} />
+          </BarPane>
+        ) : null}
+      </div>
       <ErrorToast />
+    </div>
+  );
+}
+
+/**
+ * Stacked setup/HUD panes: the active one is in normal flow (sizes the window
+ * content); the outgoing one is absolutely centered so both stay put while
+ * opacity/scale crossfade. `enter` adds a short fade-in when the HUD mounts
+ * after countdown (no outgoing setup pane).
+ */
+function BarPane({
+  active,
+  enter = false,
+  children,
+}: {
+  active: boolean;
+  enter?: boolean;
+  children: ReactNode;
+}) {
+  return (
+    <div
+      className={cn(
+        "origin-center transition-[opacity,transform] duration-300 ease-out",
+        active
+          ? cn(
+              "relative z-10 opacity-100 scale-100",
+              enter && "animate-in fade-in zoom-in-95 duration-300",
+            )
+          : "pointer-events-none absolute bottom-0 left-1/2 z-0 -translate-x-1/2 opacity-0 scale-[0.97]",
+      )}
+      aria-hidden={!active}
+    >
+      {children}
     </div>
   );
 }
@@ -117,90 +213,195 @@ function RecordingHud({ starting }: { starting: boolean }) {
   const { t } = useI18n();
   const status = useRecorderStore((s) => s.state.status);
   const elapsed = useRecorderStore((s) => s.elapsed);
+  const micEnabled = useRecorderStore((s) => s.micEnabled);
+  const micDeviceId = useRecorderStore((s) => s.micDeviceId);
+  const micSessionMuted = useRecorderStore((s) => s.micSessionMuted);
   const annotationVisible = useRecorderStore((s) => s.annotationVisible);
   const setAnnotationVisible = useRecorderStore((s) => s.setAnnotationVisible);
+  const toggleMicMute = useRecorderStore((s) => s.toggleMicMute);
   const stop = useRecorderStore((s) => s.stopRecording);
   const togglePause = useRecorderStore((s) => s.togglePause);
+  const [collapsed, setCollapsed] = useState(false);
 
   const finalizing = status === "finalizing";
   const paused = status === "paused";
   /** Controls are unusable while the pipeline is coming up or tearing down. */
   const busy = finalizing || starting;
+  const micArmed = micEnabled && !!micDeviceId;
   const annotateLabel = annotationVisible
     ? t("recorder.hud.annotate.hide")
     : t("recorder.hud.annotate.show");
+  const micLabel = !micArmed
+    ? t("recorder.hud.mic.unavailable")
+    : micSessionMuted
+      ? t("recorder.hud.mic.unmute")
+      : t("recorder.hud.mic.mute");
+
+  useEffect(() => {
+    void commands.setRecorderLayout(collapsed ? "hud-mini" : "hud");
+  }, [collapsed]);
+
+  if (collapsed) {
+    return (
+      <div className="inline-flex h-10 w-fit items-center gap-0.5 rounded-2xl border border-border bg-card p-1">
+        <div
+          data-tauri-drag-region
+          className="flex h-8 cursor-grab items-center gap-2 rounded-xl px-2.5 active:cursor-grabbing"
+          title={t("recorder.drag")}
+        >
+          <span
+            className={cn(
+              "size-2 shrink-0 rounded-full",
+              paused ? "bg-muted-foreground" : "animate-pulse bg-primary",
+            )}
+          />
+          <span
+            className={cn(
+              "text-[11px] font-semibold tracking-wider",
+              paused ? "text-muted-foreground" : "text-primary",
+            )}
+          >
+            {paused ? t("recorder.hud.paused") : "REC"}
+          </span>
+          <span className="min-w-11 text-sm font-semibold tabular-nums text-foreground">
+            {formatElapsed(elapsed)}
+          </span>
+        </div>
+        <HudIconBtn
+          className="size-8"
+          title={t("recorder.hud.expand")}
+          aria-label={t("recorder.hud.expand")}
+          onClick={() => setCollapsed(false)}
+        >
+          <Maximize2 className="size-3.5" />
+        </HudIconBtn>
+      </div>
+    );
+  }
 
   return (
-    <div className="inline-flex h-12 w-fit max-w-full items-center gap-1.5 rounded-2xl border border-border bg-card p-1.5">
+    <div className="inline-flex h-12 w-fit max-w-full items-center gap-0.5 rounded-2xl border border-border bg-card p-1.5">
       <div
         data-tauri-drag-region
-        className="flex h-9 cursor-grab items-center gap-2 rounded-xl px-1.5 active:cursor-grabbing"
+        className="flex h-9 cursor-grab items-center gap-2 rounded-xl px-2 active:cursor-grabbing"
         title={t("recorder.drag")}
       >
-        <GripVertical className="pointer-events-none size-4 shrink-0 text-muted-foreground" />
         <span
           className={cn(
-            "size-2.5 shrink-0 rounded-full",
+            "size-2 shrink-0 rounded-full",
             paused ? "bg-muted-foreground" : "animate-pulse bg-primary",
           )}
         />
-        <span className="min-w-13 text-sm font-semibold tabular-nums text-foreground">
+        <span
+          className={cn(
+            "text-[11px] font-semibold tracking-wider",
+            paused ? "text-muted-foreground" : "text-primary",
+          )}
+        >
+          {finalizing ? t("recorder.hud.finalizing") : paused ? t("recorder.hud.paused") : "REC"}
+        </span>
+        <span className="min-w-11 text-sm font-semibold tabular-nums text-foreground">
           {formatElapsed(elapsed)}
         </span>
-        {finalizing ? (
-          <span className="text-[10px] tracking-wider text-muted-foreground uppercase">
-            {t("recorder.hud.finalizing")}
-          </span>
-        ) : paused ? (
-          <span className="text-[10px] tracking-wider text-muted-foreground uppercase">
-            {t("recorder.hud.paused")}
-          </span>
-        ) : null}
       </div>
+
       <div className="mx-0.5 h-5 w-px shrink-0 bg-border" />
-      <button
-        type="button"
-        data-tauri-drag-region="false"
+
+      {micArmed ? (
+        <HudIconBtn
+          disabled={busy}
+          title={micLabel}
+          aria-label={micLabel}
+          aria-pressed={micSessionMuted}
+          onClick={() => toggleMicMute()}
+          className={micSessionMuted ? "text-muted-foreground" : undefined}
+        >
+          {micSessionMuted ? <MicOff className="size-4" /> : <Mic className="size-4" />}
+        </HudIconBtn>
+      ) : (
+        <HudIconBtn
+          disabled
+          title={micLabel}
+          aria-label={micLabel}
+          className="text-muted-foreground/50"
+        >
+          <MicOff className="size-4" />
+        </HudIconBtn>
+      )}
+
+      <HudIconBtn
+        disabled={busy}
+        title={paused ? t("recorder.hud.resume") : t("recorder.hud.pause")}
+        aria-label={paused ? t("recorder.hud.resume") : t("recorder.hud.pause")}
+        onClick={() => void togglePause()}
+        className={paused ? "text-primary" : undefined}
+      >
+        {paused ? <Play className="size-4 fill-current" /> : <Pause className="size-4" />}
+      </HudIconBtn>
+
+      <HudIconBtn
+        disabled={busy}
+        title={t("recorder.hud.stop")}
+        aria-label={t("recorder.hud.stop")}
+        onClick={() => void stop()}
+        className="text-primary hover:bg-primary/15 hover:text-primary"
+      >
+        <Square className="size-3.5 fill-current" />
+      </HudIconBtn>
+
+      <HudIconBtn
         disabled={busy}
         title={annotateLabel}
         aria-label={annotateLabel}
         aria-pressed={annotationVisible}
         onClick={() => setAnnotationVisible(!annotationVisible)}
-        className={cn(
-          "flex size-9 shrink-0 items-center justify-center rounded-xl border transition-colors disabled:opacity-40",
-          annotationVisible
-            ? "border-primary/40 bg-primary/20 text-primary hover:bg-primary/25"
-            : "border-border text-muted-foreground hover:bg-muted hover:text-foreground",
-        )}
+        className={
+          annotationVisible ? "bg-primary/15 text-primary hover:bg-primary/20" : undefined
+        }
       >
         <Pencil className="size-4" />
-      </button>
-      <button
-        type="button"
-        data-tauri-drag-region="false"
+      </HudIconBtn>
+
+      <div className="mx-0.5 h-5 w-px shrink-0 bg-border" />
+
+      <HudIconBtn
         disabled={busy}
-        onClick={() => void togglePause()}
-        className={cn(
-          "h-9 rounded-xl border border-border bg-transparent px-3 text-xs font-medium text-foreground transition-colors",
-          "hover:bg-muted disabled:opacity-40",
-          paused &&
-            "border-primary/40 bg-primary/10 text-primary hover:bg-primary/15",
-        )}
+        title={t("recorder.hud.collapse")}
+        aria-label={t("recorder.hud.collapse")}
+        onClick={() => setCollapsed(true)}
       >
-        {paused ? t("recorder.hud.resume") : t("recorder.hud.pause")}
-      </button>
-      <Button
-        type="button"
-        size="sm"
-        data-tauri-drag-region="false"
+        <Minus className="size-4" />
+      </HudIconBtn>
+
+      <HudIconBtn
         disabled={busy}
-        onClick={() => void stop()}
-        className="h-9 gap-1.5 rounded-xl px-3 font-semibold"
+        title={t("recorder.hud.hide")}
+        aria-label={t("recorder.hud.hide")}
+        onClick={() => void commands.hideRecorder()}
       >
-        <span className="size-2 rounded-[2px] bg-primary-foreground" />
-        {t("recorder.hud.stop")}
-      </Button>
+        <X className="size-4" />
+      </HudIconBtn>
     </div>
+  );
+}
+
+const HUD_ICON =
+  "flex size-9 shrink-0 items-center justify-center rounded-xl text-muted-foreground transition-colors hover:bg-muted hover:text-foreground disabled:pointer-events-none disabled:opacity-40";
+
+function HudIconBtn({
+  className,
+  children,
+  ...props
+}: ComponentPropsWithoutRef<"button">) {
+  return (
+    <button
+      type="button"
+      data-tauri-drag-region="false"
+      className={cn(HUD_ICON, className)}
+      {...props}
+    >
+      {children}
+    </button>
   );
 }
 

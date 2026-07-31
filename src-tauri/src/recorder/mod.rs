@@ -258,6 +258,10 @@ fn spawn_encode_loop(
             // Active-time of the first kept frame → timeline zero. Cursor/audio
             // share this epoch so export doesn't open on SCK warm-up black.
             let mut media_epoch: Option<f64> = None;
+            // Wall-clock pause tracking for the HUD timer (independent of frame
+            // timestamps). Without this, `Elapsed` kept advancing on Pause.
+            let mut hud_pause_mark: Option<Instant> = None;
+            let mut hud_paused_accum = Duration::ZERO;
 
             loop {
                 // Only mux audio once video has started — keeps A/V aligned with
@@ -330,9 +334,20 @@ fn spawn_encode_loop(
                 };
 
                 if last_emit.elapsed() >= Duration::from_millis(250) {
-                    emit(RecorderEvent::Elapsed {
-                        seconds: t0.elapsed().as_secs_f64(),
-                    });
+                    if pause_flag.load(Ordering::Relaxed) {
+                        hud_pause_mark.get_or_insert_with(Instant::now);
+                    } else if let Some(mark) = hud_pause_mark.take() {
+                        hud_paused_accum += mark.elapsed();
+                    }
+                    let paused_now = hud_pause_mark
+                        .map(|m| m.elapsed())
+                        .unwrap_or(Duration::ZERO);
+                    let seconds = hud_elapsed_secs(
+                        t0.elapsed(),
+                        hud_paused_accum,
+                        paused_now,
+                    );
+                    emit(RecorderEvent::Elapsed { seconds });
                     last_emit = Instant::now();
                 }
 
@@ -493,6 +508,16 @@ fn is_capture_warmup_black(bgra: &[u8], width: u32, height: u32, bytes_per_row: 
 /// Max active-recording seconds we will wait for a non-black frame before
 /// forcing the timeline to start (dark fullscreen apps must still record).
 const CAPTURE_WARMUP_MAX_SECS: f64 = 0.75;
+
+/// HUD timer: wall clock minus completed pauses minus the open pause (if any).
+fn hud_elapsed_secs(
+    wall: Duration,
+    paused_accum: Duration,
+    current_pause: Duration,
+) -> f64 {
+    wall.saturating_sub(paused_accum + current_pause)
+        .as_secs_f64()
+}
 
 /// Remove paused wall-time spans from the cursor track, mirroring exactly how
 /// the encode loop folds them out of the video timeline (`paused_accum`).
@@ -674,6 +699,16 @@ mod tests {
         buf[i + 1] = 200;
         buf[i + 2] = 200;
         assert!(!is_capture_warmup_black(&buf, w, h, stride));
+    }
+
+    #[test]
+    fn hud_elapsed_freezes_during_pause() {
+        let wall = Duration::from_secs(10);
+        let prior = Duration::from_secs(2);
+        let open = Duration::from_secs(3);
+        // 10 − 2 − 3 = 5 while paused; resumes from the same 5.
+        assert!((hud_elapsed_secs(wall, prior, open) - 5.0).abs() < 1e-9);
+        assert!((hud_elapsed_secs(wall, prior, Duration::ZERO) - 8.0).abs() < 1e-9);
     }
 
     #[test]

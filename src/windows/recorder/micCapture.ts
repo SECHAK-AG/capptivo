@@ -88,6 +88,25 @@ export function releaseMic(): void {
   warmDeviceId = null;
 }
 
+/**
+ * Mute/unmute without tearing down MediaRecorder — silence is written while
+ * muted; re-enable resumes audio in the same `mic.webm`. Returns false when
+ * there is no live stream (mic was never armed for this take).
+ */
+export function setMicTrackEnabled(enabled: boolean): boolean {
+  if (!stream) return false;
+  let any = false;
+  for (const t of stream.getAudioTracks()) {
+    t.enabled = enabled;
+    any = true;
+  }
+  return any;
+}
+
+export function micTrackLive(): boolean {
+  return !!stream?.active && stream.getAudioTracks().length > 0;
+}
+
 async function startMicFileCapture(projectId: string): Promise<void> {
   if (!stream || recorder) return;
   const mime = pickAudioMime();

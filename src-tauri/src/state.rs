@@ -52,6 +52,10 @@ impl AppState {
 
         let emit_handle = app.clone();
         let emit = Arc::new(move |event: RecorderEvent| {
+            // Swap tray items on state changes only — never on elapsed ticks.
+            if let RecorderEvent::StateChanged { ref state } = event {
+                crate::tray::sync_for_state(&emit_handle, state);
+            }
             let channel = event.channel();
             if let Err(err) = emit_handle.emit(channel, &event) {
                 tracing::warn!(%channel, %err, "failed to emit recorder event");

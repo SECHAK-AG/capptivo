@@ -48,6 +48,7 @@ export const commands = {
       | "dropdown"
       | "menu"
       | "hud"
+      | "hud-mini"
       | "countdown",
   ) => invoke<void>("set_recorder_layout", { layout }),
   /** Hug the setup pill — pass measured content width (logical px). */

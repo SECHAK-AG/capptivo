@@ -294,7 +294,7 @@ function CaptureModeMenu({
       </DropdownMenuTrigger>
       <DropdownMenuContent
         align="start"
-        side="bottom"
+        side="top"
         sideOffset={6}
         collisionPadding={8}
         className={cn(MENU_CONTENT, "w-[min(28rem,calc(100vw-1.5rem))]")}
@@ -352,7 +352,7 @@ function DeviceMenu({
       </DropdownMenuTrigger>
       <DropdownMenuContent
         align="start"
-        side="bottom"
+        side="top"
         sideOffset={6}
         collisionPadding={8}
         className={cn(MENU_CONTENT, "w-72")}
@@ -456,7 +456,7 @@ function CameraMenu({
       </DropdownMenuTrigger>
       <DropdownMenuContent
         align="center"
-        side="bottom"
+        side="top"
         sideOffset={6}
         collisionPadding={8}
         className={cn(MENU_CONTENT, "w-56")}
@@ -549,7 +549,7 @@ function MicMenu({
       </DropdownMenuTrigger>
       <DropdownMenuContent
         align="center"
-        side="bottom"
+        side="top"
         sideOffset={6}
         collisionPadding={8}
         className={cn(MENU_CONTENT, "w-56")}
@@ -614,7 +614,7 @@ function AudioMenu({
       </DropdownMenuTrigger>
       <DropdownMenuContent
         align="center"
-        side="bottom"
+        side="top"
         sideOffset={6}
         collisionPadding={8}
         className={cn(MENU_CONTENT, "w-52")}
@@ -664,7 +664,7 @@ function SettingsMenu({
       </DropdownMenuTrigger>
       <DropdownMenuContent
         align="end"
-        side="bottom"
+        side="top"
         sideOffset={6}
         collisionPadding={8}
         className={cn(MENU_CONTENT, "w-44")}

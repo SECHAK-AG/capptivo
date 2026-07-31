@@ -298,6 +298,12 @@ export const ja: Record<TranslationKey, string> = {
   "recorder.hud.finalizing": "仕上げ中…",
   "recorder.hud.annotate.show": "注釈を表示",
   "recorder.hud.annotate.hide": "注釈を隠す",
+  "recorder.hud.mic.mute": "マイクをミュート",
+  "recorder.hud.mic.unmute": "マイクのミュートを解除",
+  "recorder.hud.mic.unavailable": "この録画にはマイクがありません",
+  "recorder.hud.collapse": "コントロールを折りたたむ",
+  "recorder.hud.expand": "コントロールを展開",
+  "recorder.hud.hide": "コントロールを隠す",
   "recorder.error.dismiss": "閉じる",
 
   "library.search.placeholder": "名前で検索…",

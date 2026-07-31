@@ -99,9 +99,17 @@ body {
   -webkit-font-smoothing: antialiased;
 }
 
-/* Recorder: don't clip dropdowns; window stays transparent. */
+/* Recorder: fill the WebView so bottom-docked chrome can pin the bar to the
+ * bottom edge while menus open upward into the space above (no bar jump). */
+html.recorder-shell,
+html.recorder-shell body,
+html.recorder-shell #root {
+  height: 100%;
+}
+
 html.recorder-shell #root > div {
   overflow: visible;
+  height: 100%;
 }
 
 html.camera-shell,

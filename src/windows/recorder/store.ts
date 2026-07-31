@@ -22,9 +22,11 @@ import type {
 import {
   ensureMicCaptureListeners,
   flushMicCaptureWithTimeout,
+  micTrackLive,
   prepareMic,
   probeMicPermission,
   releaseMic,
+  setMicTrackEnabled,
 } from "./micCapture";
 import { probeCameraPermission } from "./cameraAccess";
 import { flushCameraCaptureWithTimeout } from "./flushCamera";
@@ -70,6 +72,8 @@ interface RecorderStore {
 
   cameraEnabled: boolean;
   micEnabled: boolean;
+  /** Mid-take mic mute (track.enabled) — does not tear down MediaRecorder. */
+  micSessionMuted: boolean;
   cameraDeviceId: string | null;
   micDeviceId: string | null;
   cameras: MediaDeviceOption[];
@@ -98,6 +102,8 @@ interface RecorderStore {
   ) => void;
   setCameraEnabled: (enabled: boolean) => void;
   setMicEnabled: (enabled: boolean) => void;
+  /** Mute/unmute the live mic track during an active recording. */
+  toggleMicMute: () => void;
   setAnnotationVisible: (visible: boolean) => void;
   setCameraDeviceId: (id: string | null) => void;
   setMicDeviceId: (id: string | null) => void;
@@ -190,6 +196,7 @@ export const useRecorderStore = create<RecorderStore>((set, get) => ({
 
   cameraEnabled: false,
   micEnabled: false,
+  micSessionMuted: false,
   cameraDeviceId: null,
   micDeviceId: null,
   cameras: [],
@@ -414,7 +421,7 @@ export const useRecorderStore = create<RecorderStore>((set, get) => ({
   },
 
   setMicEnabled(enabled) {
-    set({ micEnabled: enabled });
+    set({ micEnabled: enabled, micSessionMuted: enabled ? false : get().micSessionMuted });
     if (enabled) {
       // prepareMic owns getUserMedia — no throwaway probe (that blacks face-cam).
       void (async () => {
@@ -428,6 +435,13 @@ export const useRecorderStore = create<RecorderStore>((set, get) => ({
     } else {
       releaseMic();
     }
+  },
+
+  toggleMicMute() {
+    if (!micTrackLive()) return;
+    const next = !get().micSessionMuted;
+    if (!setMicTrackEnabled(!next)) return;
+    set({ micSessionMuted: next });
   },
 
   setAnnotationVisible(visible) {
@@ -561,6 +575,7 @@ export const useRecorderStore = create<RecorderStore>((set, get) => ({
       await (prewarmInFlight ?? get().prewarmCapture());
       prewarmInFlight = null;
       await commands.startRecording(config);
+      set({ micSessionMuted: false });
       if (captureMode === "area" && areaSelection) {
         await commands.showAreaFrameGuide(areaSelection).catch(() => undefined);
       }
@@ -583,9 +598,10 @@ export const useRecorderStore = create<RecorderStore>((set, get) => ({
       await commands.stopRecording();
       void commands.hideAreaFrameGuide().catch(() => undefined);
       void commands.hideCameraPreview().catch(() => undefined);
-      set({ annotationVisible: false });
+      set({ annotationVisible: false, micSessionMuted: false });
       if (micEnabled && get().micDeviceId) {
         await prepareMic(get().micDeviceId!).catch(() => undefined);
+        setMicTrackEnabled(true);
       }
     } catch (e) {
       set({ lastError: describeError(e) });

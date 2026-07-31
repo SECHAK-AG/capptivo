@@ -77,6 +77,25 @@ fn camera_default_position(app: &AppHandle) -> (f64, f64) {
     (x.max(0.0), y.max(0.0))
 }
 
+/// Gap between the recorder bar and the bottom of the work area (above the Dock).
+const RECORDER_BOTTOM_MARGIN: f64 = 20.0;
+
+/// Bottom-center of the primary work area — setup / HUD dock.
+fn recorder_bottom_center(app: &AppHandle, width: f64, height: f64) -> (f64, f64) {
+    let Some(monitor) = app.primary_monitor().ok().flatten() else {
+        return (80.0, 80.0);
+    };
+    let scale = monitor.scale_factor();
+    let work = monitor.work_area();
+    let ww = work.size.width as f64 / scale;
+    let wh = work.size.height as f64 / scale;
+    let wx = work.position.x as f64 / scale;
+    let wy = work.position.y as f64 / scale;
+    let x = wx + (ww - width).max(0.0) / 2.0;
+    let y = wy + (wh - height).max(0.0) - RECORDER_BOTTOM_MARGIN;
+    (x, y.max(wy))
+}
+
 /// Setup toolbar (Display / devices / Record).
 /// Width comes from the webview (`set_recorder_bar_width`) so the pill never clips.
 const LAYOUT_SETUP_H: f64 = 64.0;
@@ -89,8 +108,10 @@ const LAYOUT_ALERT_H: f64 = 120.0;
 const LAYOUT_DROPDOWN_H: f64 = 340.0;
 /// Setup + source picker (display/window cards).
 const LAYOUT_MENU_H: f64 = 360.0;
-/// Compact live HUD (grip + timer + pause + stop).
-const LAYOUT_HUD: (f64, f64) = (400.0, 56.0);
+/// Compact live HUD (status + icon controls).
+const LAYOUT_HUD: (f64, f64) = (420.0, 56.0);
+/// Collapsed HUD chip (REC + timer + expand).
+const LAYOUT_HUD_MINI: (f64, f64) = (168.0, 48.0);
 /// Countdown badge (centered on the primary display).
 /// Must stay square — a wide leftover setup width makes the digit look
 /// top/bottom-cramped with huge side gaps.
@@ -98,10 +119,6 @@ const LAYOUT_COUNTDOWN: (f64, f64) = (240.0, 240.0);
 
 /// Last measured setup-bar width (logical px). 0 = use fallback until first measure.
 static SETUP_BAR_W: AtomicU32 = AtomicU32::new(0);
-
-/// Logical outer position saved before a centered layout (countdown)
-/// recenters the window — restored when returning to setup/hud/etc.
-static PRE_CENTERED_POS: Mutex<Option<(f64, f64)>> = Mutex::new(None);
 
 fn setup_bar_width() -> f64 {
     let w = SETUP_BAR_W.load(Ordering::Relaxed);
@@ -125,6 +142,7 @@ fn layout_size(layout: &str) -> tauri::LogicalSize<f64> {
         "dropdown" => (setup_bar_width(), LAYOUT_DROPDOWN_H),
         "alert" => (setup_bar_width(), LAYOUT_ALERT_H),
         "hud" => LAYOUT_HUD,
+        "hud-mini" => LAYOUT_HUD_MINI,
         "countdown" => LAYOUT_COUNTDOWN,
         _ => (setup_bar_width(), LAYOUT_SETUP_H),
     };
@@ -155,10 +173,9 @@ pub fn set_recorder_bar_width(app: AppHandle, width: f64) -> tauri::Result<()> {
     if !setup_family {
         return Ok(());
     }
-    win.set_size(tauri::Size::Logical(tauri::LogicalSize::new(
-        w as f64,
-        logical_h,
-    )))?;
+    // Preserve the current bottom-center anchor (do not yank a dragged bar
+    // back to the screen dock on every ResizeObserver tick).
+    resize_preserving_bottom_anchor(&win, w as f64, logical_h)?;
     pin_to_all_spaces_if_shown(&win);
     Ok(())
 }
@@ -524,8 +541,9 @@ pub fn hide_recorder(app: AppHandle) -> tauri::Result<()> {
 
 /// Resize the recorder window: `setup` | `alert` | `dropdown` | `menu` | `hud`
 /// | `countdown`.
-/// Centered layouts (`countdown`) park a compact card on the primary display
-/// and restore the prior tray position when leaving.
+/// Centered layouts (`countdown`) park a compact card on the primary display.
+/// Dock layouts (setup / HUD / menus) sit bottom-center; resizing re-anchors
+/// so width changes do not jump left from a top-left `set_size`.
 /// `alert` is setup height plus room for the error toast under the bar.
 #[tauri::command]
 pub fn set_recorder_layout(app: AppHandle, layout: String) -> tauri::Result<()> {
@@ -538,14 +556,8 @@ pub fn set_recorder_layout(app: AppHandle, layout: String) -> tauri::Result<()> 
     } else {
         let _ = win.set_min_size(None::<tauri::LogicalSize<f64>>);
         let _ = win.set_max_size(None::<tauri::LogicalSize<f64>>);
-        win.set_size(tauri::Size::Logical(layout_size(&layout)))?;
-        if let Ok(mut slot) = PRE_CENTERED_POS.lock() {
-            if let Some((x, y)) = slot.take() {
-                let _ = win.set_position(tauri::Position::Logical(
-                    tauri::LogicalPosition::new(x, y),
-                ));
-            }
-        }
+        let size = layout_size(&layout);
+        apply_docked_recorder_size(&app, &win, size.width, size.height)?;
     }
 
     // macOS can drop the Spaces pin after resize; re-apply while the bar is open.
@@ -553,22 +565,55 @@ pub fn set_recorder_layout(app: AppHandle, layout: String) -> tauri::Result<()> 
     Ok(())
 }
 
-/// Lock size, place on the primary work area, remember prior tray position once.
+/// Resize then place at bottom-center. Prefer this over bare `set_size` so
+/// setup ↔ HUD width changes stay visually anchored.
+fn apply_docked_recorder_size(
+    app: &AppHandle,
+    win: &tauri::WebviewWindow,
+    width: f64,
+    height: f64,
+) -> tauri::Result<()> {
+    win.set_size(tauri::Size::Logical(tauri::LogicalSize::new(width, height)))?;
+    let (x, y) = recorder_bottom_center(app, width, height);
+    win.set_position(tauri::Position::Logical(tauri::LogicalPosition::new(x, y)))?;
+    Ok(())
+}
+
+/// Resize while keeping the window's horizontal center and bottom edge fixed.
+/// Used for content-driven width tweaks so a user drag is not undone.
+fn resize_preserving_bottom_anchor(
+    win: &tauri::WebviewWindow,
+    new_w: f64,
+    new_h: f64,
+) -> tauri::Result<()> {
+    let scale = win.scale_factor().unwrap_or(1.0);
+    let (cx, bottom) = match (win.outer_position(), win.outer_size()) {
+        (Ok(pos), Ok(size)) => {
+            let x = pos.x as f64 / scale;
+            let y = pos.y as f64 / scale;
+            let w = size.width as f64 / scale;
+            let h = size.height as f64 / scale;
+            (x + w / 2.0, y + h)
+        }
+        _ => {
+            win.set_size(tauri::Size::Logical(tauri::LogicalSize::new(new_w, new_h)))?;
+            return Ok(());
+        }
+    };
+    win.set_size(tauri::Size::Logical(tauri::LogicalSize::new(new_w, new_h)))?;
+    let x = cx - new_w / 2.0;
+    let y = bottom - new_h;
+    win.set_position(tauri::Position::Logical(tauri::LogicalPosition::new(x, y)))?;
+    Ok(())
+}
+
+/// Lock size, place on the primary work area center (countdown badge).
 fn apply_centered_recorder_layout(
     app: &AppHandle,
     win: &tauri::WebviewWindow,
     width: f64,
     height: f64,
 ) -> tauri::Result<()> {
-    if let Ok(pos) = win.outer_position() {
-        let scale = win.scale_factor().unwrap_or(1.0);
-        if let Ok(mut slot) = PRE_CENTERED_POS.lock() {
-            // Keep the first pre-center position if countdown re-applies.
-            if slot.is_none() {
-                *slot = Some((pos.x as f64 / scale, pos.y as f64 / scale));
-            }
-        }
-    }
     let size = tauri::LogicalSize::new(width, height);
     let _ = win.set_min_size(Some(size));
     let _ = win.set_max_size(Some(size));
@@ -588,7 +633,8 @@ fn apply_centered_recorder_layout(
 pub fn show_recorder_popover(app: &AppHandle) -> tauri::Result<()> {
     if let Some(win) = app.get_webview_window(RECORDER_LABEL) {
         if !win.is_visible().unwrap_or(false) {
-            let _ = win.set_size(tauri::Size::Logical(layout_size("setup")));
+            let size = layout_size("setup");
+            apply_docked_recorder_size(app, &win, size.width, size.height)?;
         }
         set_follows_spaces(&win, true);
         win.show()?;
@@ -611,9 +657,12 @@ pub fn toggle_recorder_popover(app: &AppHandle) -> tauri::Result<()> {
 }
 
 fn create_recorder_popover(app: &AppHandle) -> tauri::Result<()> {
+    let w = setup_bar_width();
+    let h = LAYOUT_SETUP_H;
+    let (x, y) = recorder_bottom_center(app, w, h);
     let win = WebviewWindowBuilder::new(app, RECORDER_LABEL, WebviewUrl::App("recorder.html".into()))
         .title("Capptivo")
-        .inner_size(setup_bar_width(), LAYOUT_SETUP_H)
+        .inner_size(w, h)
         .resizable(false)
         .decorations(false)
         .transparent(true)
@@ -625,6 +674,7 @@ fn create_recorder_popover(app: &AppHandle) -> tauri::Result<()> {
         // HUD click just to refocus — the "click twice to toggle" feel.
         .accept_first_mouse(true)
         .visible(true)
+        .position(x, y)
         .build()?;
     set_follows_spaces(&win, true);
     win.set_focus()?;

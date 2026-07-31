@@ -290,6 +290,12 @@ export const zh: Record<TranslationKey, string> = {
   "recorder.hud.finalizing": "正在完成…",
   "recorder.hud.annotate.show": "显示标注",
   "recorder.hud.annotate.hide": "隐藏标注",
+  "recorder.hud.mic.mute": "静音麦克风",
+  "recorder.hud.mic.unmute": "取消静音",
+  "recorder.hud.mic.unavailable": "此录制未包含麦克风",
+  "recorder.hud.collapse": "收起控制栏",
+  "recorder.hud.expand": "展开控制栏",
+  "recorder.hud.hide": "隐藏控制栏",
   "recorder.error.dismiss": "关闭",
 
   "library.search.placeholder": "按名称搜索…",

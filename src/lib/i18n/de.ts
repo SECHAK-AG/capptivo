@@ -301,6 +301,12 @@ export const de: Record<TranslationKey, string> = {
   "recorder.hud.finalizing": "Wird abgeschlossen…",
   "recorder.hud.annotate.show": "Annotationen zeigen",
   "recorder.hud.annotate.hide": "Annotationen ausblenden",
+  "recorder.hud.mic.mute": "Mikrofon stummschalten",
+  "recorder.hud.mic.unmute": "Mikrofon aktivieren",
+  "recorder.hud.mic.unavailable": "Kein Mikrofon in dieser Aufnahme",
+  "recorder.hud.collapse": "Steuerung einklappen",
+  "recorder.hud.expand": "Steuerung ausklappen",
+  "recorder.hud.hide": "Steuerung ausblenden",
   "recorder.error.dismiss": "Schließen",
 
   "library.search.placeholder": "Nach Namen suchen…",

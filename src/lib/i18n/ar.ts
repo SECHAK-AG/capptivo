@@ -302,6 +302,12 @@ export const ar: Record<TranslationKey, string> = {
   "recorder.hud.finalizing": "جارٍ الإنهاء…",
   "recorder.hud.annotate.show": "إظهار التعليقات",
   "recorder.hud.annotate.hide": "إخفاء التعليقات",
+  "recorder.hud.mic.mute": "كتم الميكروفون",
+  "recorder.hud.mic.unmute": "إلغاء كتم الميكروفون",
+  "recorder.hud.mic.unavailable": "لا يوجد ميكروفون في هذا التسجيل",
+  "recorder.hud.collapse": "طي عناصر التحكم",
+  "recorder.hud.expand": "توسيع عناصر التحكم",
+  "recorder.hud.hide": "إخفاء عناصر التحكم",
   "recorder.error.dismiss": "إغلاق",
 
   "library.search.placeholder": "البحث بالاسم…",

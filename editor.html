@@ -4,6 +4,35 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Capptivo Editor</title>
+    <!--
+      Splash paints before Vite/React. Inline only — no extra CSS request,
+      no splash window, removed once the editor/library shell is ready.
+    -->
+    <style>
+      html,
+      body {
+        margin: 0;
+        height: 100%;
+        background: #141414;
+      }
+      #splash {
+        position: fixed;
+        inset: 0;
+        z-index: 9999;
+        display: grid;
+        place-items: center;
+        background: #141414;
+        transition: opacity 180ms ease-out;
+        pointer-events: none;
+      }
+      #splash.is-hiding {
+        opacity: 0;
+      }
+      #splash img {
+        width: min(220px, 48vw);
+        height: auto;
+      }
+    </style>
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link
@@ -12,6 +41,16 @@
     />
   </head>
   <body>
+    <div id="splash" aria-busy="true" aria-label="Loading Capptivo">
+      <img
+        src="/logo-capptivo.svg"
+        alt=""
+        width="220"
+        height="50"
+        decoding="sync"
+        fetchpriority="high"
+      />
+    </div>
     <div id="root"></div>
     <script type="module" src="/src/windows/editor/main.tsx"></script>
   </body>

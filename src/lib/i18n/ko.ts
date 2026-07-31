@@ -298,6 +298,12 @@ export const ko: Record<TranslationKey, string> = {
   "recorder.hud.finalizing": "마무리 중…",
   "recorder.hud.annotate.show": "주석 표시",
   "recorder.hud.annotate.hide": "주석 숨기기",
+  "recorder.hud.mic.mute": "마이크 음소거",
+  "recorder.hud.mic.unmute": "마이크 음소거 해제",
+  "recorder.hud.mic.unavailable": "이 녹화에 마이크가 없습니다",
+  "recorder.hud.collapse": "컨트롤 접기",
+  "recorder.hud.expand": "컨트롤 펼치기",
+  "recorder.hud.hide": "컨트롤 숨기기",
   "recorder.error.dismiss": "닫기",
 
   "library.search.placeholder": "이름으로 검색…",
