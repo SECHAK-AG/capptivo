@@ -184,23 +184,90 @@ const followEdge: ZoomFragment = {
     `edge focus: plateau should drift toward edge (got ${plateau!.x},${plateau!.y})`,
   );
 
-  // Ease-in must couple pan to scale — not sit at centre until plateau
-  // (the old smart-follow safe-zone lock).
+  // Ease-in: fixed focus at start seed (clamped at full S), pan lerps
+  // centre→focus with the envelope — not clampTargetForScale(seed, growingScale)
+  // which rides the clamp edge and hunts at high zoom.
   const midEase = keys.find((k) => {
     const env = computeZoomEnvelope(followEdge, k.t);
     return env > 0.45 && env < 0.55;
   });
   assert(midEase != null, "follow: mid ease-in sample");
-  const midExpected = clampTargetForScale(edgeFocus, midEase!.scale);
+  const midEnv = computeZoomEnvelope(followEdge, midEase!.t);
+  const fullFocus = clampTargetForScale(edgeFocus, followEdge.targetScale);
+  const midExpected = clampTargetForScale(
+    {
+      x: 0.5 + (fullFocus.x - 0.5) * midEnv,
+      y: 0.5 + (fullFocus.y - 0.5) * midEnv,
+    },
+    midEase!.scale,
+  );
   assert(
     Math.abs(midEase!.x - midExpected.x) < 0.03 &&
       Math.abs(midEase!.y - midExpected.y) < 0.03,
-    `follow ease-in: pan should track clamp window (got ${midEase!.x},${midEase!.y} want ${midExpected.x},${midExpected.y})`,
+    `follow ease-in: pan should envelope-lerp to seed (got ${midEase!.x},${midEase!.y} want ${midExpected.x},${midExpected.y})`,
   );
   assert(
     midEase!.x < 0.48 && midEase!.y > 0.52,
     `follow ease-in: must leave centre before plateau (got ${midEase!.x},${midEase!.y})`,
   );
+}
+
+// --- follow-cursor: high-scale ease-in must not ride the clamp edge ---
+{
+  const seed = { x: 0.92, y: 0.5 };
+  const metadataHi: RecordingMetadata = {
+    schemaVersion: 2,
+    sourceWidth: 1920,
+    sourceHeight: 1080,
+    cursorSamples: [
+      { t: 0, x: seed.x, y: seed.y },
+      { t: 3, x: seed.x, y: seed.y },
+    ],
+  };
+  const followHi: ZoomFragment = {
+    id: "follow-hi-scale",
+    start: 0,
+    end: 3,
+    mode: "follow-cursor",
+    targetScale: 3,
+    easeIn: 0.6,
+    easeOut: 0.3,
+    damping: 4,
+  };
+  const keys = computeZoomKeyframes(followHi, metadataHi, 60);
+  const focus = clampTargetForScale(seed, followHi.targetScale);
+  let prevX = 0.5;
+  for (const k of keys) {
+    const env = computeZoomEnvelope(followHi, k.t);
+    const local = k.t - followHi.start;
+    // Ease-in only — ease-out deliberately returns toward centre.
+    if (local >= followHi.easeIn || env <= 0 || env >= 1) continue;
+    const expected = clampTargetForScale(
+      {
+        x: 0.5 + (focus.x - 0.5) * env,
+        y: 0.5 + (focus.y - 0.5) * env,
+      },
+      k.scale,
+    );
+    assert(
+      Math.abs(k.x - expected.x) < 0.02,
+      `hi-scale ease-in: pan hunts (t=${k.t} got ${k.x} want ${expected.x})`,
+    );
+    // Monotonic toward focus — no left/right oscillation.
+    assert(
+      k.x + 1e-6 >= prevX,
+      `hi-scale ease-in: pan moved left (t=${k.t} ${prevX}→${k.x})`,
+    );
+    prevX = k.x;
+    // Must not sit on the growing clamp max (old bug).
+    const clampMax = 1 - 0.5 / Math.max(1, k.scale);
+    if (env < 0.85 && focus.x > clampMax + 1e-6) {
+      assert(
+        k.x < clampMax - 0.01,
+        `hi-scale ease-in: sitting on clamp edge at env=${env} (pan=${k.x} edge=${clampMax})`,
+      );
+    }
+  }
 }
 
 // --- follow-cursor: ease-in must NOT chase a moving cursor (anti-flicker) ---
@@ -234,7 +301,15 @@ const followEdge: ZoomFragment = {
     return env > 0.45 && env < 0.55;
   });
   assert(midEase != null, "moving ease-in: mid sample");
-  const expected = clampTargetForScale(seed, midEase!.scale);
+  const midEnv = computeZoomEnvelope(followMoving, midEase!.t);
+  const focus = clampTargetForScale(seed, followMoving.targetScale);
+  const expected = clampTargetForScale(
+    {
+      x: 0.5 + (focus.x - 0.5) * midEnv,
+      y: 0.5 + (focus.y - 0.5) * midEnv,
+    },
+    midEase!.scale,
+  );
   assert(
     Math.abs(midEase!.x - expected.x) < 0.02 &&
       Math.abs(midEase!.y - expected.y) < 0.02,

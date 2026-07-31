@@ -666,7 +666,7 @@ export function computeZoomKeyframes(
     const t = fragment.start + i / fps;
     const envelope = computeZoomEnvelope(fragment, t);
     // Fixed-rect: hyperbolic scale so the visible window shrinks evenly onto
-    // the rect. Follow-cursor: linear scale (pan couples via clamp window).
+    // the rect. Follow-cursor: linear scale; ease-in pan lerps centre→seed.
     const zoomScale =
       fragment.mode === "fixed-rect"
         ? computeSceneZoomScale(fragment, envelope)
@@ -694,8 +694,14 @@ export function computeZoomKeyframes(
           y: motionState.y,
         });
       } else if (envelope < 1) {
+        // Fixed focus for the zoom-in (same idea as a stable zoom transform):
+        // pan lerps centre → seed clamped at full target scale. Do NOT clamp the
+        // seed to the growing scale — that rides the clamp edge and hunts L/R
+        // at high S. Smart-follow only starts on the plateau.
         const seed = easeInSeed ?? { x: cx, y: cy };
-        const panned = clampTargetForScale(seed, zoomScale);
+        const fullScale = Math.max(1, fragment.targetScale);
+        const focus = clampTargetForScale(seed, fullScale);
+        const panned = easeOutPan(focus, envelope, zoomScale, true);
         motionState = { x: panned.x, y: panned.y, vx: 0, vy: 0 };
         smartFollowRuntime = createSmartFollowRuntime({
           x: motionState.x,
