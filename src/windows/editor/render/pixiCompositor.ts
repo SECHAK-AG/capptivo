@@ -177,6 +177,7 @@ export async function createPixiFrameCompositor(
     const look = inputs.look;
     const zoomScale = inputs.zoomScale ?? 1;
     const zoomFocus = inputs.zoomFocus ?? { x: 0.5, y: 0.5 };
+    const zoomTargetScale = inputs.zoomTargetScale;
     const crop = inputs.screenContentCrop ?? null;
     const backgroundImage = inputs.background;
 
@@ -264,6 +265,7 @@ export async function createPixiFrameCompositor(
           videoRect: rect,
           focus: zoomFocus,
           scale: zoomScale,
+          targetScale: zoomTargetScale,
         }),
       );
     } else {

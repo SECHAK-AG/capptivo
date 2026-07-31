@@ -694,15 +694,13 @@ export function computeZoomKeyframes(
           y: motionState.y,
         });
       } else if (envelope < 1) {
-        // Fixed focus for the zoom-in (same idea as a stable zoom transform):
-        // pan lerps centre → seed clamped at full target scale. Do NOT clamp the
-        // seed to the growing scale — that rides the clamp edge and hunts L/R
-        // at high S. Smart-follow only starts on the plateau.
+        // Recordly-style zoom-in: focus stays fixed on the start seed (clamped
+        // at full S). Only scale eases — the camera applies progress·finalOffset
+        // so there is no centre→seed pan slide. Smart-follow starts on plateau.
         const seed = easeInSeed ?? { x: cx, y: cy };
         const fullScale = Math.max(1, fragment.targetScale);
         const focus = clampTargetForScale(seed, fullScale);
-        const panned = easeOutPan(focus, envelope, zoomScale, true);
-        motionState = { x: panned.x, y: panned.y, vx: 0, vy: 0 };
+        motionState = { x: focus.x, y: focus.y, vx: 0, vy: 0 };
         smartFollowRuntime = createSmartFollowRuntime({
           x: motionState.x,
           y: motionState.y,
@@ -751,7 +749,11 @@ export function computeZoomKeyframes(
         ? { x: motionState.x, y: motionState.y }
         : clampTargetForScale(
             { x: motionState.x, y: motionState.y },
-            zoomScale,
+            // Ease-in holds focus at full-S clamp; re-clamping to the growing
+            // scale would ride the clamp edge (the old L/R hunt).
+            envelope < 1 && !inEaseOut
+              ? Math.max(1, fragment.targetScale)
+              : zoomScale,
           );
     motionState = { ...motionState, x: safe.x, y: safe.y };
     keyframes.push({ t, x: safe.x, y: safe.y, scale: zoomScale });

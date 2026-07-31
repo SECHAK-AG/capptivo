@@ -168,8 +168,15 @@ const followEdge: ZoomFragment = {
 {
   const keys = computeZoomKeyframes(followEdge, metadataEdge, 60);
   for (const k of keys) {
+    const env = computeZoomEnvelope(followEdge, k.t);
+    const local = k.t - followEdge.start;
+    // Ease-in holds full-S focus while scale climbs (Recordly camera path).
+    const clampScale =
+      env < 1 && local < followEdge.easeIn
+        ? followEdge.targetScale
+        : k.scale;
     assert(
-      inValidRange(k, k.scale),
+      inValidRange(k, clampScale),
       `edge focus: black void at t=${k.t} pan=(${k.x},${k.y}) scale=${k.scale}`,
     );
   }
@@ -184,35 +191,26 @@ const followEdge: ZoomFragment = {
     `edge focus: plateau should drift toward edge (got ${plateau!.x},${plateau!.y})`,
   );
 
-  // Ease-in: fixed focus at start seed (clamped at full S), pan lerps
-  // centre→focus with the envelope — not clampTargetForScale(seed, growingScale)
-  // which rides the clamp edge and hunts at high zoom.
+  // Ease-in: focus locked on start seed (clamped at full S) — only scale
+  // eases. Camera applies Recordly progress·finalOffset; pan must not slide.
   const midEase = keys.find((k) => {
     const env = computeZoomEnvelope(followEdge, k.t);
     return env > 0.45 && env < 0.55;
   });
   assert(midEase != null, "follow: mid ease-in sample");
-  const midEnv = computeZoomEnvelope(followEdge, midEase!.t);
   const fullFocus = clampTargetForScale(edgeFocus, followEdge.targetScale);
-  const midExpected = clampTargetForScale(
-    {
-      x: 0.5 + (fullFocus.x - 0.5) * midEnv,
-      y: 0.5 + (fullFocus.y - 0.5) * midEnv,
-    },
-    midEase!.scale,
-  );
   assert(
-    Math.abs(midEase!.x - midExpected.x) < 0.03 &&
-      Math.abs(midEase!.y - midExpected.y) < 0.03,
-    `follow ease-in: pan should envelope-lerp to seed (got ${midEase!.x},${midEase!.y} want ${midExpected.x},${midExpected.y})`,
+    Math.abs(midEase!.x - fullFocus.x) < 0.02 &&
+      Math.abs(midEase!.y - fullFocus.y) < 0.02,
+    `follow ease-in: pan must stay on seed (got ${midEase!.x},${midEase!.y} want ${fullFocus.x},${fullFocus.y})`,
   );
   assert(
     midEase!.x < 0.48 && midEase!.y > 0.52,
-    `follow ease-in: must leave centre before plateau (got ${midEase!.x},${midEase!.y})`,
+    `follow ease-in: seed is off-centre (got ${midEase!.x},${midEase!.y})`,
   );
 }
 
-// --- follow-cursor: high-scale ease-in must not ride the clamp edge ---
+// --- follow-cursor: high-scale ease-in keeps fixed focus (no L/R hunt) ---
 {
   const seed = { x: 0.92, y: 0.5 };
   const metadataHi: RecordingMetadata = {
@@ -236,37 +234,13 @@ const followEdge: ZoomFragment = {
   };
   const keys = computeZoomKeyframes(followHi, metadataHi, 60);
   const focus = clampTargetForScale(seed, followHi.targetScale);
-  let prevX = 0.5;
   for (const k of keys) {
-    const env = computeZoomEnvelope(followHi, k.t);
     const local = k.t - followHi.start;
-    // Ease-in only — ease-out deliberately returns toward centre.
-    if (local >= followHi.easeIn || env <= 0 || env >= 1) continue;
-    const expected = clampTargetForScale(
-      {
-        x: 0.5 + (focus.x - 0.5) * env,
-        y: 0.5 + (focus.y - 0.5) * env,
-      },
-      k.scale,
-    );
+    if (local >= followHi.easeIn) continue;
     assert(
-      Math.abs(k.x - expected.x) < 0.02,
-      `hi-scale ease-in: pan hunts (t=${k.t} got ${k.x} want ${expected.x})`,
+      Math.abs(k.x - focus.x) < 0.02 && Math.abs(k.y - focus.y) < 0.02,
+      `hi-scale ease-in: focus drifted (t=${k.t} got ${k.x},${k.y} want ${focus.x},${focus.y})`,
     );
-    // Monotonic toward focus — no left/right oscillation.
-    assert(
-      k.x + 1e-6 >= prevX,
-      `hi-scale ease-in: pan moved left (t=${k.t} ${prevX}→${k.x})`,
-    );
-    prevX = k.x;
-    // Must not sit on the growing clamp max (old bug).
-    const clampMax = 1 - 0.5 / Math.max(1, k.scale);
-    if (env < 0.85 && focus.x > clampMax + 1e-6) {
-      assert(
-        k.x < clampMax - 0.01,
-        `hi-scale ease-in: sitting on clamp edge at env=${env} (pan=${k.x} edge=${clampMax})`,
-      );
-    }
   }
 }
 
@@ -301,19 +275,11 @@ const followEdge: ZoomFragment = {
     return env > 0.45 && env < 0.55;
   });
   assert(midEase != null, "moving ease-in: mid sample");
-  const midEnv = computeZoomEnvelope(followMoving, midEase!.t);
   const focus = clampTargetForScale(seed, followMoving.targetScale);
-  const expected = clampTargetForScale(
-    {
-      x: 0.5 + (focus.x - 0.5) * midEnv,
-      y: 0.5 + (focus.y - 0.5) * midEnv,
-    },
-    midEase!.scale,
-  );
   assert(
-    Math.abs(midEase!.x - expected.x) < 0.02 &&
-      Math.abs(midEase!.y - expected.y) < 0.02,
-    `moving ease-in: must track start seed not live cursor (got ${midEase!.x},${midEase!.y} want ${expected.x},${expected.y})`,
+    Math.abs(midEase!.x - focus.x) < 0.02 &&
+      Math.abs(midEase!.y - focus.y) < 0.02,
+    `moving ease-in: must stay on start seed (got ${midEase!.x},${midEase!.y} want ${focus.x},${focus.y})`,
   );
 }
 

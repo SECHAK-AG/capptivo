@@ -188,4 +188,54 @@ for (const scale of [1.5, 2, 3]) {
   );
 }
 
+// --- Recordly ease-in: progress * finalOffset (fixed focus, ramping scale) ---
+{
+  const focus = { x: 0.8, y: 0.3 };
+  const S = 2.5;
+  const focusStageX = RECT.x + focus.x * RECT.width;
+  const focusStageY = RECT.y + focus.y * RECT.height;
+  for (const progress of [0.25, 0.5, 0.75, 1]) {
+    const scale = 1 + (S - 1) * progress;
+    const t = computeCameraTransform({
+      stageWidth: STAGE.width,
+      stageHeight: STAGE.height,
+      videoRect: RECT,
+      focus,
+      scale,
+      targetScale: S,
+    });
+    const expectedX = progress * (STAGE.width / 2 - focusStageX * S);
+    const expectedY = progress * (STAGE.height / 2 - focusStageY * S);
+    assert(
+      Math.abs(t.scale - scale) < 1e-9 &&
+        Math.abs(t.x - expectedX) < 1e-6 &&
+        Math.abs(t.y - expectedY) < 1e-6,
+      `Recordly ease-in at p=${progress}: got (${t.x},${t.y}) want (${expectedX},${expectedY})`,
+    );
+  }
+  // Mid ease-in must NOT equal classic scale-about-focus (that slides harder).
+  {
+    const scale = 1 + (S - 1) * 0.5;
+    const recordly = computeCameraTransform({
+      stageWidth: STAGE.width,
+      stageHeight: STAGE.height,
+      videoRect: RECT,
+      focus,
+      scale,
+      targetScale: S,
+    });
+    const classic = computeCameraTransform({
+      stageWidth: STAGE.width,
+      stageHeight: STAGE.height,
+      videoRect: RECT,
+      focus,
+      scale,
+    });
+    assert(
+      Math.hypot(recordly.x - classic.x, recordly.y - classic.y) > 20,
+      "Recordly mid ease-in must differ from classic centre-on-focus",
+    );
+  }
+}
+
 console.log("cameraTransform.selfcheck: ok");

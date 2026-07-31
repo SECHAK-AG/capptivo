@@ -43,6 +43,11 @@ export interface RenderFrameInputs {
    * coordinate space in the zoom path; see `cameraTransform.ts`.
    */
   zoomFocus?: { x: number; y: number };
+  /**
+   * Full follow-cursor target scale while easing. Drives Recordly-style
+   * progress·finalOffset translation in `computeCameraTransform`.
+   */
+  zoomTargetScale?: number;
   /** Eased face-cam shrink for the active zoom (1 = full size). */
   faceCamPresenceScale?: number;
   screenContentCrop?: ScreenContentCropNorm | null;
@@ -71,6 +76,7 @@ export function resolveZoomReactiveState(
   sourceTime: number,
 ): {
   faceCamPresenceScale: number;
+  zoomTargetScale?: number;
 } {
   if (!activeZoom) {
     return {
@@ -85,7 +91,15 @@ export function resolveZoomReactiveState(
       )
     : 1;
 
+  // Follow-cursor ease-in/out: tell the camera the full S so translation can
+  // use Recordly's progress * finalOffset (fixed-rect keeps classic path).
+  const zoomTargetScale =
+    activeZoom.mode === "follow-cursor"
+      ? Math.max(1, activeZoom.targetScale)
+      : undefined;
+
   return {
     faceCamPresenceScale,
+    ...(zoomTargetScale != null ? { zoomTargetScale } : {}),
   };
 }
