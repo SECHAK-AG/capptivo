@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-set-recorder-menu"
+description = "Enables the set_recorder_menu command without any pre-configured scope."
+commands.allow = ["set_recorder_menu"]
+
+[[permission]]
+identifier = "deny-set-recorder-menu"
+description = "Denies the set_recorder_menu command without any pre-configured scope."
+commands.deny = ["set_recorder_menu"]

@@ -97,17 +97,15 @@ fn recorder_bottom_center(app: &AppHandle, width: f64, height: f64) -> (f64, f64
 }
 
 /// Setup toolbar (Display / devices / Record).
-/// Width comes from the webview (`set_recorder_bar_width`) so the pill never clips.
+/// Width comes from the webview (`set_recorder_bar_width`) so the pill never clips
+/// — only used as a fallback before the first measure; setup itself is a
+/// work-area overlay (see [`apply_setup_overlay`]).
 const LAYOUT_SETUP_H: f64 = 64.0;
 const LAYOUT_SETUP_W_FALLBACK: f64 = 880.0;
 const LAYOUT_SETUP_W_MIN: f64 = 640.0;
 const LAYOUT_SETUP_W_MAX: f64 = 1200.0;
 /// Setup toolbar + error toast underneath (toast used to clip to a red sliver).
 const LAYOUT_ALERT_H: f64 = 120.0;
-/// Toolbar + device/settings dropdown (Tauri clips to window bounds — must grow).
-const LAYOUT_DROPDOWN_H: f64 = 340.0;
-/// Setup + source picker (display/window cards).
-const LAYOUT_MENU_H: f64 = 360.0;
 /// Compact live HUD (status + icon controls).
 const LAYOUT_HUD: (f64, f64) = (420.0, 56.0);
 /// Collapsed HUD chip (REC + timer + expand).
@@ -117,73 +115,322 @@ const LAYOUT_HUD_MINI: (f64, f64) = (168.0, 48.0);
 /// top/bottom-cramped with huge side gaps.
 const LAYOUT_COUNTDOWN: (f64, f64) = (240.0, 240.0);
 
-/// Last measured setup-bar width (logical px). 0 = use fallback until first measure.
+/// What the recorder window is showing. Popovers are never a layout of their
+/// own — they are extra space reserved *next to* one of these, so opening a
+/// menu cannot resize or re-dock the bar itself (see [`set_recorder_menu`]).
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum RecorderLayout {
+    Setup,
+    Alert,
+    Hud,
+    HudMini,
+    Countdown,
+}
+
+impl RecorderLayout {
+    fn parse(name: &str) -> Self {
+        match name {
+            "alert" => Self::Alert,
+            "hud" => Self::Hud,
+            "hud-mini" => Self::HudMini,
+            "countdown" => Self::Countdown,
+            _ => Self::Setup,
+        }
+    }
+
+    fn chrome_height(self) -> f64 {
+        match self {
+            Self::Setup => LAYOUT_SETUP_H,
+            Self::Alert => LAYOUT_ALERT_H,
+            Self::Hud => LAYOUT_HUD.1,
+            Self::HudMini => LAYOUT_HUD_MINI.1,
+            Self::Countdown => LAYOUT_COUNTDOWN.1,
+        }
+    }
+
+    fn size(self) -> tauri::LogicalSize<f64> {
+        let (w, h) = match self {
+            // Setup/alert are work-area overlays — callers that need a real
+            // frame use [`apply_setup_overlay`]. This fallback is only for
+            // first-paint before the monitor is known.
+            Self::Setup => (LAYOUT_SETUP_W_FALLBACK, LAYOUT_SETUP_H),
+            Self::Alert => (LAYOUT_SETUP_W_FALLBACK, LAYOUT_ALERT_H),
+            Self::Hud => LAYOUT_HUD,
+            Self::HudMini => LAYOUT_HUD_MINI,
+            Self::Countdown => LAYOUT_COUNTDOWN,
+        };
+        tauri::LogicalSize::new(w, h)
+    }
+
+    /// The setup pill is the only layout that hosts popovers, and the only
+    /// one that covers the work area so the bar can CSS-drag without resizing.
+    fn is_setup_bar(self) -> bool {
+        matches!(self, Self::Setup | Self::Alert)
+    }
+}
+
+/// Side of the bar an open popover grows toward. Kept for IPC compatibility;
+/// setup is a work-area overlay and Radix flips popovers inside it.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum MenuSide {
+    Top,
+    Bottom,
+}
+
+impl MenuSide {
+    fn parse(name: &str) -> Self {
+        if name == "bottom" {
+            Self::Bottom
+        } else {
+            Self::Top
+        }
+    }
+}
+
+/// Recorder window geometry. Setup covers the work area; the webview CSS-positions
+/// the pill and reports its hitbox for click-through. HUD/countdown stay compact.
+struct RecorderGeometry {
+    layout: RecorderLayout,
+    menu_side: MenuSide,
+    /// Legacy field — setup overlay keeps this at 0 (no reserved strip).
+    menu_height: f64,
+}
+
+static GEOMETRY: Mutex<RecorderGeometry> = Mutex::new(RecorderGeometry {
+    layout: RecorderLayout::Setup,
+    menu_side: MenuSide::Top,
+    menu_height: 0.0,
+});
+
+fn geometry() -> std::sync::MutexGuard<'static, RecorderGeometry> {
+    GEOMETRY.lock().unwrap_or_else(|e| e.into_inner())
+}
+
+/// Popover is open in the setup frame — disable click-through for the menu room.
+static MENU_LIVE: AtomicBool = AtomicBool::new(false);
+/// Setup pill is being dragged (CSS drag — window size stays put).
+static RECORDER_DRAGGING: AtomicBool = AtomicBool::new(false);
+/// Setup click-through poller is running.
+static CLICK_THROUGH_ON: AtomicBool = AtomicBool::new(false);
+
+/// Webview-local hitbox of the setup/HUD chrome (x, y, w, h). Used so the
+/// work-area overlay can click-through everywhere except the pill + menus.
+static BAR_HITBOX: Mutex<Option<(f64, f64, f64, f64)>> = Mutex::new(None);
+
+/// Last measured setup-bar width (logical px). Cached for diagnostics; setup
+/// is a work-area overlay so width no longer drives the native frame.
 static SETUP_BAR_W: AtomicU32 = AtomicU32::new(0);
 
-fn setup_bar_width() -> f64 {
-    let w = SETUP_BAR_W.load(Ordering::Relaxed);
-    if w == 0 {
-        LAYOUT_SETUP_W_FALLBACK
-    } else {
-        (w as f64).clamp(LAYOUT_SETUP_W_MIN, LAYOUT_SETUP_W_MAX)
+/// Window rect in logical points, top-left origin — the space Tauri and the
+/// webview both speak.
+#[derive(Clone, Copy)]
+struct WinRect {
+    x: f64,
+    y: f64,
+    w: f64,
+    h: f64,
+}
+
+impl WinRect {
+    fn bottom(self) -> f64 {
+        self.y + self.h
     }
 }
 
-fn centered_layout_dims(layout: &str) -> Option<(f64, f64)> {
-    match layout {
-        "countdown" => Some(LAYOUT_COUNTDOWN),
-        _ => None,
-    }
+fn window_rect(win: &tauri::WebviewWindow) -> tauri::Result<WinRect> {
+    let scale = win.scale_factor()?;
+    let pos = win.outer_position()?;
+    let size = win.outer_size()?;
+    Ok(WinRect {
+        x: pos.x as f64 / scale,
+        y: pos.y as f64 / scale,
+        w: size.width as f64 / scale,
+        h: size.height as f64 / scale,
+    })
 }
 
-fn layout_size(layout: &str) -> tauri::LogicalSize<f64> {
-    let (w, h) = match layout {
-        "menu" => (setup_bar_width(), LAYOUT_MENU_H),
-        "dropdown" => (setup_bar_width(), LAYOUT_DROPDOWN_H),
-        "alert" => (setup_bar_width(), LAYOUT_ALERT_H),
-        "hud" => LAYOUT_HUD,
-        "hud-mini" => LAYOUT_HUD_MINI,
-        "countdown" => LAYOUT_COUNTDOWN,
-        _ => (setup_bar_width(), LAYOUT_SETUP_H),
-    };
-    tauri::LogicalSize::new(w, h)
+/// The bar's own top / bottom edges in screen space — from the webview hitbox
+/// when present, else a bottom-strip fallback before the first report.
+fn bar_edges(win: &tauri::WebviewWindow) -> tauri::Result<(f64, f64)> {
+    let rect = window_rect(win)?;
+    if let Some((x, y, _w, h)) = *BAR_HITBOX.lock().unwrap_or_else(|e| e.into_inner()) {
+        let _ = x;
+        return Ok((rect.y + y, rect.y + y + h));
+    }
+    let chrome = geometry().layout.chrome_height();
+    Ok((rect.bottom() - chrome - RECORDER_BOTTOM_MARGIN, rect.bottom() - RECORDER_BOTTOM_MARGIN))
 }
 
-/// Webview reports the setup pill's content width so the native window hugs it.
-#[tauri::command]
-pub fn set_recorder_bar_width(app: AppHandle, width: f64) -> tauri::Result<()> {
-    let w = width.ceil().clamp(LAYOUT_SETUP_W_MIN, LAYOUT_SETUP_W_MAX) as u32;
-    let prev = SETUP_BAR_W.swap(w, Ordering::Relaxed);
-    if prev == w {
+/// Move + resize the recorder as a **single** window-server update.
+///
+/// `set_size` and `set_position` are two updates, and WebKit re-lays the
+/// WebView out on each one — so every grow-and-move (which is every popover)
+/// presented an in-between frame with the bar drawn against the wrong edge.
+/// That frame is the bar visibly jumping when a menu opens or closes. One
+/// platform call means there is no in-between to draw.
+///
+/// Returns only after the frame has been applied. Queue-and-forget was the
+/// menu flicker: geometry updated while the on-screen frame lagged, so the
+/// next open/close computed `bar_top` from a desynced rect and yanked the
+/// bar toward the screen center.
+fn set_recorder_frame(win: &tauri::WebviewWindow, rect: WinRect) -> tauri::Result<()> {
+    set_window_frame(win, rect)
+}
+
+/// Run `work` on the AppKit/UI thread and wait for it. If we are already on
+/// that thread, run inline — `recv` after a queued main-thread block would
+/// deadlock.
+#[cfg(any(target_os = "macos", target_os = "windows"))]
+fn run_window_sync(
+    win: &tauri::WebviewWindow,
+    work: impl FnOnce() + Send + 'static,
+) -> tauri::Result<()> {
+    if is_ui_thread() {
+        work();
         return Ok(());
     }
-    let Some(win) = app.get_webview_window(RECORDER_LABEL) else {
-        return Ok(());
-    };
-    // Only resize while in a setup-family layout (not hud/countdown).
-    let Ok(size) = win.inner_size() else {
-        return Ok(());
-    };
-    let scale = win.scale_factor().unwrap_or(1.0);
-    let logical_h = size.height as f64 / scale;
-    let setup_family = (logical_h - LAYOUT_SETUP_H).abs() < 1.0
-        || (logical_h - LAYOUT_ALERT_H).abs() < 1.0
-        || (logical_h - LAYOUT_DROPDOWN_H).abs() < 1.0
-        || (logical_h - LAYOUT_MENU_H).abs() < 1.0;
-    if !setup_family {
-        return Ok(());
-    }
-    // Preserve the current bottom-center anchor (do not yank a dragged bar
-    // back to the screen dock on every ResizeObserver tick).
-    resize_preserving_bottom_anchor(&win, w as f64, logical_h)?;
-    pin_to_all_spaces_if_shown(&win);
+    let (tx, rx) = std::sync::mpsc::channel();
+    win.run_on_main_thread(move || {
+        work();
+        let _ = tx.send(());
+    })?;
+    let _ = rx.recv();
     Ok(())
+}
+
+#[cfg(target_os = "macos")]
+fn is_ui_thread() -> bool {
+    use objc::{class, msg_send, sel, sel_impl};
+    unsafe { msg_send![class!(NSThread), isMainThread] }
+}
+
+#[cfg(target_os = "windows")]
+fn is_ui_thread() -> bool {
+    // Recorder IPC runs on the async pool, not the UI thread. Nested calls
+    // from a UI-thread closure use the inline path via the same check on
+    // macOS; on Windows we never nest `set_window_frame` inside itself.
+    false
+}
+
+/// macOS: `-[NSWindow setFrame:display:]` takes origin and size together.
+/// Must run on the AppKit main thread — every other window mutation in this
+/// file follows the same rule.
+#[cfg(target_os = "macos")]
+fn set_window_frame(win: &tauri::WebviewWindow, rect: WinRect) -> tauri::Result<()> {
+    let win = win.clone();
+    run_window_sync(&win.clone(), move || {
+        use core_graphics::geometry::{CGPoint, CGRect, CGSize};
+        use objc::runtime::{Object, YES};
+        use objc::{class, msg_send, sel, sel_impl};
+
+        let Ok(ptr) = win.ns_window() else {
+            return;
+        };
+        let ns_window = ptr as *mut Object;
+        unsafe {
+            // AppKit's screen space is bottom-left origin, anchored to the
+            // primary display; Tauri hands us top-left points.
+            let screens: *mut Object = msg_send![class!(NSScreen), screens];
+            let count: usize = msg_send![screens, count];
+            if count == 0 {
+                return;
+            }
+            let primary: *mut Object = msg_send![screens, objectAtIndex: 0usize];
+            let primary_frame: CGRect = msg_send![primary, frame];
+            let flip = primary_frame.origin.y + primary_frame.size.height;
+            let frame = CGRect::new(
+                &CGPoint::new(rect.x, flip - rect.bottom()),
+                &CGSize::new(rect.w, rect.h),
+            );
+            let _: () = msg_send![ns_window, setFrame: frame display: YES];
+        }
+    })
+}
+
+/// Windows: `SetWindowPos` moves and sizes in one message.
+#[cfg(target_os = "windows")]
+fn set_window_frame(win: &tauri::WebviewWindow, rect: WinRect) -> tauri::Result<()> {
+    use windows::Win32::Foundation::HWND;
+    use windows::Win32::UI::WindowsAndMessaging::{SetWindowPos, SWP_NOACTIVATE, SWP_NOZORDER};
+
+    let scale = win.scale_factor()?;
+    // `HWND` is a raw handle; carry it across the thread hop as an integer.
+    let handle = win.hwnd()?.0 as isize;
+    run_window_sync(&win.clone(), move || {
+        let hwnd = HWND(handle as *mut std::ffi::c_void);
+        if let Err(e) = unsafe {
+            SetWindowPos(
+                hwnd,
+                None,
+                (rect.x * scale).round() as i32,
+                (rect.y * scale).round() as i32,
+                (rect.w * scale).round() as i32,
+                (rect.h * scale).round() as i32,
+                SWP_NOZORDER | SWP_NOACTIVATE,
+            )
+        } {
+            tracing::warn!(%e, "recorder: SetWindowPos failed");
+        }
+    })
+}
+
+/// Other platforms: two calls, size first so the move lands last.
+#[cfg(not(any(target_os = "macos", target_os = "windows")))]
+fn set_window_frame(win: &tauri::WebviewWindow, rect: WinRect) -> tauri::Result<()> {
+    win.set_size(tauri::Size::Logical(tauri::LogicalSize::new(
+        rect.w, rect.h,
+    )))?;
+    win.set_position(tauri::Position::Logical(tauri::LogicalPosition::new(
+        rect.x, rect.y,
+    )))?;
+    Ok(())
+}
+
+/// Webview reports the setup pill's content width. Setup is a work-area overlay
+/// now, so this only caches the width — it must not resize the native window
+/// (that resize was a drag/open flicker source).
+#[tauri::command]
+pub fn set_recorder_bar_width(_app: AppHandle, width: f64) -> tauri::Result<()> {
+    let w = width.ceil().clamp(LAYOUT_SETUP_W_MIN, LAYOUT_SETUP_W_MAX) as u32;
+    SETUP_BAR_W.store(w, Ordering::Relaxed);
+    Ok(())
+}
+
+/// Webview-local hitbox of interactive chrome (pill + open menu). Drives
+/// click-through on the work-area overlay.
+#[tauri::command]
+pub fn set_recorder_bar_hitbox(x: f64, y: f64, width: f64, height: f64) {
+    *BAR_HITBOX.lock().unwrap_or_else(|e| e.into_inner()) =
+        Some((x, y, width.max(1.0), height.max(1.0)));
 }
 
 /// macOS Spaces / Linux workspaces: keep overlay chrome (recorder / face-cam)
 /// on every desktop while visible — zero-cost OS pin, no cursor polling.
 /// Windows has no equivalent API; `always_on_top` alone is the behavior there.
-#[cfg(any(target_os = "macos", target_os = "linux"))]
+///
+/// macOS: tao writes `collectionBehavior` on the calling thread, and mutating a
+/// visible window off the AppKit main thread makes it flicker (same rule as
+/// [`enable_native_fullscreen`]). Only ever call this on a real transition —
+/// re-applying it per resize is what made the bar blink under every popover.
+#[cfg(target_os = "macos")]
+fn set_follows_spaces(win: &tauri::WebviewWindow, follows: bool) {
+    let win = win.clone();
+    let queued = win.clone().run_on_main_thread(move || {
+        if let Err(e) = win.set_visible_on_all_workspaces(follows) {
+            tracing::warn!(
+                %e,
+                follows,
+                label = win.label(),
+                "overlay: failed to set visible on all workspaces"
+            );
+        }
+    });
+    if let Err(e) = queued {
+        tracing::warn!(%e, follows, "overlay: could not reach the AppKit main thread");
+    }
+}
+
+#[cfg(target_os = "linux")]
 fn set_follows_spaces(win: &tauri::WebviewWindow, follows: bool) {
     if let Err(e) = win.set_visible_on_all_workspaces(follows) {
         tracing::warn!(
@@ -539,72 +786,258 @@ pub fn hide_recorder(app: AppHandle) -> tauri::Result<()> {
     Ok(())
 }
 
-/// Resize the recorder window: `setup` | `alert` | `dropdown` | `menu` | `hud`
-/// | `countdown`.
-/// Centered layouts (`countdown`) park a compact card on the primary display.
-/// Dock layouts (setup / HUD / menus) sit bottom-center; resizing re-anchors
-/// so width changes do not jump left from a top-left `set_size`.
-/// `alert` is setup height plus room for the error toast under the bar.
+/// Resize the recorder window: `setup` | `alert` | `hud` | `hud-mini` |
+/// `countdown`. Setup/alert cover the monitor work area so the pill can
+/// CSS-drag and popovers can flip inside the window — never a per-drag resize.
 #[tauri::command]
 pub fn set_recorder_layout(app: AppHandle, layout: String) -> tauri::Result<()> {
     let Some(win) = app.get_webview_window(RECORDER_LABEL) else {
         return Ok(());
     };
+    let layout = RecorderLayout::parse(&layout);
+    {
+        let mut g = geometry();
+        g.layout = layout;
+        g.menu_height = 0.0;
+        if !layout.is_setup_bar() {
+            g.menu_side = MenuSide::Top;
+            *BAR_HITBOX.lock().unwrap_or_else(|e| e.into_inner()) = None;
+        }
+    }
 
-    if let Some((w, h)) = centered_layout_dims(&layout) {
-        apply_centered_recorder_layout(&app, &win, w, h)?;
+    if layout == RecorderLayout::Countdown {
+        apply_centered_recorder_layout(&app, &win, LAYOUT_COUNTDOWN.0, LAYOUT_COUNTDOWN.1)?;
+    } else if layout.is_setup_bar() {
+        let _ = win.set_min_size(None::<tauri::LogicalSize<f64>>);
+        let _ = win.set_max_size(None::<tauri::LogicalSize<f64>>);
+        apply_setup_overlay(&app, &win)?;
     } else {
         let _ = win.set_min_size(None::<tauri::LogicalSize<f64>>);
         let _ = win.set_max_size(None::<tauri::LogicalSize<f64>>);
-        let size = layout_size(&layout);
+        let size = layout.size();
         apply_docked_recorder_size(&app, &win, size.width, size.height)?;
     }
 
     // macOS can drop the Spaces pin after resize; re-apply while the bar is open.
     pin_to_all_spaces_if_shown(&win);
+    if layout.is_setup_bar() {
+        ensure_setup_click_through(app.clone());
+    } else {
+        MENU_LIVE.store(false, Ordering::Relaxed);
+        let _ = win.set_ignore_cursor_events(false);
+    }
     Ok(())
 }
 
-/// Resize then place at bottom-center. Prefer this over bare `set_size` so
-/// setup ↔ HUD width changes stay visually anchored.
+/// Room (logical px) above and below the bar inside its monitor's work area.
+/// The webview picks the popover side from this — same rule as a web dropdown,
+/// except the "viewport" here is the screen, not the WebView.
+#[derive(serde::Serialize)]
+pub struct RecorderMenuSpace {
+    pub above: f64,
+    pub below: f64,
+}
+
+#[tauri::command]
+pub fn recorder_menu_space(app: AppHandle) -> RecorderMenuSpace {
+    let none = RecorderMenuSpace {
+        above: 0.0,
+        below: 0.0,
+    };
+    let Some(win) = app.get_webview_window(RECORDER_LABEL) else {
+        return none;
+    };
+    let Ok((bar_top, bar_bottom)) = bar_edges(&win) else {
+        return none;
+    };
+    let monitor = win
+        .current_monitor()
+        .ok()
+        .flatten()
+        .or_else(|| app.primary_monitor().ok().flatten());
+    let Some(monitor) = monitor else {
+        return none;
+    };
+    let scale = monitor.scale_factor();
+    let work = monitor.work_area();
+    let work_top = work.position.y as f64 / scale;
+    let work_bottom = work_top + work.size.height as f64 / scale;
+    RecorderMenuSpace {
+        above: (bar_top - work_top).max(0.0),
+        below: (work_bottom - bar_bottom).max(0.0),
+    }
+}
+
+/// Legacy IPC — setup is a work-area overlay; Radix flips popovers in-window.
+/// Kept so older webviews do not crash on invoke.
+#[tauri::command]
+pub fn set_recorder_menu(_app: AppHandle, side: String, _height: f64) -> tauri::Result<()> {
+    geometry().menu_side = MenuSide::parse(&side);
+    Ok(())
+}
+
+/// Webview says a popover is open — the whole interactive hitbox must accept
+/// clicks, so click-through turns off while the menu is live.
+#[tauri::command]
+pub fn set_recorder_menu_live(live: bool) {
+    MENU_LIVE.store(live, Ordering::Relaxed);
+}
+
+/// Mark the setup pill as dragging. Does **not** resize the window — the
+/// webview CSS-moves the pill inside the work-area overlay (resize-on-drag was
+/// the click/unclick flicker).
+#[tauri::command]
+pub fn begin_recorder_drag(app: AppHandle) -> tauri::Result<String> {
+    let Some(win) = app.get_webview_window(RECORDER_LABEL) else {
+        return Ok("top".into());
+    };
+    RECORDER_DRAGGING.store(true, Ordering::Relaxed);
+    let _ = win.set_ignore_cursor_events(false);
+    Ok(side_str(geometry().menu_side))
+}
+
+/// Clear the dragging flag after a CSS drag. Window size is untouched.
+#[tauri::command]
+pub fn end_recorder_drag(_app: AppHandle) -> tauri::Result<String> {
+    RECORDER_DRAGGING.store(false, Ordering::Relaxed);
+    Ok(side_str(geometry().menu_side))
+}
+
+fn side_str(side: MenuSide) -> String {
+    match side {
+        MenuSide::Top => "top".into(),
+        MenuSide::Bottom => "bottom".into(),
+    }
+}
+
+/// The setup frame is permanently taller than the pill. Clicks on the empty
+/// popover room must reach the desktop — poll the cursor and ignore events
+/// unless it sits on the pill (or a live popover).
+///
+/// Becoming interactive is immediate; returning to click-through is debounced
+/// so a cursor jittering on the pill edge cannot toggle `ignore_cursor_events`
+/// every poll (that toggle redraws the transparent window and looks like flicker).
+fn ensure_setup_click_through(app: AppHandle) {
+    if CLICK_THROUGH_ON.swap(true, Ordering::SeqCst) {
+        return;
+    }
+    let _ = std::thread::Builder::new()
+        .name("recorder-click-through".into())
+        .spawn(move || {
+            let mut ignoring = false;
+            let mut leave_ticks: u8 = 0;
+            // ~100ms at 32ms poll — enough hysteresis without feeling sticky.
+            const LEAVE_DEBOUNCE_TICKS: u8 = 3;
+            loop {
+                let Some(win) = app.get_webview_window(RECORDER_LABEL) else {
+                    break;
+                };
+                let setup = geometry().layout.is_setup_bar();
+                if !setup || !win.is_visible().unwrap_or(false) {
+                    if ignoring {
+                        let _ = win.set_ignore_cursor_events(false);
+                        ignoring = false;
+                    }
+                    leave_ticks = 0;
+                    if !setup {
+                        break;
+                    }
+                    std::thread::sleep(Duration::from_millis(100));
+                    continue;
+                }
+
+                let interactive = RECORDER_DRAGGING.load(Ordering::Relaxed)
+                    || MENU_LIVE.load(Ordering::Relaxed)
+                    || cursor_over_recorder_bar(&app, &win);
+                if interactive {
+                    leave_ticks = 0;
+                    if ignoring {
+                        let _ = win.set_ignore_cursor_events(false);
+                        ignoring = false;
+                    }
+                } else if !ignoring {
+                    leave_ticks = leave_ticks.saturating_add(1);
+                    if leave_ticks >= LEAVE_DEBOUNCE_TICKS {
+                        let _ = win.set_ignore_cursor_events(true);
+                        ignoring = true;
+                        leave_ticks = 0;
+                    }
+                }
+                std::thread::sleep(Duration::from_millis(32));
+            }
+            CLICK_THROUGH_ON.store(false, Ordering::SeqCst);
+        });
+}
+
+fn cursor_over_recorder_bar(app: &AppHandle, win: &tauri::WebviewWindow) -> bool {
+    let Ok(cursor) = app.cursor_position() else {
+        return true;
+    };
+    let Ok(scale) = win.scale_factor() else {
+        return true;
+    };
+    let Ok(rect) = window_rect(win) else {
+        return true;
+    };
+    let cx = cursor.x / scale - rect.x;
+    let cy = cursor.y / scale - rect.y;
+    const PAD: f64 = 4.0;
+
+    if let Some((x, y, w, h)) = *BAR_HITBOX.lock().unwrap_or_else(|e| e.into_inner()) {
+        return cx >= x - PAD
+            && cx <= x + w + PAD
+            && cy >= y - PAD
+            && cy <= y + h + PAD;
+    }
+
+    // Before the first hitbox report: bottom strip so the pill is reachable.
+    let chrome = geometry().layout.chrome_height();
+    cy >= rect.h - chrome - RECORDER_BOTTOM_MARGIN - PAD
+}
+
+/// Cover the current (or primary) monitor work area so the pill can CSS-drag
+/// and popovers flip inside the window — window size stays fixed for the
+/// whole setup session.
+fn apply_setup_overlay(app: &AppHandle, win: &tauri::WebviewWindow) -> tauri::Result<()> {
+    let monitor = win
+        .current_monitor()
+        .ok()
+        .flatten()
+        .or_else(|| app.primary_monitor().ok().flatten());
+    let Some(monitor) = monitor else {
+        return Ok(());
+    };
+    let scale = monitor.scale_factor();
+    let work = monitor.work_area();
+    set_recorder_frame(
+        win,
+        WinRect {
+            x: work.position.x as f64 / scale,
+            y: work.position.y as f64 / scale,
+            w: work.size.width as f64 / scale,
+            h: work.size.height as f64 / scale,
+        },
+    )
+}
+
+/// Size and place at bottom-center in one frame change, so setup ↔ HUD swaps
+/// stay visually anchored.
 fn apply_docked_recorder_size(
     app: &AppHandle,
     win: &tauri::WebviewWindow,
     width: f64,
     height: f64,
 ) -> tauri::Result<()> {
-    win.set_size(tauri::Size::Logical(tauri::LogicalSize::new(width, height)))?;
     let (x, y) = recorder_bottom_center(app, width, height);
-    win.set_position(tauri::Position::Logical(tauri::LogicalPosition::new(x, y)))?;
-    Ok(())
-}
-
-/// Resize while keeping the window's horizontal center and bottom edge fixed.
-/// Used for content-driven width tweaks so a user drag is not undone.
-fn resize_preserving_bottom_anchor(
-    win: &tauri::WebviewWindow,
-    new_w: f64,
-    new_h: f64,
-) -> tauri::Result<()> {
-    let scale = win.scale_factor().unwrap_or(1.0);
-    let (cx, bottom) = match (win.outer_position(), win.outer_size()) {
-        (Ok(pos), Ok(size)) => {
-            let x = pos.x as f64 / scale;
-            let y = pos.y as f64 / scale;
-            let w = size.width as f64 / scale;
-            let h = size.height as f64 / scale;
-            (x + w / 2.0, y + h)
-        }
-        _ => {
-            win.set_size(tauri::Size::Logical(tauri::LogicalSize::new(new_w, new_h)))?;
-            return Ok(());
-        }
-    };
-    win.set_size(tauri::Size::Logical(tauri::LogicalSize::new(new_w, new_h)))?;
-    let x = cx - new_w / 2.0;
-    let y = bottom - new_h;
-    win.set_position(tauri::Position::Logical(tauri::LogicalPosition::new(x, y)))?;
-    Ok(())
+    set_recorder_frame(
+        win,
+        WinRect {
+            x,
+            y,
+            w: width,
+            h: height,
+        },
+    )
 }
 
 /// Lock size, place on the primary work area center (countdown badge).
@@ -617,15 +1050,16 @@ fn apply_centered_recorder_layout(
     let size = tauri::LogicalSize::new(width, height);
     let _ = win.set_min_size(Some(size));
     let _ = win.set_max_size(Some(size));
-    // Physical size avoids logical round-trip drift on retina displays.
-    let scale = win.scale_factor().unwrap_or(1.0);
-    win.set_size(tauri::Size::Physical(tauri::PhysicalSize::new(
-        (width * scale).round() as u32,
-        (height * scale).round() as u32,
-    )))?;
     let (x, y) = primary_work_area_origin_for_size(app, width, height);
-    win.set_position(tauri::Position::Logical(tauri::LogicalPosition::new(x, y)))?;
-    Ok(())
+    set_recorder_frame(
+        win,
+        WinRect {
+            x,
+            y,
+            w: width,
+            h: height,
+        },
+    )
 }
 
 /// Create-or-show the recorder bar. Never hides — use for launch, Dock reopen,
@@ -633,12 +1067,27 @@ fn apply_centered_recorder_layout(
 pub fn show_recorder_popover(app: &AppHandle) -> tauri::Result<()> {
     if let Some(win) = app.get_webview_window(RECORDER_LABEL) {
         if !win.is_visible().unwrap_or(false) {
-            let size = layout_size("setup");
-            apply_docked_recorder_size(app, &win, size.width, size.height)?;
+            let layout = {
+                let mut g = geometry();
+                g.menu_height = 0.0;
+                g.layout
+            };
+            if layout == RecorderLayout::Countdown {
+                let size = layout.size();
+                apply_centered_recorder_layout(app, &win, size.width, size.height)?;
+            } else if layout.is_setup_bar() {
+                apply_setup_overlay(app, &win)?;
+            } else {
+                let size = layout.size();
+                apply_docked_recorder_size(app, &win, size.width, size.height)?;
+            }
         }
         set_follows_spaces(&win, true);
         win.show()?;
         win.set_focus()?;
+        if geometry().layout.is_setup_bar() {
+            ensure_setup_click_through(app.clone());
+        }
         return Ok(());
     }
     create_recorder_popover(app)
@@ -657,12 +1106,13 @@ pub fn toggle_recorder_popover(app: &AppHandle) -> tauri::Result<()> {
 }
 
 fn create_recorder_popover(app: &AppHandle) -> tauri::Result<()> {
-    let w = setup_bar_width();
-    let h = LAYOUT_SETUP_H;
-    let (x, y) = recorder_bottom_center(app, w, h);
+    // Build with a placeholder size, then immediately cover the work area —
+    // builder needs *some* size before the window exists.
+    let size = RecorderLayout::Setup.size();
+    let (x, y) = recorder_bottom_center(app, size.width, size.height);
     let win = WebviewWindowBuilder::new(app, RECORDER_LABEL, WebviewUrl::App("recorder.html".into()))
         .title("Capptivo")
-        .inner_size(w, h)
+        .inner_size(size.width, size.height)
         .resizable(false)
         .decorations(false)
         .transparent(true)
@@ -676,8 +1126,10 @@ fn create_recorder_popover(app: &AppHandle) -> tauri::Result<()> {
         .visible(true)
         .position(x, y)
         .build()?;
+    apply_setup_overlay(app, &win)?;
     set_follows_spaces(&win, true);
     win.set_focus()?;
+    ensure_setup_click_through(app.clone());
     Ok(())
 }
 

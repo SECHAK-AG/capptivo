@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-drag-recorder-bar"
+description = "Enables the drag_recorder_bar command without any pre-configured scope."
+commands.allow = ["drag_recorder_bar"]
+
+[[permission]]
+identifier = "deny-drag-recorder-bar"
+description = "Denies the drag_recorder_bar command without any pre-configured scope."
+commands.deny = ["drag_recorder_bar"]

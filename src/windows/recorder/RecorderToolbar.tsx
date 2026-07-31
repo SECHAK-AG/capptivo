@@ -6,6 +6,7 @@ import {
   useRef,
   useState,
   type ComponentPropsWithoutRef,
+  type PointerEvent as ReactPointerEvent,
   type ReactNode,
 } from "react";
 import {
@@ -27,34 +28,28 @@ import {
 } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu";
+import { DropdownMenuItem } from "@/components/ui/dropdown-menu";
 import { LANGUAGES } from "@/lib/i18n";
 import { useI18n } from "@/lib/settings";
 import { cn } from "@/lib/utils";
 import { commands } from "../../ipc/bindings";
 import type { CaptureSource } from "../../ipc/types";
+import { RecorderMenu } from "./RecorderMenu";
+import { useBarDrag } from "./menuSurface";
 import { useRecorderStore, type CaptureMode } from "./store";
 import { usePlatformCapabilities } from "./usePlatformCapabilities";
 
 const CTRL = "h-9";
 
-const MENU_CONTENT =
-  "rounded-xl border-border/80 bg-popover p-1.5 shadow-lg ring-1 ring-border/40";
-
-/** Tauri clips the WebView to the native window — grow when menus open. */
-function applyRecorderLayout(sourceOpen: boolean, auxOpen: boolean) {
-  if (sourceOpen) return commands.setRecorderLayout("menu");
-  if (auxOpen) return commands.setRecorderLayout("dropdown");
-  if (useRecorderStore.getState().lastError) {
-    return commands.setRecorderLayout("alert");
-  }
-  return commands.setRecorderLayout("setup");
-}
+/** Only one popover is open at a time — they share the bar's window space. */
+type MenuId =
+  | "display"
+  | "window"
+  | "device"
+  | "camera"
+  | "mic"
+  | "audio"
+  | "settings";
 
 export function RecorderToolbar({ onRecord }: { onRecord: () => void }) {
   const { t } = useI18n();
@@ -64,33 +59,12 @@ export function RecorderToolbar({ onRecord }: { onRecord: () => void }) {
   const selectedSourceId = useRecorderStore((s) => s.selectedSourceId);
   const selectedDeviceId = useRecorderStore((s) => s.selectedDeviceId);
 
-  const [sourceOpen, setSourceOpen] = useState(false);
-  const [auxMenu, setAuxMenu] = useState<
-    "camera" | "mic" | "audio" | "settings" | null
-  >(null);
+  const [openMenu, setOpenMenu] = useState<MenuId | null>(null);
 
-  // Controlled `open` must flip in the same turn as Radix's pointerdown.
-  // Awaiting layout first deferred mount until mid-gesture, so the same
-  // pointerup landed on a menu item and looked like a flash-select.
-  const setSourceMenuOpen = (open: boolean) => {
-    if (open) {
-      void applyRecorderLayout(true, auxMenu !== null);
-      setSourceOpen(true);
-      return;
-    }
-    setSourceOpen(false);
-    void applyRecorderLayout(false, auxMenu !== null);
-  };
-
-  const setAuxMenuOpen = (id: typeof auxMenu) => {
-    if (id) {
-      void applyRecorderLayout(sourceOpen, true);
-      setAuxMenu(id);
-      return;
-    }
-    setAuxMenu(null);
-    void applyRecorderLayout(sourceOpen, false);
-  };
+  // Clicking a second trigger opens it *and* dismisses the first, in whichever
+  // order the events land — a close only counts for the menu that owns it.
+  const setMenuOpen = (id: MenuId, open: boolean) =>
+    setOpenMenu((current) => (open ? id : current === id ? null : current));
 
   const canRecord =
     captureMode === "area"
@@ -114,6 +88,30 @@ export function RecorderToolbar({ onRecord }: { onRecord: () => void }) {
     : t("recorder.mode.areaTitle");
 
   const barRef = useRef<HTMLDivElement>(null);
+  const draggingRef = useRef(false);
+  const offsetRef = useRef(useBarDrag.getState().offset);
+  const setBarOffset = useBarDrag((s) => s.setOffset);
+  const dragRafRef = useRef<number | null>(null);
+  const pendingPointerRef = useRef<{ clientX: number; clientY: number } | null>(
+    null,
+  );
+  const dragStartRef = useRef<{
+    pointerId: number;
+    startX: number;
+    startY: number;
+    originX: number;
+    originY: number;
+    initialLeft: number;
+    initialTop: number;
+    width: number;
+    height: number;
+  } | null>(null);
+
+  useEffect(() => {
+    return useBarDrag.subscribe((s) => {
+      offsetRef.current = s.offset;
+    });
+  }, []);
 
   useEffect(() => {
     const el = barRef.current;
@@ -129,6 +127,77 @@ export function RecorderToolbar({ onRecord }: { onRecord: () => void }) {
     return () => ro.disconnect();
   }, []);
 
+  const onGripPointerDown = (e: ReactPointerEvent<HTMLDivElement>) => {
+    if (e.button !== 0) return;
+    e.preventDefault();
+    setOpenMenu(null);
+    if (draggingRef.current || !barRef.current) return;
+    draggingRef.current = true;
+    e.currentTarget.setPointerCapture(e.pointerId);
+    void commands.beginRecorderDrag();
+
+    const rect = barRef.current.getBoundingClientRect();
+    const origin = offsetRef.current;
+    dragStartRef.current = {
+      pointerId: e.pointerId,
+      startX: e.clientX,
+      startY: e.clientY,
+      originX: origin.x,
+      originY: origin.y,
+      initialLeft: rect.left,
+      initialTop: rect.top,
+      width: rect.width,
+      height: rect.height,
+    };
+  };
+
+  const onGripPointerMove = (e: ReactPointerEvent<HTMLDivElement>) => {
+    const start = dragStartRef.current;
+    if (!start || start.pointerId !== e.pointerId) return;
+    pendingPointerRef.current = { clientX: e.clientX, clientY: e.clientY };
+    if (dragRafRef.current !== null) return;
+    dragRafRef.current = requestAnimationFrame(() => {
+      dragRafRef.current = null;
+      const drag = dragStartRef.current;
+      const pointer = pendingPointerRef.current;
+      if (!drag || !pointer) return;
+      const dx = pointer.clientX - drag.startX;
+      const dy = pointer.clientY - drag.startY;
+      const vw = window.innerWidth;
+      const vh = window.innerHeight;
+      const left = Math.min(
+        Math.max(0, drag.initialLeft + dx),
+        Math.max(0, vw - drag.width),
+      );
+      const top = Math.min(
+        Math.max(0, drag.initialTop + dy),
+        Math.max(0, vh - drag.height),
+      );
+      const next = {
+        x: drag.originX + (left - drag.initialLeft),
+        y: drag.originY + (top - drag.initialTop),
+      };
+      offsetRef.current = next;
+      setBarOffset(next);
+    });
+  };
+
+  const onGripPointerUp = (e: ReactPointerEvent<HTMLDivElement>) => {
+    const start = dragStartRef.current;
+    if (!start || start.pointerId !== e.pointerId) return;
+    if (e.currentTarget.hasPointerCapture(e.pointerId)) {
+      e.currentTarget.releasePointerCapture(e.pointerId);
+    }
+    if (dragRafRef.current !== null) {
+      cancelAnimationFrame(dragRafRef.current);
+      dragRafRef.current = null;
+    }
+    pendingPointerRef.current = null;
+    dragStartRef.current = null;
+    draggingRef.current = false;
+    void commands.endRecorderDrag();
+  };
+
   return (
     <div className="relative w-fit">
       <div
@@ -136,12 +205,15 @@ export function RecorderToolbar({ onRecord }: { onRecord: () => void }) {
         className="flex items-center gap-1 rounded-2xl border border-border bg-card p-1.5"
       >
         <div
-          data-tauri-drag-region
           className={cn(
             CTRL,
             "flex w-7 shrink-0 cursor-grab items-center justify-center text-muted-foreground active:cursor-grabbing",
           )}
           title={t("recorder.drag")}
+          onPointerDown={onGripPointerDown}
+          onPointerMove={onGripPointerMove}
+          onPointerUp={onGripPointerUp}
+          onPointerCancel={onGripPointerUp}
         >
           <GripVertical className="pointer-events-none size-4" />
         </div>
@@ -177,10 +249,10 @@ export function RecorderToolbar({ onRecord }: { onRecord: () => void }) {
             label={t("recorder.mode.display")}
             icon={<Monitor className="size-3.5" />}
             active={captureMode === "display"}
-            open={sourceOpen && captureMode === "display"}
+            open={openMenu === "display"}
             onOpenChange={(open) => {
               if (open) useRecorderStore.getState().setCaptureMode("display");
-              setSourceMenuOpen(open);
+              setMenuOpen("display", open);
             }}
           />
           {caps?.canEnumerateSources !== false ? (
@@ -189,10 +261,10 @@ export function RecorderToolbar({ onRecord }: { onRecord: () => void }) {
               label={t("recorder.mode.window")}
               icon={<AppWindowIcon />}
               active={captureMode === "window"}
-              open={sourceOpen && captureMode === "window"}
+              open={openMenu === "window"}
               onOpenChange={(open) => {
                 if (open) useRecorderStore.getState().setCaptureMode("window");
-                setSourceMenuOpen(open);
+                setMenuOpen("window", open);
               }}
             />
           ) : null}
@@ -207,10 +279,10 @@ export function RecorderToolbar({ onRecord }: { onRecord: () => void }) {
           ) : null}
           {caps?.canCaptureDevice ? (
             <DeviceMenu
-              open={sourceOpen && captureMode === "device"}
+              open={openMenu === "device"}
               onOpenChange={(open) => {
                 if (open) useRecorderStore.getState().setCaptureMode("device");
-                setSourceMenuOpen(open);
+                setMenuOpen("device", open);
               }}
             />
           ) : null}
@@ -220,16 +292,16 @@ export function RecorderToolbar({ onRecord }: { onRecord: () => void }) {
 
         <div className="flex shrink-0 items-center gap-0.5">
           <CameraMenu
-            open={auxMenu === "camera"}
-            onOpenChange={(open) => setAuxMenuOpen(open ? "camera" : null)}
+            open={openMenu === "camera"}
+            onOpenChange={(open) => setMenuOpen("camera", open)}
           />
           <MicMenu
-            open={auxMenu === "mic"}
-            onOpenChange={(open) => setAuxMenuOpen(open ? "mic" : null)}
+            open={openMenu === "mic"}
+            onOpenChange={(open) => setMenuOpen("mic", open)}
           />
           <AudioMenu
-            open={auxMenu === "audio"}
-            onOpenChange={(open) => setAuxMenuOpen(open ? "audio" : null)}
+            open={openMenu === "audio"}
+            onOpenChange={(open) => setMenuOpen("audio", open)}
           />
         </div>
 
@@ -253,8 +325,8 @@ export function RecorderToolbar({ onRecord }: { onRecord: () => void }) {
         </Button>
 
         <SettingsMenu
-          open={auxMenu === "settings"}
-          onOpenChange={(open) => setAuxMenuOpen(open ? "settings" : null)}
+          open={openMenu === "settings"}
+          onOpenChange={(open) => setMenuOpen("settings", open)}
         />
 
         <Button
@@ -288,20 +360,15 @@ function CaptureModeMenu({
   onOpenChange: (open: boolean) => void;
 }) {
   return (
-    <DropdownMenu open={open} onOpenChange={onOpenChange}>
-      <DropdownMenuTrigger asChild>
-        <ModeBtn active={active} label={label} icon={icon} />
-      </DropdownMenuTrigger>
-      <DropdownMenuContent
-        align="start"
-        side="top"
-        sideOffset={6}
-        collisionPadding={8}
-        className={cn(MENU_CONTENT, "w-[min(28rem,calc(100vw-1.5rem))]")}
-      >
-        <SourceMenuContent mode={mode} onPick={() => onOpenChange(false)} />
-      </DropdownMenuContent>
-    </DropdownMenu>
+    <RecorderMenu
+      open={open}
+      onOpenChange={onOpenChange}
+      align="start"
+      className="w-[min(28rem,calc(100vw-1.5rem))]"
+      trigger={<ModeBtn active={active} label={label} icon={icon} />}
+    >
+      <SourceMenuContent mode={mode} onPick={() => onOpenChange(false)} />
+    </RecorderMenu>
   );
 }
 
@@ -337,8 +404,12 @@ function DeviceMenu({
     : t("recorder.mode.device");
 
   return (
-    <DropdownMenu open={open} onOpenChange={onOpenChange}>
-      <DropdownMenuTrigger asChild>
+    <RecorderMenu
+      open={open}
+      onOpenChange={onOpenChange}
+      align="start"
+      className="w-72"
+      trigger={
         <ModeBtn
           active={captureMode === "device"}
           label={label}
@@ -349,61 +420,54 @@ function DeviceMenu({
               : t("recorder.mode.deviceTitle")
           }
         />
-      </DropdownMenuTrigger>
-      <DropdownMenuContent
-        align="start"
-        side="top"
-        sideOffset={6}
-        collisionPadding={8}
-        className={cn(MENU_CONTENT, "w-72")}
-      >
-        <div className="mb-1.5 flex items-center justify-between px-2 pt-0.5">
-          <p className="text-[10px] font-medium tracking-wider text-muted-foreground uppercase">
-            {t("recorder.devices")}
-          </p>
+      }
+    >
+      <div className="mb-1.5 flex items-center justify-between px-2 pt-0.5">
+        <p className="text-[10px] font-medium tracking-wider text-muted-foreground uppercase">
+          {t("recorder.devices")}
+        </p>
+        <button
+          type="button"
+          className="rounded-sm px-1.5 py-0.5 text-xs text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+          onClick={() => void refreshDevices()}
+        >
+          {loading ? "…" : t("recorder.refresh")}
+        </button>
+      </div>
+
+      <div className="max-h-52 space-y-0.5 overflow-y-auto">
+        {devices.map((device) => (
           <button
+            key={device.id}
             type="button"
-            className="rounded-sm px-1.5 py-0.5 text-xs text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
-            onClick={() => void refreshDevices()}
+            onClick={() => {
+              selectDevice(device.id);
+              onOpenChange(false);
+            }}
+            className={cn(
+              "flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm transition-colors",
+              device.id === selectedDeviceId
+                ? "bg-accent text-accent-foreground"
+                : "text-muted-foreground hover:bg-accent hover:text-accent-foreground",
+            )}
           >
-            {loading ? "…" : t("recorder.refresh")}
+            <Smartphone className="size-4 shrink-0" />
+            <span className="min-w-0 flex-1 truncate">{device.name}</span>
+            {device.width > 0 ? (
+              <span className="shrink-0 text-[10px] tabular-nums opacity-60">
+                {device.width}×{device.height}
+              </span>
+            ) : null}
           </button>
-        </div>
+        ))}
+      </div>
 
-        <div className="max-h-52 space-y-0.5 overflow-y-auto">
-          {devices.map((device) => (
-            <button
-              key={device.id}
-              type="button"
-              onClick={() => {
-                selectDevice(device.id);
-                onOpenChange(false);
-              }}
-              className={cn(
-                "flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm transition-colors",
-                device.id === selectedDeviceId
-                  ? "bg-accent text-accent-foreground"
-                  : "text-muted-foreground hover:bg-accent hover:text-accent-foreground",
-              )}
-            >
-              <Smartphone className="size-4 shrink-0" />
-              <span className="min-w-0 flex-1 truncate">{device.name}</span>
-              {device.width > 0 ? (
-                <span className="shrink-0 text-[10px] tabular-nums opacity-60">
-                  {device.width}×{device.height}
-                </span>
-              ) : null}
-            </button>
-          ))}
-        </div>
-
-        {devices.length === 0 ? (
-          <p className="px-3 py-4 text-center text-xs leading-relaxed text-muted-foreground">
-            {deviceError ?? t("recorder.devices.empty")}
-          </p>
-        ) : null}
-      </DropdownMenuContent>
-    </DropdownMenu>
+      {devices.length === 0 ? (
+        <p className="px-3 py-4 text-center text-xs leading-relaxed text-muted-foreground">
+          {deviceError ?? t("recorder.devices.empty")}
+        </p>
+      ) : null}
+    </RecorderMenu>
   );
 }
 
@@ -440,8 +504,11 @@ function CameraMenu({
   const value = !cameraEnabled ? "off" : (cameraDeviceId ?? "off");
 
   return (
-    <DropdownMenu open={open} onOpenChange={onOpenChange}>
-      <DropdownMenuTrigger asChild>
+    <RecorderMenu
+      open={open}
+      onOpenChange={onOpenChange}
+      className="w-56"
+      trigger={
         <DeviceTrigger
           active={cameraEnabled}
           icon={
@@ -453,43 +520,36 @@ function CameraMenu({
           }
           label={cameraEnabled ? t("recorder.camera") : t("recorder.camera.off")}
         />
-      </DropdownMenuTrigger>
-      <DropdownMenuContent
-        align="center"
-        side="top"
-        sideOffset={6}
-        collisionPadding={8}
-        className={cn(MENU_CONTENT, "w-56")}
+      }
+    >
+      <SelectMenuItem
+        selected={value === "off"}
+        onSelect={() => setCameraEnabled(false)}
       >
+        {t("recorder.camera.off")}
+      </SelectMenuItem>
+      {cameras.map((cam) => (
         <SelectMenuItem
-          selected={value === "off"}
-          onSelect={() => setCameraEnabled(false)}
+          key={cam.deviceId}
+          selected={value === cam.deviceId}
+          onSelect={() => setCameraDeviceId(cam.deviceId)}
         >
-          {t("recorder.camera.off")}
+          {cam.label}
         </SelectMenuItem>
-        {cameras.map((cam) => (
-          <SelectMenuItem
-            key={cam.deviceId}
-            selected={value === cam.deviceId}
-            onSelect={() => setCameraDeviceId(cam.deviceId)}
-          >
-            {cam.label}
-          </SelectMenuItem>
-        ))}
-        {!devicesReady && cameras.length === 0 ? (
-          <p className="px-2 py-2 text-xs text-muted-foreground">{t("app.loading")}</p>
-        ) : null}
-        {devicesReady && cameras.length === 0 ? (
-          <button
-            type="button"
-            className="w-full px-2 py-2 text-left text-xs text-primary hover:underline"
-            onClick={() => void ensureCameraDevices()}
-          >
-            {t("recorder.camera.grant")}
-          </button>
-        ) : null}
-      </DropdownMenuContent>
-    </DropdownMenu>
+      ))}
+      {!devicesReady && cameras.length === 0 ? (
+        <p className="px-2 py-2 text-xs text-muted-foreground">{t("app.loading")}</p>
+      ) : null}
+      {devicesReady && cameras.length === 0 ? (
+        <button
+          type="button"
+          className="w-full px-2 py-2 text-left text-xs text-primary hover:underline"
+          onClick={() => void ensureCameraDevices()}
+        >
+          {t("recorder.camera.grant")}
+        </button>
+      ) : null}
+    </RecorderMenu>
   );
 }
 
@@ -533,8 +593,11 @@ function MicMenu({
   const value = !micEnabled ? "off" : (micDeviceId ?? "off");
 
   return (
-    <DropdownMenu open={open} onOpenChange={onOpenChange}>
-      <DropdownMenuTrigger asChild>
+    <RecorderMenu
+      open={open}
+      onOpenChange={onOpenChange}
+      className="w-56"
+      trigger={
         <DeviceTrigger
           active={micEnabled}
           icon={
@@ -546,43 +609,36 @@ function MicMenu({
           }
           label={triggerLabel}
         />
-      </DropdownMenuTrigger>
-      <DropdownMenuContent
-        align="center"
-        side="top"
-        sideOffset={6}
-        collisionPadding={8}
-        className={cn(MENU_CONTENT, "w-56")}
+      }
+    >
+      <SelectMenuItem
+        selected={value === "off"}
+        onSelect={() => setMicEnabled(false)}
       >
+        {t("recorder.mic.off")}
+      </SelectMenuItem>
+      {microphones.map((mic) => (
         <SelectMenuItem
-          selected={value === "off"}
-          onSelect={() => setMicEnabled(false)}
+          key={mic.deviceId}
+          selected={value === mic.deviceId}
+          onSelect={() => setMicDeviceId(mic.deviceId)}
         >
-          {t("recorder.mic.off")}
+          {mic.label}
         </SelectMenuItem>
-        {microphones.map((mic) => (
-          <SelectMenuItem
-            key={mic.deviceId}
-            selected={value === mic.deviceId}
-            onSelect={() => setMicDeviceId(mic.deviceId)}
-          >
-            {mic.label}
-          </SelectMenuItem>
-        ))}
-        {!devicesReady && microphones.length === 0 ? (
-          <p className="px-2 py-2 text-xs text-muted-foreground">{t("app.loading")}</p>
-        ) : null}
-        {devicesReady && microphones.length === 0 ? (
-          <button
-            type="button"
-            className="w-full px-2 py-2 text-left text-xs text-primary hover:underline"
-            onClick={() => void ensureMicrophoneDevices()}
-          >
-            {t("recorder.mic.grant")}
-          </button>
-        ) : null}
-      </DropdownMenuContent>
-    </DropdownMenu>
+      ))}
+      {!devicesReady && microphones.length === 0 ? (
+        <p className="px-2 py-2 text-xs text-muted-foreground">{t("app.loading")}</p>
+      ) : null}
+      {devicesReady && microphones.length === 0 ? (
+        <button
+          type="button"
+          className="w-full px-2 py-2 text-left text-xs text-primary hover:underline"
+          onClick={() => void ensureMicrophoneDevices()}
+        >
+          {t("recorder.mic.grant")}
+        </button>
+      ) : null}
+    </RecorderMenu>
   );
 }
 
@@ -598,8 +654,11 @@ function AudioMenu({
   const setOption = useRecorderStore((s) => s.setOption);
 
   return (
-    <DropdownMenu open={open} onOpenChange={onOpenChange}>
-      <DropdownMenuTrigger asChild>
+    <RecorderMenu
+      open={open}
+      onOpenChange={onOpenChange}
+      className="w-52"
+      trigger={
         <DeviceTrigger
           active={enabled}
           icon={
@@ -611,28 +670,21 @@ function AudioMenu({
           }
           label={enabled ? t("recorder.audio") : t("recorder.audio.off")}
         />
-      </DropdownMenuTrigger>
-      <DropdownMenuContent
-        align="center"
-        side="top"
-        sideOffset={6}
-        collisionPadding={8}
-        className={cn(MENU_CONTENT, "w-52")}
+      }
+    >
+      <SelectMenuItem
+        selected={!enabled}
+        onSelect={() => setOption("captureSystemAudio", false)}
       >
-        <SelectMenuItem
-          selected={!enabled}
-          onSelect={() => setOption("captureSystemAudio", false)}
-        >
-          {t("recorder.audio.none")}
-        </SelectMenuItem>
-        <SelectMenuItem
-          selected={enabled}
-          onSelect={() => setOption("captureSystemAudio", true)}
-        >
-          {t("recorder.audio.system")}
-        </SelectMenuItem>
-      </DropdownMenuContent>
-    </DropdownMenu>
+        {t("recorder.audio.none")}
+      </SelectMenuItem>
+      <SelectMenuItem
+        selected={enabled}
+        onSelect={() => setOption("captureSystemAudio", true)}
+      >
+        {t("recorder.audio.system")}
+      </SelectMenuItem>
+    </RecorderMenu>
   );
 }
 
@@ -646,8 +698,12 @@ function SettingsMenu({
   const { t, language, setLanguage } = useI18n();
 
   return (
-    <DropdownMenu open={open} onOpenChange={onOpenChange}>
-      <DropdownMenuTrigger asChild>
+    <RecorderMenu
+      open={open}
+      onOpenChange={onOpenChange}
+      align="end"
+      className="w-44"
+      trigger={
         <Button
           type="button"
           variant="ghost"
@@ -661,28 +717,21 @@ function SettingsMenu({
         >
           <Settings className="size-4" />
         </Button>
-      </DropdownMenuTrigger>
-      <DropdownMenuContent
-        align="end"
-        side="top"
-        sideOffset={6}
-        collisionPadding={8}
-        className={cn(MENU_CONTENT, "w-44")}
-      >
-        <p className="mb-1 px-2 pt-0.5 text-[10px] font-medium tracking-wider text-muted-foreground uppercase">
-          {t("recorder.language")}
-        </p>
-        {LANGUAGES.map(({ id, label }) => (
-          <SelectMenuItem
-            key={id}
-            selected={language === id}
-            onSelect={() => setLanguage(id)}
-          >
-            {label}
-          </SelectMenuItem>
-        ))}
-      </DropdownMenuContent>
-    </DropdownMenu>
+      }
+    >
+      <p className="mb-1 px-2 pt-0.5 text-[10px] font-medium tracking-wider text-muted-foreground uppercase">
+        {t("recorder.language")}
+      </p>
+      {LANGUAGES.map(({ id, label }) => (
+        <SelectMenuItem
+          key={id}
+          selected={language === id}
+          onSelect={() => setLanguage(id)}
+        >
+          {label}
+        </SelectMenuItem>
+      ))}
+    </RecorderMenu>
   );
 }
 

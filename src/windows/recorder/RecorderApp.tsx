@@ -7,10 +7,13 @@ import { cn } from "@/lib/utils";
 import { commands } from "../../ipc/bindings";
 import { useRecorderStore } from "./store";
 import { Countdown } from "./Countdown";
+import { useBarDrag } from "./menuSurface";
 import { RecorderToolbar } from "./RecorderToolbar";
 
 /** Keep in sync with `duration-300` on `BarPane`. */
 const BAR_CROSSFADE_MS = 300;
+/** Matches `RECORDER_BOTTOM_MARGIN` in `windows.rs`. */
+const BAR_BOTTOM_MARGIN_PX = 20;
 
 export function RecorderApp() {
   const init = useRecorderStore((s) => s.init);
@@ -35,6 +38,9 @@ export function RecorderApp() {
   const [mountHud, setMountHud] = useState(false);
   /** Fade-in only when HUD appears after countdown (no setup pane to crossfade). */
   const [hudEnter, setHudEnter] = useState(false);
+  const barOffset = useBarDrag((s) => s.offset);
+  const resetBarOffset = useBarDrag((s) => s.resetOffset);
+  const chromeRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     void init();
@@ -88,12 +94,14 @@ export function RecorderApp() {
       setHudEnter(snap);
       if (snap) {
         setMountSetup(false);
+        resetBarOffset();
         void commands.setRecorderLayout("hud");
         return;
       }
-      // Keep setup window width until the outgoing pane finishes fading.
+      // Keep setup overlay until the outgoing pane finishes fading.
       const id = window.setTimeout(() => {
         setMountSetup(false);
+        resetBarOffset();
         void commands.setRecorderLayout("hud");
       }, BAR_CROSSFADE_MS);
       return () => window.clearTimeout(id);
@@ -106,7 +114,7 @@ export function RecorderApp() {
     else void commands.setRecorderLayout("setup");
     const id = window.setTimeout(() => setMountHud(false), BAR_CROSSFADE_MS);
     return () => window.clearTimeout(id);
-  }, [showHud, counting, lastError]);
+  }, [showHud, counting, lastError, resetBarOffset]);
 
   useEffect(() => {
     const inkLive = status === "recording" || status === "paused";
@@ -115,6 +123,20 @@ export function RecorderApp() {
     }
     wasLiveRef.current = inkLive;
   }, [status, setAnnotationVisible]);
+
+  // Report chrome hitbox so the work-area overlay click-throughs everywhere else.
+  useEffect(() => {
+    const el = chromeRef.current;
+    if (!el || counting || showHud) return;
+    const sync = () => {
+      const r = el.getBoundingClientRect();
+      void commands.setRecorderBarHitbox(r.left, r.top, r.width, r.height);
+    };
+    const ro = new ResizeObserver(sync);
+    ro.observe(el);
+    sync();
+    return () => ro.disconnect();
+  }, [counting, showHud, barOffset, mountSetup, mountHud, lastError]);
 
   // Stable identity: `start` is a zustand action, so this is created once. The
   // countdown latches its own fire, but a stable prop means its ref-sync effect
@@ -151,9 +173,31 @@ export function RecorderApp() {
     );
   }
 
+  // HUD uses a compact native window — center the chrome.
+  if (showHud && !mountSetup) {
+    return (
+      <div className="pointer-events-none flex h-full w-full items-center justify-center bg-transparent font-sans text-foreground">
+        <div className="pointer-events-auto relative w-fit">
+          {mountHud ? (
+            <BarPane active={hudOn} enter={hudEnter}>
+              <RecordingHud starting={starting} />
+            </BarPane>
+          ) : null}
+        </div>
+      </div>
+    );
+  }
+
   return (
-    <div className="flex h-full w-fit flex-col justify-end bg-transparent font-sans text-foreground">
-      <div className="relative mx-auto w-fit">
+    <div className="pointer-events-none relative h-full w-full bg-transparent font-sans text-foreground">
+      <div
+        ref={chromeRef}
+        className="pointer-events-auto absolute left-1/2 flex w-fit flex-col items-center"
+        style={{
+          bottom: BAR_BOTTOM_MARGIN_PX,
+          transform: `translate3d(calc(-50% + ${barOffset.x}px), ${barOffset.y}px, 0)`,
+        }}
+      >
         {mountSetup ? (
           <BarPane active={!hudOn}>
             <RecorderToolbar onRecord={onRecord} />
@@ -164,8 +208,8 @@ export function RecorderApp() {
             <RecordingHud starting={starting} />
           </BarPane>
         ) : null}
+        <ErrorToast />
       </div>
-      <ErrorToast />
     </div>
   );
 }

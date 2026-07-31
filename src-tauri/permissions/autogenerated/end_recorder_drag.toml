@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-end-recorder-drag"
+description = "Enables the end_recorder_drag command without any pre-configured scope."
+commands.allow = ["end_recorder_drag"]
+
+[[permission]]
+identifier = "deny-end-recorder-drag"
+description = "Denies the end_recorder_drag command without any pre-configured scope."
+commands.deny = ["end_recorder_drag"]

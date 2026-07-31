@@ -10,6 +10,7 @@ import type {
   Project,
   ProjectSummary,
   RecorderConfig,
+  RecorderMenuSpace,
   RecorderState,
 } from "./types";
 
@@ -40,20 +41,30 @@ export const commands = {
     invoke<void>("show_area_frame_guide", { selection }),
   hideAreaFrameGuide: () => invoke<void>("hide_area_frame_guide"),
   hideRecorder: () => invoke<void>("hide_recorder"),
-  /** Resize recorder window to hug chrome. */
+  /** Resize recorder window to hug chrome. Popovers use `setRecorderMenu`. */
   setRecorderLayout: (
-    layout:
-      | "setup"
-      | "alert"
-      | "dropdown"
-      | "menu"
-      | "hud"
-      | "hud-mini"
-      | "countdown",
+    layout: "setup" | "alert" | "hud" | "hud-mini" | "countdown",
   ) => invoke<void>("set_recorder_layout", { layout }),
   /** Hug the setup pill — pass measured content width (logical px). */
   setRecorderBarWidth: (width: number) =>
     invoke<void>("set_recorder_bar_width", { width }),
+  /** Webview-local hitbox of the pill (+ open menu) for overlay click-through. */
+  setRecorderBarHitbox: (x: number, y: number, width: number, height: number) =>
+    invoke<void>("set_recorder_bar_hitbox", { x, y, width, height }),
+  /** Screen room above / below the bar — picks the side a popover opens toward. */
+  recorderMenuSpace: () => invoke<RecorderMenuSpace>("recorder_menu_space"),
+  /**
+   * Legacy — setup is a work-area overlay; Radix flips popovers in-window.
+   */
+  setRecorderMenu: (side: "top" | "bottom", height: number) =>
+    invoke<void>("set_recorder_menu", { side, height }),
+  /** Popover open — keep the menu room interactive (no click-through). */
+  setRecorderMenuLive: (live: boolean) =>
+    invoke<void>("set_recorder_menu_live", { live }),
+  /** CSS drag started — keep the overlay interactive (no window resize). */
+  beginRecorderDrag: () => invoke<"top" | "bottom">("begin_recorder_drag"),
+  /** CSS drag ended — window size untouched. */
+  endRecorderDrag: () => invoke<"top" | "bottom">("end_recorder_drag"),
   showCameraPreview: (deviceId: string) =>
     invoke<void>("show_camera_preview", { deviceId }),
   hideCameraPreview: () => invoke<void>("hide_camera_preview"),

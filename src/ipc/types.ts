@@ -72,6 +72,12 @@ export interface PermissionStatus {
 }
 
 /** What this build/OS can do — mirrors Rust's `capabilities.rs`. */
+/** Room around the recorder bar for popovers (logical px, screen work area). */
+export interface RecorderMenuSpace {
+  above: number;
+  below: number;
+}
+
 export interface PlatformCapabilities {
   os: "macos" | "windows" | "linux";
   canEnumerateSources: boolean;

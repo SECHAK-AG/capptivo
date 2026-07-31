@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-recorder-menu-space"
+description = "Enables the recorder_menu_space command without any pre-configured scope."
+commands.allow = ["recorder_menu_space"]
+
+[[permission]]
+identifier = "deny-recorder-menu-space"
+description = "Denies the recorder_menu_space command without any pre-configured scope."
+commands.deny = ["recorder_menu_space"]
