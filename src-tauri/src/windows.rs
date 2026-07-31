@@ -509,11 +509,7 @@ fn sync_dock_policy(
 
 /// Show the recorder bar after a full-screen overlay (area pick) and pin to all Spaces.
 pub(crate) fn reveal_recorder_bar(app: &AppHandle) {
-    if let Some(win) = app.get_webview_window(RECORDER_LABEL) {
-        set_follows_spaces(&win, true);
-        let _ = win.show();
-        let _ = win.set_focus();
-    }
+    let _ = show_recorder_popover(app);
 }
 
 /// Hide the recorder popover (close button / after stop).
@@ -587,21 +583,34 @@ fn apply_centered_recorder_layout(
     Ok(())
 }
 
+/// Create-or-show the recorder bar. Never hides — use for launch, Dock reopen,
+/// and "Open Recorder". Tray click / hotkey keep [`toggle_recorder_popover`].
+pub fn show_recorder_popover(app: &AppHandle) -> tauri::Result<()> {
+    if let Some(win) = app.get_webview_window(RECORDER_LABEL) {
+        if !win.is_visible().unwrap_or(false) {
+            let _ = win.set_size(tauri::Size::Logical(layout_size("setup")));
+        }
+        set_follows_spaces(&win, true);
+        win.show()?;
+        win.set_focus()?;
+        return Ok(());
+    }
+    create_recorder_popover(app)
+}
+
 /// Toggle the frameless recorder popover attached to the tray. Creates it lazily.
 pub fn toggle_recorder_popover(app: &AppHandle) -> tauri::Result<()> {
     if let Some(win) = app.get_webview_window(RECORDER_LABEL) {
         if win.is_visible().unwrap_or(false) {
             set_follows_spaces(&win, false);
             win.hide()?;
-        } else {
-            let _ = win.set_size(tauri::Size::Logical(layout_size("setup")));
-            set_follows_spaces(&win, true);
-            win.show()?;
-            win.set_focus()?;
+            return Ok(());
         }
-        return Ok(());
     }
+    show_recorder_popover(app)
+}
 
+fn create_recorder_popover(app: &AppHandle) -> tauri::Result<()> {
     let win = WebviewWindowBuilder::new(app, RECORDER_LABEL, WebviewUrl::App("recorder.html".into()))
         .title("Capptivo")
         .inner_size(setup_bar_width(), LAYOUT_SETUP_H)

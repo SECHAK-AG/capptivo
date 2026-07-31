@@ -70,7 +70,7 @@ fn on_menu_event(app: &AppHandle, event: tauri::menu::MenuEvent) {
     match event.id.as_ref() {
         "quit" => app.exit(0),
         "open_recorder" => {
-            if let Err(e) = windows::toggle_recorder_popover(app) {
+            if let Err(e) = windows::show_recorder_popover(app) {
                 tracing::warn!(%e, "failed to open recorder popover from menu");
             }
         }
@@ -86,7 +86,7 @@ fn on_menu_event(app: &AppHandle, event: tauri::menu::MenuEvent) {
         }
         "settings" => {
             // Settings window is a Phase 5 item; open the popover for now.
-            let _ = windows::toggle_recorder_popover(app);
+            let _ = windows::show_recorder_popover(app);
         }
         other => tracing::debug!(id = other, "unhandled tray menu item"),
     }

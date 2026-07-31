@@ -97,6 +97,12 @@ pub fn run() {
             tray::build(&handle)?;
             register_global_hotkey(&handle);
 
+            // Launch straight into the recorder — clicking the app means the
+            // user wants to record, not hunt the tray icon first.
+            if let Err(e) = windows::show_recorder_popover(&handle) {
+                tracing::warn!(%e, "failed to open recorder on launch");
+            }
+
             // Warm the H.264 encoder probe off the critical path.
             //
             // `hw_encoder::pick` is `OnceLock`-cached, but filling it spawns an
@@ -129,8 +135,22 @@ pub fn run() {
             }
         })
         .invoke_handler(crate::command_handlers!())
-        .run(tauri::generate_context!())
-        .expect("error while running Capptivo Desktop");
+        .build(tauri::generate_context!())
+        .expect("error while building Capptivo Desktop")
+        .run(|app, event| {
+            // Dock / Finder reopen (macOS): show the recorder rather than
+            // silently sitting in the menubar. No-op on other platforms.
+            #[cfg(target_os = "macos")]
+            if let tauri::RunEvent::Reopen { .. } = event {
+                if let Err(e) = windows::show_recorder_popover(app) {
+                    tracing::warn!(%e, "failed to open recorder on reopen");
+                }
+            }
+            #[cfg(not(target_os = "macos"))]
+            {
+                let _ = (app, event);
+            }
+        });
 }
 
 fn register_global_hotkey(app: &tauri::AppHandle) {

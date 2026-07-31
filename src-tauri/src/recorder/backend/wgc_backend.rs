@@ -152,8 +152,15 @@ impl CaptureBackend for WgcBackend {
         } else {
             DrawBorderSettings::Default
         };
-        let min_interval =
-            MinimumUpdateIntervalSettings::Custom(Duration::from_secs_f64(1.0 / f64::from(fps)));
+        // MinUpdateInterval is Win11 24H2+ (build ≥ 26100); Custom fails the
+        // whole session on older builds. FramePacer still enforces target fps.
+        let min_interval = if GraphicsCaptureApi::is_minimum_update_interval_supported()
+            .unwrap_or(false)
+        {
+            MinimumUpdateIntervalSettings::Custom(Duration::from_secs_f64(1.0 / f64::from(fps)))
+        } else {
+            MinimumUpdateIntervalSettings::Default
+        };
 
         let control = match target {
             Target::Monitor(monitor) => FrameForwarder::start_free_threaded(Settings::new(
