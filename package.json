@@ -10,6 +10,8 @@
     "build": "tsc && vite build",
     "preview": "vite preview",
     "typecheck": "tsc --noEmit",
+    "test:selfcheck": "node scripts/run-selfchecks.mjs",
+    "test": "pnpm typecheck && pnpm test:selfcheck",
     "lint": "eslint .",
     "check:cursor-hotspots": "node scripts/check-cursor-hotspots.mjs",
     "tauri": "tauri",

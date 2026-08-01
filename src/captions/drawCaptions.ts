@@ -4,7 +4,7 @@ import {
   playbackTimeMs,
   resolveActiveCueWords,
   type TimedDrawWord,
-} from "./captionTiming";
+} from "./captionTiming.ts";
 
 function roundedRectPath(
   ctx: CanvasRenderingContext2D,
