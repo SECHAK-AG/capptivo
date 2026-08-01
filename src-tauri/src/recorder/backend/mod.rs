@@ -206,7 +206,12 @@ pub trait CaptureBackend: Send + Sync {
     fn request_permission(&self) -> bool;
 
     /// Enumerate displays and windows for the picker.
-    fn list_sources(&self) -> AppResult<Vec<CaptureSource>>;
+    ///
+    /// `include_thumbnails == false` skips per-source preview capture. The
+    /// recorder calls that form at launch, when no picker menu is open and the
+    /// previews would be thrown away — capturing them costs one full-resolution
+    /// screenshot per display *and* per window (see `source_preview.rs`).
+    fn list_sources(&self, include_thumbnails: bool) -> AppResult<Vec<CaptureSource>>;
 
     /// Enumerate attached iOS devices (iPhone / iPad screen capture over USB).
     ///

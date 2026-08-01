@@ -35,7 +35,7 @@ impl CaptureBackend for TestPatternBackend {
         true
     }
 
-    fn list_sources(&self) -> AppResult<Vec<CaptureSource>> {
+    fn list_sources(&self, _include_thumbnails: bool) -> AppResult<Vec<CaptureSource>> {
         Ok(vec![CaptureSource {
             id: "display:test".into(),
             kind: CaptureSourceKind::Display,

@@ -86,7 +86,7 @@ interface RecorderStore {
   init: () => Promise<void>;
   refreshPermissions: () => Promise<void>;
   requestPermission: () => Promise<void>;
-  refreshSources: () => Promise<void>;
+  refreshSources: (options?: { thumbnails?: boolean }) => Promise<void>;
   refreshDevices: () => Promise<void>;
   selectDevice: (id: string) => void;
   refreshMediaDevices: () => Promise<void>;
@@ -256,11 +256,12 @@ export const useRecorderStore = create<RecorderStore>((set, get) => ({
     }
   },
 
-  async refreshSources() {
+  async refreshSources(options = {}) {
+    const thumbnails = options.thumbnails === true;
     if (!get().permissions?.canRecord) return;
     set({ loadingSources: true });
     try {
-      const sources = await commands.listCaptureSources();
+      const sources = await commands.listCaptureSources(thumbnails);
       const { captureMode, selectedSourceId } = get();
       set({
         sources,

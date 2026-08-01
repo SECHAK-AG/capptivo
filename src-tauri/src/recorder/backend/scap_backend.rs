@@ -47,7 +47,7 @@ impl CaptureBackend for ScapBackend {
         scap::request_permission()
     }
 
-    fn list_sources(&self) -> AppResult<Vec<CaptureSource>> {
+    fn list_sources(&self, include_thumbnails: bool) -> AppResult<Vec<CaptureSource>> {
         if !scap::is_supported() {
             return Err(AppError::Unsupported);
         }
@@ -62,7 +62,11 @@ impl CaptureBackend for ScapBackend {
             if let Target::Display(display) = target {
                 let cg = CGDisplay::new(display.id);
                 let bounds = cg.bounds();
-                let preview = source_preview::display_thumbnail(display.id);
+                let preview = if include_thumbnails {
+                    source_preview::display_thumbnail(display.id)
+                } else {
+                    None
+                };
                 sources.push(CaptureSource {
                     id: format!("display:{}", display.id),
                     kind: CaptureSourceKind::Display,
@@ -80,7 +84,11 @@ impl CaptureBackend for ScapBackend {
         }
 
         for window in picker_sources::recordable_windows()? {
-            let preview = source_preview::window_thumbnail(window.id);
+            let preview = if include_thumbnails {
+                source_preview::window_thumbnail(window.id)
+            } else {
+                None
+            };
             sources.push(CaptureSource {
                 id: format!("window:{}", window.id),
                 kind: CaptureSourceKind::Window,

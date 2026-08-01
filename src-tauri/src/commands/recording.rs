@@ -9,12 +9,20 @@ use crate::windows;
 use std::io::Write;
 use tauri::{AppHandle, Emitter, Manager, State};
 
-#[tauri::command]
-pub fn list_capture_sources(state: State<AppState>) -> AppResult<Vec<CaptureSource>> {
-    state.recorder.list_sources()
+/// `(async)` — the body screenshots every display and window (see
+/// `backend/source_preview.rs`); on the main thread that freezes every
+/// Capptivo window. Same rule as [`write_camera_chunk`].
+#[tauri::command(async)]
+pub fn list_capture_sources(
+    state: State<AppState>,
+    include_thumbnails: bool,
+) -> AppResult<Vec<CaptureSource>> {
+    state.recorder.list_sources(include_thumbnails)
 }
 
-#[tauri::command]
+/// `(async)` — enumerates AVFoundation / media devices; polled while the
+/// Device menu is open. Same rule as [`write_camera_chunk`].
+#[tauri::command(async)]
 pub fn list_capture_devices(state: State<AppState>) -> AppResult<Vec<CaptureDevice>> {
     state.recorder.list_devices()
 }

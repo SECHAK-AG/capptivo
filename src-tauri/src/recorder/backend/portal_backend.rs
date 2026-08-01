@@ -63,7 +63,7 @@ impl CaptureBackend for PortalBackend {
         true
     }
 
-    fn list_sources(&self) -> AppResult<Vec<CaptureSource>> {
+    fn list_sources(&self, _include_thumbnails: bool) -> AppResult<Vec<CaptureSource>> {
         // Enumeration is impossible under the portal model (by design on
         // Wayland). One entry; the frontend shows it as "choose in the system
         // picker" via `capabilities.can_enumerate_sources == false`.

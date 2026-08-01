@@ -16,7 +16,10 @@ import type {
 
 export const commands = {
   // --- recording ---
-  listCaptureSources: () => invoke<CaptureSource[]>("list_capture_sources"),
+  /** `includeThumbnails: false` skips per-source screenshot capture — use it
+   *  for the boot-time list, when no picker menu is open. */
+  listCaptureSources: (includeThumbnails: boolean) =>
+    invoke<CaptureSource[]>("list_capture_sources", { includeThumbnails }),
   /** Attached iPhones / iPads — CoreMediaIO, gated by camera permission. */
   listCaptureDevices: () => invoke<CaptureDevice[]>("list_capture_devices"),
   platformCapabilities: () =>

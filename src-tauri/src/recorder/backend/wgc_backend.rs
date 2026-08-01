@@ -59,7 +59,7 @@ impl CaptureBackend for WgcBackend {
         true
     }
 
-    fn list_sources(&self) -> AppResult<Vec<CaptureSource>> {
+    fn list_sources(&self, include_thumbnails: bool) -> AppResult<Vec<CaptureSource>> {
         if !self.is_supported() {
             return Err(AppError::Unsupported);
         }
@@ -74,7 +74,11 @@ impl CaptureBackend for WgcBackend {
                 .unwrap_or_else(|_| format!("Display {id}"));
             let width = monitor.width().unwrap_or(0);
             let height = monitor.height().unwrap_or(0);
-            let preview = win_preview::display_thumbnail(&monitor);
+            let preview = if include_thumbnails {
+                win_preview::display_thumbnail(&monitor)
+            } else {
+                None
+            };
             sources.push(CaptureSource {
                 id: format!("display:{id}"),
                 kind: CaptureSourceKind::Display,
@@ -101,7 +105,11 @@ impl CaptureBackend for WgcBackend {
                 continue;
             }
             let id = window.as_raw_hwnd() as isize;
-            let preview = win_preview::window_thumbnail(&window);
+            let preview = if include_thumbnails {
+                win_preview::window_thumbnail(&window)
+            } else {
+                None
+            };
             sources.push(CaptureSource {
                 id: format!("window:{id}"),
                 kind: CaptureSourceKind::Window,

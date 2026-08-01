@@ -57,8 +57,8 @@ impl CaptureBackend for RoutingBackend {
         self.screen.request_permission()
     }
 
-    fn list_sources(&self) -> AppResult<Vec<CaptureSource>> {
-        self.screen.list_sources()
+    fn list_sources(&self, include_thumbnails: bool) -> AppResult<Vec<CaptureSource>> {
+        self.screen.list_sources(include_thumbnails)
     }
 
     fn list_devices(&self) -> AppResult<Vec<CaptureDevice>> {
@@ -92,7 +92,7 @@ mod tests {
         fn request_permission(&self) -> bool {
             true
         }
-        fn list_sources(&self) -> AppResult<Vec<CaptureSource>> {
+        fn list_sources(&self, _include_thumbnails: bool) -> AppResult<Vec<CaptureSource>> {
             Ok(Vec::new())
         }
         fn list_devices(&self) -> AppResult<Vec<CaptureDevice>> {
@@ -154,7 +154,7 @@ mod tests {
         assert_eq!(router.list_devices().unwrap().len(), 1);
         // TestPatternBackend advertises a synthetic display, never a device.
         assert!(router
-            .list_sources()
+            .list_sources(false)
             .unwrap()
             .iter()
             .all(|s| !s.id.starts_with("device:")));

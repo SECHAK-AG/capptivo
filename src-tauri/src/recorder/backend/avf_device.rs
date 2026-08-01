@@ -954,7 +954,7 @@ impl CaptureBackend for AvfDeviceBackend {
 
     /// Devices are not displays or windows — they are listed through
     /// [`list_devices`] and never appear in the screen picker.
-    fn list_sources(&self) -> AppResult<Vec<CaptureSource>> {
+    fn list_sources(&self, _include_thumbnails: bool) -> AppResult<Vec<CaptureSource>> {
         Ok(Vec::new())
     }
 

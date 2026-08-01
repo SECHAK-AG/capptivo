@@ -75,8 +75,8 @@ impl RecorderController {
     pub fn request_permission(&self) -> bool {
         self.backend.request_permission()
     }
-    pub fn list_sources(&self) -> AppResult<Vec<CaptureSource>> {
-        self.backend.list_sources()
+    pub fn list_sources(&self, include_thumbnails: bool) -> AppResult<Vec<CaptureSource>> {
+        self.backend.list_sources(include_thumbnails)
     }
 
     pub fn list_devices(&self) -> AppResult<Vec<CaptureDevice>> {

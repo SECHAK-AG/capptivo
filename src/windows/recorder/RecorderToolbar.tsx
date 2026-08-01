@@ -251,7 +251,10 @@ export function RecorderToolbar({ onRecord }: { onRecord: () => void }) {
             active={captureMode === "display"}
             open={openMenu === "display"}
             onOpenChange={(open) => {
-              if (open) useRecorderStore.getState().setCaptureMode("display");
+              if (open) {
+                useRecorderStore.getState().setCaptureMode("display");
+                void useRecorderStore.getState().refreshSources({ thumbnails: true });
+              }
               setMenuOpen("display", open);
             }}
           />
@@ -263,7 +266,10 @@ export function RecorderToolbar({ onRecord }: { onRecord: () => void }) {
               active={captureMode === "window"}
               open={openMenu === "window"}
               onOpenChange={(open) => {
-                if (open) useRecorderStore.getState().setCaptureMode("window");
+                if (open) {
+                  useRecorderStore.getState().setCaptureMode("window");
+                  void useRecorderStore.getState().refreshSources({ thumbnails: true });
+                }
                 setMenuOpen("window", open);
               }}
             />
@@ -784,7 +790,7 @@ function SourceMenuContent({
         <button
           type="button"
           className="rounded-sm px-1.5 py-0.5 text-xs text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
-          onClick={() => void refresh()}
+          onClick={() => void refresh({ thumbnails: true })}
         >
           {loading ? "…" : t("recorder.refresh")}
         </button>
