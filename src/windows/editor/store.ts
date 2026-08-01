@@ -35,6 +35,7 @@ import {
   type ZoomFragment,
 } from "@/engine";
 import { translateNow } from "@/lib/i18n";
+import { showError } from "@/lib/toast";
 import { commands } from "../../ipc/bindings";
 import type { Project } from "../../ipc/types";
 import { describeError } from "../recorder/store";
@@ -1215,6 +1216,7 @@ export const useEditorStore = create<EditorStore>((set, get) => ({
   },
   setExportError(exportError) {
     set({ exportError });
+    if (exportError) showError(exportError);
   },
 
   selectGap(index) {

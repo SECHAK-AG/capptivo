@@ -36,6 +36,8 @@ pub struct RecordingArtifacts {
     pub width: u32,
     pub height: u32,
     pub fps: u32,
+    /// Set when the encode loop hit an error but still salvaged a partial take.
+    pub error: Option<AppError>,
 }
 
 struct ActiveRecording {
@@ -196,7 +198,19 @@ impl RecorderController {
 
         match result {
             Ok(artifacts) => {
-                self.set_state(RecorderState::Idle);
+                if let Some(ref e) = artifacts.error {
+                    let message = e.to_string();
+                    self.set_state(RecorderState::Error {
+                        message: message.clone(),
+                        fatal: true,
+                    });
+                    (self.emit)(RecorderEvent::Error {
+                        message,
+                        fatal: true,
+                    });
+                } else {
+                    self.set_state(RecorderState::Idle);
+                }
                 Ok(artifacts)
             }
             Err(e) => {
@@ -273,16 +287,20 @@ fn spawn_encode_loop(
             // timestamps). Without this, `Elapsed` kept advancing on Pause.
             let mut hud_pause_mark: Option<Instant> = None;
             let mut hud_paused_accum = Duration::ZERO;
+            let mut encode_error: Option<AppError> = None;
 
             loop {
-                // Only mux audio once video has started — keeps A/V aligned with
-                // the warm-up skip below.
-                drain_audio(
-                    &capture.audio,
-                    &pause_flag,
-                    &mut encoder,
-                    media_epoch.is_some(),
-                )?;
+                if encode_error.is_none() {
+                    if let Err(e) = drain_audio(
+                        &capture.audio,
+                        &pause_flag,
+                        &mut encoder,
+                        media_epoch.is_some(),
+                    ) {
+                        encode_error = Some(e);
+                        break;
+                    }
+                }
 
                 let video_done = match capture.frames.recv_timeout(Duration::from_millis(100)) {
                     Ok(frame) => {
@@ -313,12 +331,18 @@ fn spawn_encode_loop(
 
                             if let Some(epoch) = media_epoch {
                                 let timeline_ts = (active_ts - epoch).max(0.0);
-                                frames_encoded += pacer.push(
+                                match pacer.push(
                                     &mut encoder,
                                     frame.data,
                                     bytes_per_row,
                                     timeline_ts,
-                                )?;
+                                ) {
+                                    Ok(n) => frames_encoded += n,
+                                    Err(e) => {
+                                        encode_error = Some(e);
+                                        break;
+                                    }
+                                }
                                 // Poster grab reads the frame the pacer just retained
                                 // (identical bytes to the one pushed) — no separate copy.
                                 if !thumb_written && frames_encoded >= thumb_at {
@@ -373,37 +397,49 @@ fn spawn_encode_loop(
 
             // Stop producers, then drain whatever is left in the channels.
             capture.stop();
-            drain_audio(
-                &capture.audio,
-                &pause_flag,
-                &mut encoder,
-                media_epoch.is_some(),
-            )?;
-            while let Ok(frame) = capture.frames.try_recv() {
-                if !pause_flag.load(Ordering::Relaxed) {
-                    let ts = frame.timestamp.as_secs_f64();
-                    if let Some(mark) = pause_mark.take() {
-                        paused_accum += (ts - mark).max(0.0);
-                        pause_spans.push((mark, ts.max(mark)));
-                    }
-                    let active_ts = ts - paused_accum;
-                    let bytes_per_row = frame.bytes_per_row;
-                    if media_epoch.is_none() {
-                        if active_ts < CAPTURE_WARMUP_MAX_SECS
-                            && is_capture_warmup_black(
-                                &frame.data,
-                                width,
-                                height,
-                                bytes_per_row,
-                            )
-                        {
-                            continue;
+            if encode_error.is_none() {
+                if let Err(e) = drain_audio(
+                    &capture.audio,
+                    &pause_flag,
+                    &mut encoder,
+                    media_epoch.is_some(),
+                ) {
+                    encode_error = Some(e);
+                }
+            }
+            if encode_error.is_none() {
+                while let Ok(frame) = capture.frames.try_recv() {
+                    if !pause_flag.load(Ordering::Relaxed) {
+                        let ts = frame.timestamp.as_secs_f64();
+                        if let Some(mark) = pause_mark.take() {
+                            paused_accum += (ts - mark).max(0.0);
+                            pause_spans.push((mark, ts.max(mark)));
                         }
-                        media_epoch = Some(active_ts);
+                        let active_ts = ts - paused_accum;
+                        let bytes_per_row = frame.bytes_per_row;
+                        if media_epoch.is_none() {
+                            if active_ts < CAPTURE_WARMUP_MAX_SECS
+                                && is_capture_warmup_black(
+                                    &frame.data,
+                                    width,
+                                    height,
+                                    bytes_per_row,
+                                )
+                            {
+                                continue;
+                            }
+                            media_epoch = Some(active_ts);
+                        }
+                        let timeline_ts = (active_ts - media_epoch.unwrap()).max(0.0);
+                        match pacer.push(&mut encoder, frame.data, bytes_per_row, timeline_ts)
+                        {
+                            Ok(n) => frames_encoded += n,
+                            Err(e) => {
+                                encode_error = Some(e);
+                                break;
+                            }
+                        }
                     }
-                    let timeline_ts = (active_ts - media_epoch.unwrap()).max(0.0);
-                    frames_encoded +=
-                        pacer.push(&mut encoder, frame.data, bytes_per_row, timeline_ts)?;
                 }
             }
 
@@ -415,7 +451,17 @@ fn spawn_encode_loop(
 
             let frames_dropped = capture.dropped.load(Ordering::Relaxed);
             drop(capture);
-            let finished_path = encoder.finish()?;
+            let finished_path = if encode_error.is_none() {
+                encoder.finish()?
+            } else {
+                match encoder.finish() {
+                    Ok(path) => path,
+                    Err(e) => {
+                        tracing::warn!(%e, "encoder.finish failed after encode error; keeping partial file");
+                        screen_path.clone()
+                    }
+                }
+            };
             let lead_in = media_epoch.unwrap_or(0.0);
             // Pause-fold first (spans are in shared-epoch time, like the video's
             // `paused_accum`), then shift onto the warm-up-trimmed timeline.
@@ -449,6 +495,7 @@ fn spawn_encode_loop(
                 width,
                 height,
                 fps,
+                error: encode_error,
             })
         })
         .unwrap_or_else(|_| {
@@ -871,6 +918,51 @@ mod tests {
         let size = std::fs::metadata(&artifacts.screen_path).unwrap().len();
         assert!(size > 0, "screen.mp4 should be non-empty");
         assert!(artifacts.stats.frames_encoded > 0);
+        assert!(artifacts.error.is_none());
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn stop_returns_idle_after_successful_clip() {
+        if std::process::Command::new("ffmpeg")
+            .arg("-version")
+            .output()
+            .is_err()
+        {
+            eprintln!("ffmpeg not found — skipping encode test");
+            return;
+        }
+
+        let dir = std::env::temp_dir().join(format!("capptivo-test-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+
+        let backend = Box::new(TestPatternBackend {
+            max_frames: Some(10),
+        });
+        let controller = RecorderController::new(backend, silent_emit());
+
+        let config = RecorderConfig {
+            source_id: "display:test".into(),
+            crop: None,
+            fps: 30,
+            show_cursor: true,
+            capture_system_audio: false,
+            capture_microphone: false,
+            quality: QualityPreset::Balanced,
+        };
+
+        controller.start(&config, &dir).unwrap();
+        std::thread::sleep(Duration::from_millis(300));
+        let artifacts = controller.stop().unwrap();
+        assert!(artifacts.error.is_none());
+        assert_eq!(controller.state(), RecorderState::Idle);
+
+        // A second recording must not be blocked by a wedged session.
+        controller.start(&config, &dir).unwrap();
+        assert_eq!(controller.state(), RecorderState::Recording);
+        let _ = controller.stop().unwrap();
+        assert_eq!(controller.state(), RecorderState::Idle);
 
         std::fs::remove_dir_all(&dir).ok();
     }

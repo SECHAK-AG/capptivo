@@ -178,7 +178,12 @@ function pickDefaultSource(
   return filtered.find((s) => s.isPrimary)?.id ?? filtered[0]?.id ?? null;
 }
 
-export const useRecorderStore = create<RecorderStore>((set, get) => ({
+export const useRecorderStore = create<RecorderStore>((set, get) => {
+  const reportError = (message: string) => {
+    set({ lastError: message });
+  };
+
+  return {
   state: { status: "idle" },
   elapsed: 0,
   lastError: null,
@@ -210,7 +215,7 @@ export const useRecorderStore = create<RecorderStore>((set, get) => ({
       ensureMicCaptureListeners();
       await onStateChanged((state) => set({ state }));
       await onElapsed((seconds) => set({ elapsed: seconds }));
-      await onError((message) => set({ lastError: message }));
+      await onError((message) => reportError(message));
       // Bubble X button — sync toggle without re-invoking hide.
       void listen("camera://closed", () => {
         set({ cameraEnabled: false });
@@ -243,7 +248,7 @@ export const useRecorderStore = create<RecorderStore>((set, get) => ({
     try {
       set({ permissions: await commands.checkPermissions() });
     } catch (e) {
-      set({ lastError: describeError(e) });
+      reportError(describeError(e));
     }
   },
 
@@ -253,7 +258,7 @@ export const useRecorderStore = create<RecorderStore>((set, get) => ({
       set({ permissions });
       if (permissions.canRecord) await get().refreshSources();
     } catch (e) {
-      set({ lastError: describeError(e) });
+      reportError(describeError(e));
     }
   },
 
@@ -269,7 +274,7 @@ export const useRecorderStore = create<RecorderStore>((set, get) => ({
         selectedSourceId: pickDefaultSource(sources, captureMode, selectedSourceId),
       });
     } catch (e) {
-      set({ lastError: describeError(e) });
+      reportError(describeError(e));
     } finally {
       set({ loadingSources: false });
     }
@@ -373,7 +378,7 @@ export const useRecorderStore = create<RecorderStore>((set, get) => ({
     if (!get().permissions?.canRecord) {
       await get().requestPermission();
       if (!get().permissions?.canRecord) {
-        set({ lastError: translateNow("recorder.error.screenPermission") });
+        reportError(translateNow("recorder.error.screenPermission"));
         return;
       }
     }
@@ -389,7 +394,7 @@ export const useRecorderStore = create<RecorderStore>((set, get) => ({
     } catch (e) {
       const message = describeError(e);
       if (!/cancel/i.test(message)) {
-        set({ lastError: message });
+        reportError(message);
       } else {
         void commands.hideAreaFrameGuide().catch(() => undefined);
       }
@@ -518,21 +523,21 @@ export const useRecorderStore = create<RecorderStore>((set, get) => ({
     if (captureMode !== "device" && !get().permissions?.canRecord) {
       await get().requestPermission();
       if (!get().permissions?.canRecord) {
-        set({ lastError: translateNow("recorder.error.screenPermission") });
+        reportError(translateNow("recorder.error.screenPermission"));
         return;
       }
     }
     if (captureMode === "device" && !selectedDeviceId) {
-      set({ lastError: translateNow("recorder.error.noDevice") });
+      reportError(translateNow("recorder.error.noDevice"));
       return;
     }
     if (captureMode === "area") {
       if (!areaSelection) {
-        set({ lastError: translateNow("recorder.error.noArea") });
+        reportError(translateNow("recorder.error.noArea"));
         return;
       }
     } else if (captureMode !== "device" && !selectedSourceId) {
-      set({ lastError: translateNow("recorder.error.noSource") });
+      reportError(translateNow("recorder.error.noSource"));
       return;
     }
     const captureMicrophone = micEnabled && !!micDeviceId;
@@ -576,7 +581,7 @@ export const useRecorderStore = create<RecorderStore>((set, get) => ({
         await commands.showAreaFrameGuide(areaSelection).catch(() => undefined);
       }
     } catch (e) {
-      set({ lastError: describeError(e) });
+      reportError(describeError(e));
     }
   },
 
@@ -600,7 +605,8 @@ export const useRecorderStore = create<RecorderStore>((set, get) => ({
         setMicTrackEnabled(true);
       }
     } catch (e) {
-      set({ lastError: describeError(e) });
+      reportError(describeError(e));
+      set({ annotationVisible: false, micSessionMuted: false });
     }
   },
 
@@ -610,10 +616,11 @@ export const useRecorderStore = create<RecorderStore>((set, get) => ({
       if (state.status === "recording") await commands.pauseRecording();
       else if (state.status === "paused") await commands.resumeRecording();
     } catch (e) {
-      set({ lastError: describeError(e) });
+      reportError(describeError(e));
     }
   },
-}));
+};
+});
 
 /** Turn an `AppError` (or anything) into a human string for the UI. */
 export function describeError(e: unknown): string {

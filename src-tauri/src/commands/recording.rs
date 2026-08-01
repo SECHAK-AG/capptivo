@@ -321,25 +321,15 @@ pub async fn stop_recording(app: AppHandle, state: State<'_, AppState>) -> AppRe
         .await
         .map_err(|e| AppError::Other(format!("stop task failed: {e}")));
 
-    let artifacts = match stopped {
-        Ok(Ok(artifacts)) => artifacts,
-        Ok(Err(e)) | Err(e) => {
-            // Every cleanup line below is about to be skipped, so leave
-            // `current_project` in place: it keeps the `Busy` guard armed against
-            // a second `start_recording` over a backend that may still be live,
-            // and it keeps the still-visible HUD truthful. The camera / mic sinks
-            // are left open for the same reason.
-            tracing::error!(
-                %e,
-                project = %project_id,
-                "stop_recording failed; session left intact"
-            );
-            return Err(e);
-        }
+    let (artifacts, stop_err) = match stopped {
+        Ok(Ok(artifacts)) => (Some(artifacts), None),
+        Ok(Err(e)) => (None, Some(e)),
+        Err(e) => (None, Some(e)),
     };
 
-    // Capture has actually stopped — only now is it safe to retire the session,
-    // its sinks, and the recording chrome.
+    // `RecorderController::stop` has already joined the encode thread — holding
+    // the session open protects nothing. Retire it on every path so a failed
+    // stop never wedges `start_recording` or leaves overlays up.
     let _ = state.current_project.lock().take();
     let _ = state.camera_sink.lock().take();
     let _ = state.mic_sink.lock().take();
@@ -350,6 +340,27 @@ pub async fn stop_recording(app: AppHandle, state: State<'_, AppState>) -> AppRe
     let _ = windows::dismiss_camera_preview(app.clone());
     crate::area_picker::hide_area_frame_guide(&app);
     windows::set_capture_exclusion(&app, false);
+
+    if let Some(e) = stop_err {
+        tracing::error!(
+            %e,
+            project = %project_id,
+            "stop_recording failed before artifacts"
+        );
+        return Err(e);
+    }
+
+    let artifacts = artifacts.expect("stop_err and artifacts are mutually exclusive");
+
+    if let Some(e) = artifacts.error.clone() {
+        tracing::error!(
+            %e,
+            project = %project_id,
+            frames = artifacts.stats.frames_encoded,
+            "recording encode failed; partial take kept on disk"
+        );
+        return Err(e);
+    }
 
     // Capture is stopped — safe to show the editor. Mic mux / progressive remux
     // below can still take a moment; the editor loads and waits on finalized.

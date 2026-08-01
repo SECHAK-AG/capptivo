@@ -5,6 +5,7 @@ import { Maximize2, Mic, MicOff, Minus, Pause, Pencil, Play, Square, X } from "l
 import { useI18n } from "@/lib/settings";
 import { cn } from "@/lib/utils";
 import { commands } from "../../ipc/bindings";
+import { RecorderBarAnchor } from "./RecorderErrorToast";
 import { useRecorderStore } from "./store";
 import { Countdown } from "./Countdown";
 import { useBarDrag } from "./menuSurface";
@@ -175,10 +176,13 @@ export function RecorderApp() {
         <div className="grid h-full place-items-center">
           <Countdown onDone={onCountdownDone} />
         </div>
-        <div className="pointer-events-none absolute inset-x-0 bottom-2 flex justify-center">
-          <div className="pointer-events-auto">
-            <ErrorToast />
-          </div>
+        <div
+          className="pointer-events-none absolute left-1/2 flex -translate-x-1/2 justify-center"
+          style={{ bottom: BAR_BOTTOM_MARGIN_PX }}
+        >
+          <RecorderBarAnchor>
+            <div className="h-9 w-px" aria-hidden />
+          </RecorderBarAnchor>
         </div>
       </div>
     );
@@ -187,12 +191,14 @@ export function RecorderApp() {
   // HUD uses a compact native window — center the chrome.
   if (showHud && !mountSetup) {
     return (
-      <div className="pointer-events-none flex h-full w-full items-center justify-center overflow-hidden bg-transparent font-sans text-foreground">
-        <div className="pointer-events-auto relative w-fit">
+      <div className="pointer-events-none flex h-full w-full items-center justify-center overflow-visible bg-transparent font-sans text-foreground">
+        <div className="pointer-events-auto">
           {mountHud ? (
-            <BarPane active={hudOn} enter={hudEnter}>
-              <RecordingHud starting={starting} />
-            </BarPane>
+            <RecorderBarAnchor>
+              <BarPane active={hudOn} enter={hudEnter}>
+                <RecordingHud starting={starting} />
+              </BarPane>
+            </RecorderBarAnchor>
           ) : null}
         </div>
       </div>
@@ -200,7 +206,12 @@ export function RecorderApp() {
   }
 
   return (
-    <div className="pointer-events-none relative h-full w-full overflow-hidden bg-transparent font-sans text-foreground">
+    <div
+      className={cn(
+        "pointer-events-none relative h-full w-full bg-transparent font-sans text-foreground",
+        lastError ? "overflow-visible" : "overflow-hidden",
+      )}
+    >
       <div
         ref={chromeRef}
         className="pointer-events-auto absolute left-1/2 flex w-fit flex-col items-center"
@@ -209,17 +220,18 @@ export function RecorderApp() {
           transform: `translate3d(calc(-50% + ${barOffset.x}px), ${barOffset.y}px, 0)`,
         }}
       >
-        {mountSetup ? (
-          <BarPane active={!hudOn}>
-            <RecorderToolbar onRecord={onRecord} />
-          </BarPane>
-        ) : null}
-        {mountHud ? (
-          <BarPane active={hudOn} enter={hudEnter}>
-            <RecordingHud starting={starting} />
-          </BarPane>
-        ) : null}
-        <ErrorToast />
+        <RecorderBarAnchor>
+          {mountSetup ? (
+            <BarPane active={!hudOn}>
+              <RecorderToolbar onRecord={onRecord} />
+            </BarPane>
+          ) : null}
+          {mountHud ? (
+            <BarPane active={hudOn} enter={hudEnter}>
+              <RecordingHud starting={starting} />
+            </BarPane>
+          ) : null}
+        </RecorderBarAnchor>
       </div>
     </div>
   );
@@ -457,33 +469,6 @@ function HudIconBtn({
     >
       {children}
     </button>
-  );
-}
-
-function ErrorToast() {
-  const { t } = useI18n();
-  const error = useRecorderStore((s) => s.lastError);
-  const clear = () => useRecorderStore.setState({ lastError: null });
-
-  useEffect(() => {
-    if (!error?.trim()) return;
-    const id = window.setTimeout(clear, 6000);
-    return () => window.clearTimeout(id);
-  }, [error]);
-
-  if (!error?.trim()) return null;
-  return (
-    <div className="mt-2 flex max-w-md items-start gap-2 rounded-lg bg-destructive/20 px-3 py-2 text-xs text-foreground ring-1 ring-destructive/40">
-      <p className="min-w-0 flex-1 leading-snug">{error}</p>
-      <button
-        type="button"
-        aria-label={t("recorder.error.dismiss")}
-        onClick={clear}
-        className="shrink-0 rounded-md p-0.5 text-muted-foreground transition-colors hover:bg-destructive/20 hover:text-foreground"
-      >
-        <X className="size-3.5" />
-      </button>
-    </div>
   );
 }
 
