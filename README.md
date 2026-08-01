@@ -9,7 +9,7 @@
 
 <p align="center">
   <img alt="version" src="https://img.shields.io/badge/version-1.0.0-e66028?style=for-the-badge&labelColor=111" />
-  <img alt="license" src="https://img.shields.io/badge/license-AGPL--3.0--or--later-blue?style=for-the-badge&labelColor=111" />
+  <img alt="license" src="https://img.shields.io/badge/license-MIT-blue?style=for-the-badge&labelColor=111" />
   <img alt="platform" src="https://img.shields.io/badge/macOS%20%7C%20Windows%20%7C%20Linux-555?style=for-the-badge&labelColor=111&label=platform" />
   <img alt="tauri" src="https://img.shields.io/badge/Tauri-24C8DB?style=for-the-badge&labelColor=111&logo=tauri&logoColor=24C8DB" />
   <img alt="rust" src="https://img.shields.io/badge/Rust-000000?style=for-the-badge&labelColor=111&logo=rust&logoColor=white" />
@@ -20,7 +20,7 @@
   Capptivo is your free, open-source alternative to Screen Studio and Cursorful. Create stunning screen recordings in seconds, not hours. Smart follow-cursor zoom, click-based auto zooms, editor presets, and on-device captions, your demos practically make themselves.
 </p>
 
-<p> Capptivo isn't a clone of Screen Studio, it's a tool I built for myself, with every feature designed around my own needs. Now I'm open-sourcing it under the <strong>GNU Affero GPL v3 or later</strong> so anyone can use, improve, and customize it — and keep those improvements free.
+<p> Capptivo isn't a clone of Screen Studio, it's a tool I built for myself, with every feature designed around my own needs. Now I'm open-sourcing it under the <strong>MIT license</strong> so anyone can use, improve, and customize it — freely, in any project.
 
 No more paying $29/month for video editing software. I hope you enjoy it, and contributions are always welcome. </p>
 
@@ -293,27 +293,20 @@ cargo check --no-default-features
 
 ## License
 
-Copyright (C) 2026 idboussadel
+Copyright (c) 2026 idboussadel
 
-Capptivo Desktop is free software: you can redistribute it and/or modify it
-under the terms of the [GNU Affero General Public License](LICENSE) as
-published by the Free Software Foundation, either version 3 of the License,
-or (at your option) any later version.
+Capptivo Desktop is released under the [MIT License](LICENSE) (`MIT`). You are
+free to use, copy, modify, merge, publish, distribute, sublicense, and sell
+copies of the software, provided the copyright notice and permission notice
+are included in all copies or substantial portions of it.
 
-This program is distributed in the hope that it will be useful, but
-**WITHOUT ANY WARRANTY**; without even the implied warranty of
-MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the GNU Affero
-General Public License for more details.
+The software is provided **"AS IS", WITHOUT WARRANTY OF ANY KIND**, express or
+implied. See [LICENSE](LICENSE) for the full text.
 
-You should have received a copy of the GNU Affero General Public License
-along with this program. If not, see <https://www.gnu.org/licenses/>.
-
-If you modify Capptivo and run a modified version as a network service
-(for example a hosted editor or API), AGPL §13 requires that you offer
-users of that service the Corresponding Source of your modified version.
-
-Bundled and downloaded third-party components (notably the FFmpeg sidecars)
-have their own licenses — see [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
+Bundled and downloaded third-party components (notably the FFmpeg sidecars,
+which are GPL-licensed) have their own licenses and are **not** covered by
+Capptivo's MIT license — see [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)
+for what that means if you redistribute builds.
 
 By contributing, you agree that your contributions are licensed under the
-same terms (`AGPL-3.0-or-later`).
+same terms (`MIT`).

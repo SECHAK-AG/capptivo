@@ -2,7 +2,7 @@
   "name": "@capptivo/desktop",
   "private": true,
   "version": "1.0.0",
-  "license": "AGPL-3.0-or-later",
+  "license": "MIT",
   "packageManager": "pnpm@11.1.2",
   "type": "module",
   "scripts": {

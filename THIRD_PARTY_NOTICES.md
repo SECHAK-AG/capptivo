@@ -1,8 +1,9 @@
 # Third-party notices
 
-Capptivo Desktop is licensed under the [GNU Affero GPL v3 or later](LICENSE)
-(`AGPL-3.0-or-later`). This file documents **bundled or downloaded third-party
-components** that ship with or alongside the app, and their licenses.
+Capptivo Desktop's own source is licensed under the [MIT License](LICENSE)
+(`MIT`). This file documents **bundled or downloaded third-party components**
+that ship with or alongside the app, and their licenses — several are under
+stricter terms than MIT and are not re-licensed by Capptivo.
 
 ---
 
@@ -48,5 +49,5 @@ Frontend (npm) and Rust crate dependencies keep their own licenses. Inspect:
 
 Notable UI / media libraries used by Capptivo include React, Tauri, mediabunny,
 gifenc, and various Radix UI packages — each under its upstream license (typically
-MIT/Apache-2.0). They are not re-licensed by Capptivo’s AGPL; Capptivo as a whole
-is distributed under `AGPL-3.0-or-later`.
+MIT/Apache-2.0). They are not re-licensed by Capptivo; Capptivo's own code is
+distributed under `MIT`.

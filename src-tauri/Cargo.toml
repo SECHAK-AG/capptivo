@@ -3,7 +3,7 @@ name = "desktop"
 version = "1.0.0"
 description = "Capptivo Desktop — native screen recorder + editor"
 authors = ["idboussadel"]
-license = "AGPL-3.0-or-later"
+license = "MIT"
 edition = "2021"
 
 [lib]
