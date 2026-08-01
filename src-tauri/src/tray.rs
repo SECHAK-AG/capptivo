@@ -117,7 +117,7 @@ fn live_menu(app: &AppHandle, paused: bool) -> tauri::Result<Menu<tauri::Wry>> {
         MenuItem::with_id(app, "open_recorder", "Show Recorder", true, None::<&str>)?;
     let open_library = MenuItem::with_id(app, "open_library", "Recordings…", true, None::<&str>)?;
     let sep2 = PredefinedMenuItem::separator(app)?;
-    let quit = MenuItem::with_id(app, "quit", "Quit Capptivo", true, None::<&str>)?;
+    // Quit while recording would leave a half-written project on disk — stop first.
     Menu::with_items(
         app,
         &[
@@ -128,7 +128,6 @@ fn live_menu(app: &AppHandle, paused: bool) -> tauri::Result<Menu<tauri::Wry>> {
             &open_recorder,
             &open_library,
             &sep2,
-            &quit,
         ],
     )
 }
@@ -137,8 +136,8 @@ fn finalizing_menu(app: &AppHandle) -> tauri::Result<Menu<tauri::Wry>> {
     let status = MenuItem::with_id(app, "finalizing", "Finalizing…", false, None::<&str>)?;
     let separator = PredefinedMenuItem::separator(app)?;
     let open_library = MenuItem::with_id(app, "open_library", "Recordings…", true, None::<&str>)?;
-    let quit = MenuItem::with_id(app, "quit", "Quit Capptivo", true, None::<&str>)?;
-    Menu::with_items(app, &[&status, &separator, &open_library, &quit])
+    // No Quit while a take is being finalized — same data-loss risk as mid-record quit.
+    Menu::with_items(app, &[&status, &separator, &open_library])
 }
 
 #[cfg(target_os = "macos")]
@@ -163,7 +162,13 @@ fn apply_tray_icon(
 
 fn on_menu_event(app: &AppHandle, event: tauri::menu::MenuEvent) {
     match event.id.as_ref() {
-        "quit" => app.exit(0),
+        "quit" => {
+            if recording_active(app) {
+                tracing::warn!("tray quit ignored while a recording is active");
+                return;
+            }
+            app.exit(0);
+        }
         "open_recorder" => {
             if let Err(e) = windows::show_recorder_popover(app) {
                 tracing::warn!(%e, "failed to open recorder popover from menu");
@@ -212,6 +217,12 @@ fn on_menu_event(app: &AppHandle, event: tauri::menu::MenuEvent) {
         }
         other => tracing::debug!(id = other, "unhandled tray menu item"),
     }
+}
+
+fn recording_active(app: &AppHandle) -> bool {
+    app.try_state::<AppState>()
+        .map(|s| s.current_project.lock().is_some())
+        .unwrap_or(false)
 }
 
 fn on_tray_icon_event(tray: &tauri::tray::TrayIcon, event: TrayIconEvent) {

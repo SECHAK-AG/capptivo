@@ -24,6 +24,7 @@ tauri-plugin-opener = "2"
 tauri-plugin-dialog = "2"
 tauri-plugin-notification = "2"
 tauri-plugin-global-shortcut = "2"
+tauri-plugin-single-instance = "2"
 
 # --- Serialization ---
 serde = { version = "1", features = ["derive"] }
@@ -45,6 +46,9 @@ ureq = { version = "2.12", default-features = false, features = ["tls"] }
 
 image = { version = "0.25", default-features = false, features = ["jpeg", "png"] }
 base64 = "0.22"
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
 
 [target.'cfg(target_os = "macos")'.dependencies]
 # Screen capture via ScreenCaptureKit. Pinned per TAURI_DESKTOP_MIGRATION.md §15

@@ -76,6 +76,12 @@ pub fn run() {
     init_tracing();
 
     tauri::Builder::default()
+        // Must register first — later plugins depend on the single-instance lock order.
+        .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
+            if let Err(e) = windows::show_recorder_popover(app) {
+                tracing::warn!(%e, "single-instance: failed to show recorder");
+            }
+        }))
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_notification::init())

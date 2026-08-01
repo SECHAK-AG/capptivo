@@ -70,11 +70,14 @@ pub fn ensure_proxy(
     let screen = dir.join("screen.mp4");
     let app = app.clone();
     std::thread::spawn(move || {
-        let result = proxy::generate(&screen, &dir);
-        // Re-fetch managed state on the thread to clear the in-flight flag.
-        app.state::<AppState>().proxy_jobs.lock().remove(&project_id);
+        let result = std::panic::catch_unwind(|| proxy::generate(&screen, &dir));
+        // Always clear the in-flight flag — a panic in `proxy::generate` used to
+        // leave `proxy_jobs` set and the editor waited forever for proxy-ready.
+        if let Some(state) = app.try_state::<AppState>() {
+            state.proxy_jobs.lock().remove(&project_id);
+        }
         match result {
-            Ok(()) => {
+            Ok(Ok(())) => {
                 let _ = app.emit(
                     "project://proxy-ready",
                     ProxyReadyEvent {
@@ -83,13 +86,23 @@ pub fn ensure_proxy(
                     },
                 );
             }
-            Err(e) => {
+            Ok(Err(e)) => {
                 tracing::warn!(%e, "preview proxy generation failed");
                 let _ = app.emit(
                     "project://proxy-failed",
                     ProxyFailedEvent {
                         project_id,
                         reason: e.to_string(),
+                    },
+                );
+            }
+            Err(_) => {
+                tracing::warn!("preview proxy generation panicked");
+                let _ = app.emit(
+                    "project://proxy-failed",
+                    ProxyFailedEvent {
+                        project_id,
+                        reason: "preview proxy generation failed".into(),
                     },
                 );
             }

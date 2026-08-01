@@ -183,6 +183,16 @@ export const useRecorderStore = create<RecorderStore>((set, get) => {
     set({ lastError: message });
   };
 
+  const openMicOrReport = async (deviceId: string): Promise<boolean> => {
+    try {
+      return await prepareMic(deviceId);
+    } catch (e) {
+      console.warn("mic open failed", e);
+      reportError(describeError(e));
+      return false;
+    }
+  };
+
   return {
   state: { status: "idle" },
   elapsed: 0,
@@ -249,6 +259,11 @@ export const useRecorderStore = create<RecorderStore>((set, get) => {
       void listen("annotation://closed", () => {
         set({ annotationVisible: false });
       });
+      if (typeof navigator !== "undefined" && navigator.mediaDevices) {
+        navigator.mediaDevices.addEventListener("devicechange", () => {
+          void get().refreshMediaDevices();
+        });
+      }
     }
     try {
       set({ state: await commands.recorderState() });
@@ -455,9 +470,13 @@ export const useRecorderStore = create<RecorderStore>((set, get) => {
         await get().refreshMediaDevices();
         const { micDeviceId, cameraEnabled } = get();
         if (!micDeviceId) return;
-        const opened = await prepareMic(micDeviceId).catch(() => false);
+        const opened = await openMicOrReport(micDeviceId);
         await get().refreshMediaDevices();
-        if (opened) await reviveCameraPreview(cameraEnabled);
+        if (!opened) {
+          set({ micEnabled: false, micDeviceId: null });
+          return;
+        }
+        await reviveCameraPreview(cameraEnabled);
       })();
     } else {
       releaseMic();
@@ -505,9 +524,13 @@ export const useRecorderStore = create<RecorderStore>((set, get) => {
     if (id) {
       void (async () => {
         const { cameraEnabled } = get();
-        const opened = await prepareMic(id).catch(() => false);
+        const opened = await openMicOrReport(id);
         await get().refreshMediaDevices();
-        if (opened) await reviveCameraPreview(cameraEnabled);
+        if (!opened) {
+          set({ micEnabled: false, micDeviceId: null });
+          return;
+        }
+        await reviveCameraPreview(cameraEnabled);
       })();
     } else {
       releaseMic();

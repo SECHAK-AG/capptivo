@@ -125,7 +125,7 @@ impl CursorTracker {
         let handle = spawn_sampler(rect, t0, stop.clone());
         Self {
             stop,
-            handle: Some(handle),
+            handle,
             rect,
             scale_factor,
         }
@@ -236,15 +236,20 @@ fn spawn_sampler(
     rect: CaptureRect,
     t0: Instant,
     stop: Arc<AtomicBool>,
-) -> JoinHandle<Vec<CursorSample>> {
-    std::thread::Builder::new()
+) -> Option<JoinHandle<Vec<CursorSample>>> {
+    match std::thread::Builder::new()
         .name("cursor-tracker".into())
         .spawn(move || match platform_probe() {
             Some(probe) => run_sampler_loop(probe, rect, t0, &stop),
             // No pointer source on this platform/session.
             None => Vec::new(),
-        })
-        .expect("failed to spawn cursor tracker thread")
+        }) {
+        Ok(handle) => Some(handle),
+        Err(e) => {
+            tracing::warn!(error = %e, "cursor tracker spawn failed; recording without cursor replay");
+            None
+        }
+    }
 }
 
 #[cfg(target_os = "macos")]
