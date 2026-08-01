@@ -659,6 +659,10 @@ fn warp_mouse(x: f64, y: f64) {
 /// Hide/unpin Space-joined overlays so Accessory→Regular + activate does not
 /// yank Mission Control to the primary display (recorder/camera frames often
 /// live on screen 1 while the user is on screen 2/3 — see `active_monitor`).
+///
+/// Annotation is only *temporarily* unpinned: callers must pair this with
+/// [`restore_annotation_spaces_if_shown`] after the shell is focused, otherwise
+/// a still-visible ink overlay stays glued to one Space.
 #[cfg(target_os = "macos")]
 fn prepare_shell_activation(app: &AppHandle) {
     if let Some(rec) = app.get_webview_window(RECORDER_LABEL) {
@@ -677,6 +681,41 @@ fn prepare_shell_activation(app: &AppHandle) {
 
 #[cfg(not(target_os = "macos"))]
 fn prepare_shell_activation(_app: &AppHandle) {}
+
+/// Re-apply annotation Spaces policy after [`prepare_shell_activation`] unpinned
+/// it. No-op when the overlay is hidden or absent.
+fn restore_annotation_spaces_if_shown(app: &AppHandle) {
+    let Some(win) = app.get_webview_window(ANNOTATION_LABEL) else {
+        return;
+    };
+    if !win.is_visible().unwrap_or(false) {
+        return;
+    }
+    let w = win.clone();
+    let _ = win.run_on_main_thread(move || {
+        apply_annotation_spaces_policy(&w);
+    });
+}
+
+/// Pin the annotation overlay to every Space (incl. fullscreen auxiliaries).
+/// AppKit main thread only — `setCollectionBehavior:` aborts otherwise.
+fn apply_annotation_spaces_policy(win: &tauri::WebviewWindow) {
+    #[cfg(target_os = "macos")]
+    {
+        if let Err(e) = win.set_visible_on_all_workspaces(true) {
+            tracing::warn!(
+                %e,
+                label = win.label(),
+                "annotation: failed to pin to all Spaces"
+            );
+        }
+        apply_overlay_spaces(win);
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        set_follows_spaces(win, true);
+    }
+}
 
 /// After Accessory→Regular, keep the shell on the user's display: warp cheaply
 /// off-main, then one Tauri hop to unpin + focus (Tauri marshals to main).
@@ -1287,8 +1326,7 @@ fn position_annotation_on_active_display(
             tracing::warn!(%e, label = win.label(), "annotation: set_size failed");
         }
         if win.is_visible().unwrap_or(false) {
-            set_follows_spaces(&win, true);
-            apply_overlay_spaces(&win);
+            apply_annotation_spaces_policy(&win);
         }
     });
     Ok(())
@@ -1429,10 +1467,9 @@ fn show_annotation_overlay_inner(app: &AppHandle) -> tauri::Result<()> {
         // `position_…` only re-asserts the policy when the window is already
         // visible, which it is not here — so apply it explicitly before showing.
         let w = win.clone();
-        let _ = win.clone().run_on_main_thread(move || {
-            set_follows_spaces(&w, true);
-            apply_overlay_spaces(&w);
-        });
+        let _ = win
+            .clone()
+            .run_on_main_thread(move || apply_annotation_spaces_policy(&w));
         win.show()?;
         let _ = app.emit(ANNOTATION_VISIBILITY_EVENT, true);
         arm_annotation_escape(app);
@@ -1464,10 +1501,9 @@ fn show_annotation_overlay_inner(app: &AppHandle) -> tauri::Result<()> {
     // `ns_window()` only exists once `build()` has returned, so the Spaces policy
     // has to be applied here rather than through the builder.
     let w = win.clone();
-    let _ = win.clone().run_on_main_thread(move || {
-        set_follows_spaces(&w, true);
-        apply_overlay_spaces(&w);
-    });
+    let _ = win
+        .clone()
+        .run_on_main_thread(move || apply_annotation_spaces_policy(&w));
     win.show()?;
     let _ = app.emit(ANNOTATION_VISIBILITY_EVENT, true);
     arm_annotation_escape(app);
@@ -1675,6 +1711,8 @@ pub fn present_on_active_monitor(app: &AppHandle, win: &tauri::WebviewWindow) ->
     win.show()?;
     // Policy owns focus after Regular flip (see sync_dock_policy).
     sync_dock_policy(app, Some(win), None);
+    // prepare_… unpinned annotation for the flip; put CanJoinAllSpaces back.
+    restore_annotation_spaces_if_shown(app);
     Ok(())
 }
 
@@ -1691,6 +1729,7 @@ fn show_focused_on_active_monitor(
     move_window_to_active_monitor(app, win, logical_w, logical_h)?;
     win.show()?;
     sync_dock_policy(app, Some(win), None);
+    restore_annotation_spaces_if_shown(app);
     Ok(())
 }
 
