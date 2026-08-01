@@ -182,14 +182,10 @@ fn parse_range(header: Option<&header::HeaderValue>, total: u64) -> Option<(u64,
             let n = n.min(total);
             (total - n, total - 1)
         }
-        // `bytes=N-` → open-ended. Serving to EOF would materialize a
-        // multi-GB tail into the response `Vec` (custom-protocol responses
-        // aren't streamed), so clamp to a bounded window — RFC 7233 allows a
-        // 206 to carry a subrange, and every consumer here (WebKit media
-        // loader, export readers) resumes from `Content-Range`.
+        // `bytes=N-` → open-ended; the shared clamp below bounds it to one window.
         (s, "") => {
             let start: u64 = s.parse().ok()?;
-            (start, start.saturating_add(WHOLE_FILE_WINDOW - 1))
+            (start, total - 1)
         }
         // `bytes=S-E`.
         (s, e) => (s.parse().ok()?, e.parse().ok()?),
@@ -198,7 +194,8 @@ fn parse_range(header: Option<&header::HeaderValue>, total: u64) -> Option<(u64,
     if start > end || start >= total {
         return None;
     }
-    Some((start, end.min(total - 1)))
+    let window_end = start.saturating_add(WHOLE_FILE_WINDOW - 1);
+    Some((start, end.min(window_end).min(total - 1)))
 }
 
 fn content_type_for(path: &Path) -> &'static str {
@@ -308,6 +305,24 @@ mod tests {
             parse_range_str(&format!("bytes={near_end}-"), total),
             Some((near_end, total - 1))
         );
+    }
+
+    #[test]
+    fn explicit_range_is_clamped_to_a_window() {
+        // `bytes=S-E` used to be bounded only by the file length, so a client
+        // asking for the whole file materialized it into one response `Vec`.
+        let total = 4 * 1024 * 1024 * 1024u64; // 4 GiB
+        assert_eq!(
+            parse_range_str(&format!("bytes=0-{}", total - 1), total),
+            Some((0, WHOLE_FILE_WINDOW - 1))
+        );
+        // A range already inside the window is returned untouched.
+        assert_eq!(parse_range_str("bytes=1000-2000", total), Some((1000, 2000)));
+        // Suffix ranges get the same bound.
+        let (start, end) = parse_range_str("bytes=-999999999999", total).unwrap();
+        assert_eq!(end - start + 1, WHOLE_FILE_WINDOW);
+        // Small files are unaffected — the window never shrinks a valid range.
+        assert_eq!(parse_range_str("bytes=0-999", 1000), Some((0, 999)));
     }
 
     fn parse_range_str(s: &str, total: u64) -> Option<(u64, u64)> {
