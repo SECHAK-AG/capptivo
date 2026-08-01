@@ -27,12 +27,17 @@ pub fn list_capture_devices(state: State<AppState>) -> AppResult<Vec<CaptureDevi
     state.recorder.list_devices()
 }
 
-#[tauri::command]
+/// `(async)` — cheap on its own, but it is awaited on the launch path
+/// immediately before [`request_screen_permission`]; splitting the two across
+/// thread policies would only make the pair harder to reason about.
+#[tauri::command(async)]
 pub fn check_permissions(state: State<AppState>) -> PermissionStatus {
     PermissionStatus::from_screen(state.recorder.has_permission())
 }
 
-#[tauri::command]
+/// `(async)` — drives the OS permission flow (macOS TCC), which blocks until
+/// the platform answers. Same rule as [`write_camera_chunk`].
+#[tauri::command(async)]
 pub fn request_screen_permission(state: State<AppState>) -> PermissionStatus {
     let granted = state.recorder.request_permission();
     PermissionStatus::from_screen(granted)
@@ -68,7 +73,16 @@ pub fn recorder_state(state: State<AppState>) -> RecorderState {
     state.recorder.state()
 }
 
-#[tauri::command]
+/// `(async)` — the body creates the project directory, writes and fsyncs the
+/// recording stub, and brings the whole capture pipeline up (~330 ms; see the
+/// `starting` state in `src/windows/recorder/RecorderApp.tsx`). On the main
+/// thread that is a visible freeze of every window right as the countdown ends.
+///
+/// The post-start chrome calls are safe off-main: `set_capture_exclusion` is an
+/// empty no-op on macOS (`windows.rs`) and its Windows arm is already invoked
+/// off-main by [`stop_recording`], which is an `async fn`; the `emit_*` calls
+/// are Tauri events, which are thread-safe by construction.
+#[tauri::command(async)]
 pub fn start_recording(
     app: AppHandle,
     state: State<AppState>,

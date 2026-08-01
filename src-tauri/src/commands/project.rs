@@ -127,7 +127,10 @@ pub fn rename_project(state: State<AppState>, id: String, title: Option<String>)
     state.store.rename(&id, title)
 }
 
-#[tauri::command]
+/// `(async)` — `store.delete` is `fs::remove_dir_all` over a project directory
+/// holding `screen.mp4` plus a proxy transcode, routinely several GB. On the
+/// main thread that freezes every Capptivo window for the length of the delete.
+#[tauri::command(async)]
 pub fn delete_project(app: AppHandle, state: State<AppState>, id: String) -> AppResult<()> {
     // Close the editor first so it isn't left pointing at a deleted folder.
     windows::close_editor_if_open(&app, &id);
