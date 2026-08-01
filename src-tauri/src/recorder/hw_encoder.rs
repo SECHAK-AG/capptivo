@@ -144,15 +144,13 @@ pub fn pick(ffmpeg: &Path) -> &'static EncoderChoice {
             }
             tracing::debug!(encoder = choice.name, "H.264 encoder probe failed");
         }
-        // Probing itself is broken (e.g. an FFmpeg build without lavfi) —
-        // keep the platform's first preference and let the real encode surface
-        // the error, matching the previous hardcoded behavior.
-        let first = &all[0];
+        // Every hardware probe failed — software encode is the safe last resort.
+        let fallback = all.last().unwrap_or(&SOFTWARE_FALLBACK);
         tracing::warn!(
-            encoder = first.name,
-            "all encoder probes failed; falling back unprobed"
+            encoder = fallback.name,
+            "all encoder probes failed; falling back to software encoder"
         );
-        first
+        fallback
     })
 }
 
@@ -184,10 +182,8 @@ mod tests {
     }
 
     #[test]
-    fn pick_returns_a_candidate_even_without_ffmpeg() {
-        // Probing against a nonexistent binary must not panic and must fall
-        // back to the first preference.
+    fn pick_falls_back_to_software_when_all_probes_fail() {
         let choice = pick(Path::new("/nonexistent/ffmpeg-for-test"));
-        assert!(candidates().iter().any(|c| c.name == choice.name));
+        assert_eq!(choice.name, "libx264");
     }
 }

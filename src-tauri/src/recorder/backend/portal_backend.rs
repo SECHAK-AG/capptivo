@@ -280,6 +280,8 @@ async fn pick_cursor_mode(proxy: &Screencast<'_>) -> (CursorMode, bool) {
 struct StreamState {
     format: Option<pipewire::spa::param::video::VideoInfoRaw>,
     announced: bool,
+    /// Locked when Ready is sent — frames with other dims are dropped (wgc pattern).
+    expected_dims: Option<(u32, u32)>,
     cursor_via_metadata: bool,
     /// Stream origin — added to stream-local Metadata cursor coords.
     stream_origin: (f64, f64),
@@ -328,6 +330,7 @@ fn run_pipewire(
         .add_local_listener_with_user_data(StreamState {
             format: None,
             announced: false,
+            expected_dims: None,
             cursor_via_metadata,
             stream_origin: position,
         })
@@ -348,23 +351,45 @@ fn run_pipewire(
             }
             let mut info = spa::param::video::VideoInfoRaw::new();
             if info.parse(param).is_ok() {
+                let dims = (info.size().width, info.size().height);
                 // Announce negotiated dimensions exactly once so `start` can
                 // size the encoder before the first frame.
                 if !state.announced {
                     state.announced = true;
+                    state.expected_dims = Some(dims);
                     let _ = meta_tx.send(SessionMeta::Ready(ReadyMeta {
-                        width: info.size().width,
-                        height: info.size().height,
+                        width: dims.0,
+                        height: dims.1,
                         position: state.stream_origin,
                         tracks_cursor,
                     }));
+                    state.format = Some(info);
+                } else if state.expected_dims != Some(dims) {
+                    tracing::warn!(
+                        old = ?state.expected_dims,
+                        new = ?dims,
+                        "pipewire format resize mid-capture; dropping mismatched frames"
+                    );
+                } else {
+                    state.format = Some(info);
                 }
-                state.format = Some(info);
             }
         })
         .process(move |stream, state| {
             let Some(format) = state.format else { return };
             let (width, height) = (format.size().width, format.size().height);
+            if state.expected_dims != Some((width, height)) {
+                loop {
+                    let raw = unsafe { stream.dequeue_raw_buffer() };
+                    if raw.is_null() {
+                        break;
+                    }
+                    unsafe {
+                        stream.queue_raw_buffer(raw);
+                    }
+                }
+                return;
+            }
             // Raw dequeue so we can read SPA_META_Cursor (pipewire 0.8 Buffer
             // has no find_meta helper).
             loop {

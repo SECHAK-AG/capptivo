@@ -12,15 +12,19 @@ use crate::proc;
 use crate::recorder::hw_encoder;
 use crate::recorder::types::QualityPreset;
 use std::fs::{self, File};
-use std::io::{BufWriter, Write};
+use std::io::{BufRead, BufWriter, Write};
 use std::path::{Path, PathBuf};
-use std::process::{Child, ChildStdin, Stdio};
+use std::process::{Child, ChildStderr, ChildStdin, Stdio};
+use std::sync::{Arc, Mutex};
+use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
 pub const SYSTEM_AUDIO_RATE: u32 = 48_000;
 pub const SYSTEM_AUDIO_CHANNELS: u16 = 2;
 
 const FFMPEG_FINISH_TIMEOUT: Duration = Duration::from_secs(30);
+/// Cap captured stderr so a chatty encoder cannot grow memory; oldest text is dropped.
+const FFMPEG_STDERR_CAP: usize = 64 * 1024;
 
 pub struct Encoder {
     child: Child,
@@ -31,6 +35,10 @@ pub struct Encoder {
     pcm_path: Option<PathBuf>,
     pcm_rate: u32,
     pcm_channels: u16,
+    /// After the first non-empty PCM chunk, rate/channels are fixed for mux.
+    pcm_format_locked: bool,
+    stderr_text: Arc<Mutex<String>>,
+    stderr_reader: Option<JoinHandle<()>>,
     width: u32,
     height: u32,
     frame_len: usize,
@@ -92,6 +100,17 @@ impl Encoder {
         let raw_stdin = child.stdin.take().ok_or_else(|| {
             AppError::Encoder("ffmpeg stdin missing".into())
         })?;
+        let stderr = child.stderr.take().ok_or_else(|| {
+            AppError::Encoder("ffmpeg stderr missing".into())
+        })?;
+        let stderr_text = Arc::new(Mutex::new(String::new()));
+        let stderr_reader = std::thread::Builder::new()
+            .name("ffmpeg-stderr".into())
+            .spawn({
+                let buf = stderr_text.clone();
+                move || drain_ffmpeg_stderr(stderr, buf)
+            })
+            .map_err(|e| AppError::Encoder(format!("failed to spawn stderr drainer: {e}")))?;
         // One buffer wide enough to hold a whole frame keeps padded writes cheap.
         let video_stdin =
             BufWriter::with_capacity((width as usize) * (height as usize) * 4, raw_stdin);
@@ -113,6 +132,9 @@ impl Encoder {
             pcm_path,
             pcm_rate: SYSTEM_AUDIO_RATE,
             pcm_channels: SYSTEM_AUDIO_CHANNELS,
+            pcm_format_locked: false,
+            stderr_text,
+            stderr_reader: Some(stderr_reader),
             width,
             height,
             frame_len: (width as usize) * (height as usize) * 4,
@@ -129,9 +151,14 @@ impl Encoder {
     pub fn write_frame(&mut self, data: &[u8], bytes_per_row: u32) -> AppResult<()> {
         let tight_row = (self.width as usize) * 4;
         let write_res = if bytes_per_row as usize == tight_row {
-            debug_assert!(data.len() >= self.frame_len);
-            self.video_stdin
-                .write_all(&data[..self.frame_len.min(data.len())])
+            if data.len() < self.frame_len {
+                return Err(AppError::Encoder(format!(
+                    "frame too short: got {} bytes, need {}",
+                    data.len(),
+                    self.frame_len
+                )));
+            }
+            self.video_stdin.write_all(&data[..self.frame_len])
         } else {
             // Strip row padding: BufWriter coalesces the per-row copies into a
             // single frame-sized write when we flush below.
@@ -141,7 +168,12 @@ impl Encoder {
                 let start = row * stride;
                 let end = start + tight_row;
                 if end > data.len() {
-                    break;
+                    return Err(AppError::Encoder(format!(
+                        "frame row {} truncated: need {} bytes in buffer, got {}",
+                        row,
+                        end,
+                        data.len()
+                    )));
                 }
                 if let Err(e) = self.video_stdin.write_all(&data[start..end]) {
                     res = Err(e);
@@ -160,14 +192,35 @@ impl Encoder {
         let Some(pcm) = self.pcm.as_mut() else {
             return Ok(());
         };
-        if sample_rate > 0 {
-            self.pcm_rate = sample_rate;
-        }
-        if channels > 0 {
-            self.pcm_channels = channels;
+        if self.pcm_format_locked {
+            if sample_rate > 0 && sample_rate != self.pcm_rate {
+                tracing::warn!(
+                    rate = sample_rate,
+                    locked = self.pcm_rate,
+                    "ignoring system audio sample-rate change after first PCM chunk"
+                );
+            }
+            if channels > 0 && channels != self.pcm_channels {
+                tracing::warn!(
+                    channels,
+                    locked = self.pcm_channels,
+                    "ignoring system audio channel change after first PCM chunk"
+                );
+            }
+        } else {
+            if sample_rate > 0 {
+                self.pcm_rate = sample_rate;
+            }
+            if channels > 0 {
+                self.pcm_channels = channels;
+            }
         }
         pcm.write_all(data)
-            .map_err(|e| AppError::Encoder(format!("write system audio failed: {e}")))
+            .map_err(|e| AppError::Encoder(format!("write system audio failed: {e}")))?;
+        if !data.is_empty() {
+            self.pcm_format_locked = true;
+        }
+        Ok(())
     }
 
     pub fn finish(mut self) -> AppResult<PathBuf> {
@@ -175,14 +228,18 @@ impl Encoder {
         let _ = self.video_stdin.flush();
         drop(self.video_stdin);
 
+        if let Some(reader) = self.stderr_reader.take() {
+            let _ = reader.join();
+        }
+
         let status = wait_child(&mut self.child, FFMPEG_FINISH_TIMEOUT)?;
 
         if !status.success() {
-            let mut stderr = String::new();
-            if let Some(mut err) = self.child.stderr.take() {
-                use std::io::Read;
-                let _ = err.read_to_string(&mut stderr);
-            }
+            let stderr = self
+                .stderr_text
+                .lock()
+                .map(|s| s.clone())
+                .unwrap_or_default();
             return Err(AppError::Encoder(format!(
                 "ffmpeg exited with {status}: {}",
                 stderr.trim()
@@ -206,6 +263,35 @@ impl Encoder {
         }
 
         Ok(self.output)
+    }
+}
+
+fn append_stderr_line(buf: &Mutex<String>, line: &str) {
+    if line.is_empty() {
+        return;
+    }
+    let mut text = buf.lock().unwrap_or_else(|e| e.into_inner());
+    if !text.is_empty() {
+        text.push('\n');
+    }
+    text.push_str(line);
+    if text.len() > FFMPEG_STDERR_CAP {
+        let drop = text.len() - FFMPEG_STDERR_CAP;
+        text.drain(..drop);
+    }
+}
+
+/// Read ffmpeg stderr on a side thread so a full pipe cannot block stdin writes.
+fn drain_ffmpeg_stderr(stderr: ChildStderr, buf: Arc<Mutex<String>>) {
+    let mut reader = std::io::BufReader::new(stderr);
+    let mut line = String::new();
+    loop {
+        line.clear();
+        match reader.read_line(&mut line) {
+            Ok(0) => break,
+            Ok(_) => append_stderr_line(&buf, line.trim_end_matches(['\r', '\n'])),
+            Err(_) => break,
+        }
     }
 }
 
@@ -872,6 +958,37 @@ mod tests {
         fs::write(&pcm, [0u8; 8]).unwrap();
         let err = mux_system_audio(&missing, &pcm, 48_000, 2).unwrap_err();
         assert!(err.to_string().contains("mux") || err.to_string().contains("ffmpeg"));
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn write_frame_rejects_short_buffer() {
+        if proc::command(proc::exe_name("ffmpeg")).arg("-version").output().is_err() {
+            return;
+        }
+        let dir = std::env::temp_dir().join(format!("capptivo-short-{}", uuid::Uuid::new_v4()));
+        fs::create_dir_all(&dir).unwrap();
+        let out = dir.join("screen.mp4");
+        let mut enc = Encoder::spawn(&out, 64, 64, 30, QualityPreset::Balanced, false).unwrap();
+        let short = vec![0u8; 16];
+        let err = enc.write_frame(&short, 64 * 4).unwrap_err();
+        assert!(err.to_string().contains("short") || err.to_string().contains("truncated"));
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn write_audio_locks_format_after_first_chunk() {
+        if proc::command(proc::exe_name("ffmpeg")).arg("-version").output().is_err() {
+            return;
+        }
+        let dir = std::env::temp_dir().join(format!("capptivo-pcm-{}", uuid::Uuid::new_v4()));
+        fs::create_dir_all(&dir).unwrap();
+        let out = dir.join("screen.mp4");
+        let mut enc = Encoder::spawn(&out, 64, 64, 30, QualityPreset::Balanced, true).unwrap();
+        enc.write_audio(&[0u8; 8], 48_000, 2).unwrap();
+        enc.write_audio(&[0u8; 8], 24_000, 1).unwrap();
+        assert_eq!(enc.pcm_rate, 48_000);
+        assert_eq!(enc.pcm_channels, 2);
         let _ = fs::remove_dir_all(&dir);
     }
 
