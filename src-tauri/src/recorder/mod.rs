@@ -108,7 +108,8 @@ impl RecorderController {
         // Bring up the capture source first — this is where permission / invalid
         // source errors surface, before we spawn anything.
         let capture: CaptureHandle = self.backend.start(config)?;
-        let (width, height, fps) = (capture.width, capture.height, capture.fps);
+        let (width, height) = encodable_dimensions(capture.width, capture.height)?;
+        let fps = capture.fps;
         let system_audio = capture.audio.is_some();
 
         let screen_path = project_dir.join("screen.mp4");
@@ -211,6 +212,16 @@ impl RecorderController {
             }
         }
     }
+}
+
+fn encodable_dimensions(width: u32, height: u32) -> AppResult<(u32, u32)> {
+    let (even_width, even_height) = (width & !1, height & !1);
+    if even_width == 0 || even_height == 0 {
+        return Err(AppError::Other(format!(
+            "capture source produced an unusable frame size ({width}x{height})"
+        )));
+    }
+    Ok((even_width, even_height))
 }
 
 /// The encode loop: pull frames from the bounded channel, write them through the
@@ -679,6 +690,25 @@ mod tests {
     fn pacing_writes_first_frame_without_repeats() {
         let p = plan_frame(0.0, 30, 0, 150);
         assert_eq!((p.repeats, p.write_current, p.next_index), (0, true, 1));
+    }
+
+    #[test]
+    fn odd_capture_sizes_are_trimmed_to_even() {
+        // The real case: a VM guest display at 1512x949 — one row is dropped
+        // instead of ffmpeg refusing to open the encoder.
+        assert_eq!(encodable_dimensions(1512, 949).unwrap(), (1512, 948));
+        assert_eq!(encodable_dimensions(1281, 723).unwrap(), (1280, 722));
+        // Already even → untouched.
+        assert_eq!(encodable_dimensions(1920, 1080).unwrap(), (1920, 1080));
+    }
+
+    #[test]
+    fn degenerate_capture_sizes_are_rejected() {
+        // Nothing encodable is left after the trim: fail at start with a clear
+        // message rather than spawning ffmpeg against a 0-wide pipe.
+        for (w, h) in [(0, 720), (1280, 0), (1, 720), (1280, 1)] {
+            assert!(encodable_dimensions(w, h).is_err(), "{w}x{h} should be rejected");
+        }
     }
 
     #[test]

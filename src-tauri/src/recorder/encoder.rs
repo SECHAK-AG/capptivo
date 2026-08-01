@@ -120,10 +120,16 @@ impl Encoder {
         })
     }
 
+    /// Write one captured frame, cropped to the encoder's dimensions.
+    ///
+    /// A frame may be one row/column larger than the encoder: the controller
+    /// trims odd capture sizes down to even (see `recorder::encodable_dimensions`).
+    /// Both paths below honor that — the tight path slices to `frame_len`, the
+    /// strided path stops at `self.height` — so the extra pixels are dropped.
     pub fn write_frame(&mut self, data: &[u8], bytes_per_row: u32) -> AppResult<()> {
         let tight_row = (self.width as usize) * 4;
         let write_res = if bytes_per_row as usize == tight_row {
-            debug_assert_eq!(data.len(), self.frame_len);
+            debug_assert!(data.len() >= self.frame_len);
             self.video_stdin
                 .write_all(&data[..self.frame_len.min(data.len())])
         } else {
@@ -867,6 +873,41 @@ mod tests {
         let err = mux_system_audio(&missing, &pcm, 48_000, 2).unwrap_err();
         assert!(err.to_string().contains("mux") || err.to_string().contains("ffmpeg"));
         let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// The regression test for odd capture sizes: a source that hands back an
+    /// odd height (a VM guest display, an arbitrary window rect) must still
+    /// produce a real MP4. The controller trims the encoder to even, and every
+    /// frame arrives one row taller than that — both write paths must crop it
+    /// rather than shear the image or hand FFmpeg a short frame.
+    #[test]
+    fn encodes_frames_taller_than_the_encoder() {
+        if proc::command(proc::exe_name("ffmpeg")).arg("-version").output().is_err() {
+            eprintln!("ffmpeg not found — skipping odd-size encode test");
+            return;
+        }
+        const ODD_H: u32 = 63;
+        const EVEN_H: u32 = 62;
+        const W: u32 = 64;
+
+        // `bytes_per_row == width * 4` (tight) and a padded stride, so both
+        // branches of `write_frame` are covered.
+        for stride in [W * 4, W * 4 + 32] {
+            let dir = std::env::temp_dir().join(format!("capptivo-odd-{}", uuid::Uuid::new_v4()));
+            fs::create_dir_all(&dir).unwrap();
+            let out = dir.join("screen.mp4");
+
+            let mut enc =
+                Encoder::spawn(&out, W, EVEN_H, 30, QualityPreset::Balanced, false).unwrap();
+            let frame = vec![120u8; (stride * ODD_H) as usize];
+            for _ in 0..10 {
+                enc.write_frame(&frame, stride).unwrap();
+            }
+            let path = enc.finish().unwrap();
+
+            assert!(fs::metadata(&path).unwrap().len() > 0, "stride {stride}: empty mp4");
+            let _ = fs::remove_dir_all(&dir);
+        }
     }
 
     /// Build a minimal MP4 prefix of top-level boxes `[(size, type)]`, padding
