@@ -1302,6 +1302,9 @@ static ANNOTATION_FOLLOW_GEN: AtomicU32 = AtomicU32::new(0);
 /// When false (a drawing tool is armed), skip monitor hops so the canvas
 /// isn't yanked mid-stroke. Set from the WebView via IPC.
 static ANNOTATION_FOLLOW_DISPLAY: AtomicBool = AtomicBool::new(true);
+/// Bumped on hide so a deferred IPC `show` that lost the race cannot resurrect
+/// the overlay after the user (or stop-recording) already dismissed it.
+static ANNOTATION_SHOW_EPOCH: AtomicU32 = AtomicU32::new(0);
 
 fn start_annotation_display_follow(app: &AppHandle) {
     // Deliberately does *not* reset `ANNOTATION_FOLLOW_DISPLAY`: a re-show while
@@ -1375,22 +1378,54 @@ fn disarm_annotation_escape(app: &AppHandle) {
 
 /// Toggle the fullscreen annotation toolbar. Usable with or without recording
 /// (tray menu "Annotate Screen…" vs the HUD highlighter during a take).
+///
+/// Tray / native callers invoke the inner paths directly — safe on an idle UI
+/// thread. The recorder pencil goes through the deferred IPC commands below.
 pub fn toggle_annotation_overlay(app: &AppHandle) -> tauri::Result<()> {
     if let Some(win) = app.get_webview_window(ANNOTATION_LABEL) {
         if win.is_visible().unwrap_or(false) {
-            return hide_annotation_overlay(app.clone());
+            return hide_annotation_overlay_inner(app);
         }
     }
-    show_annotation_overlay(app.clone())
+    show_annotation_overlay_inner(app)
+}
+
+/// Schedule `work` for the next UI-thread turn *after* the current stack
+/// unwinds. `AppHandle::run_on_main_thread` runs inline when already on the UI
+/// thread, so we must hop off first — otherwise a sync `#[tauri::command]`
+/// from the recorder webview would still build WebView2 inside that invoke
+/// (native abort on Windows).
+fn defer_on_ui(app: AppHandle, work: impl FnOnce(&AppHandle) + Send + 'static) {
+    let _ = std::thread::Builder::new()
+        .name("annotation-ui".into())
+        .spawn(move || {
+            let app2 = app.clone();
+            let _ = app.run_on_main_thread(move || work(&app2));
+        });
 }
 
 /// Full-screen ink overlay while recording. Not SCK-excluded so drawings land
 /// in `screen.mp4` (same idea as the extension page overlay).
+///
+/// IPC entry: returns immediately and creates/shows on a deferred UI tick so
+/// we never nest WebView construction inside the caller's sync invoke.
 #[tauri::command]
 pub fn show_annotation_overlay(app: AppHandle) -> tauri::Result<()> {
+    let epoch = ANNOTATION_SHOW_EPOCH.load(Ordering::SeqCst);
+    defer_on_ui(app, move |app| {
+        if ANNOTATION_SHOW_EPOCH.load(Ordering::SeqCst) != epoch {
+            return;
+        }
+        if let Err(e) = show_annotation_overlay_inner(app) {
+            tracing::warn!(%e, "annotation: show failed");
+        }
+    });
+    Ok(())
+}
+
+fn show_annotation_overlay_inner(app: &AppHandle) -> tauri::Result<()> {
     if let Some(win) = app.get_webview_window(ANNOTATION_LABEL) {
-        tracing::info!("annotation: re-showing existing overlay");
-        position_annotation_on_active_display(&app, &win)?;
+        position_annotation_on_active_display(app, &win)?;
         // `position_…` only re-asserts the policy when the window is already
         // visible, which it is not here — so apply it explicitly before showing.
         let w = win.clone();
@@ -1399,25 +1434,15 @@ pub fn show_annotation_overlay(app: AppHandle) -> tauri::Result<()> {
             apply_overlay_spaces(&w);
         });
         win.show()?;
-        if let (Ok(pos), Ok(size)) = (win.outer_position(), win.outer_size()) {
-            tracing::info!(
-                x = pos.x,
-                y = pos.y,
-                w = size.width,
-                h = size.height,
-                "annotation: shown"
-            );
-        }
         let _ = app.emit(ANNOTATION_VISIBILITY_EVENT, true);
-        arm_annotation_escape(&app);
-        start_annotation_display_follow(&app);
-        raise_recording_chrome(&app);
+        arm_annotation_escape(app);
+        start_annotation_display_follow(app);
+        raise_recording_chrome(app);
         return Ok(());
     }
 
-    tracing::info!("annotation: creating overlay window");
     let win = WebviewWindowBuilder::new(
-        &app,
+        app,
         ANNOTATION_LABEL,
         WebviewUrl::App("annotation.html".into()),
     )
@@ -1435,7 +1460,7 @@ pub fn show_annotation_overlay(app: AppHandle) -> tauri::Result<()> {
     .visible(false)
     .build()?;
 
-    position_annotation_on_active_display(&app, &win)?;
+    position_annotation_on_active_display(app, &win)?;
     // `ns_window()` only exists once `build()` has returned, so the Spaces policy
     // has to be applied here rather than through the builder.
     let w = win.clone();
@@ -1444,21 +1469,12 @@ pub fn show_annotation_overlay(app: AppHandle) -> tauri::Result<()> {
         apply_overlay_spaces(&w);
     });
     win.show()?;
-    if let (Ok(pos), Ok(size)) = (win.outer_position(), win.outer_size()) {
-        tracing::info!(
-            x = pos.x,
-            y = pos.y,
-            w = size.width,
-            h = size.height,
-            "annotation: created and shown"
-        );
-    }
     let _ = app.emit(ANNOTATION_VISIBILITY_EVENT, true);
-    arm_annotation_escape(&app);
-    start_annotation_display_follow(&app);
+    arm_annotation_escape(app);
+    start_annotation_display_follow(app);
     // Ink is fullscreen always-on-top — re-assert HUD / face-cam above it or
     // the highlighter toggle (and camera) are unreachable.
-    raise_recording_chrome(&app);
+    raise_recording_chrome(app);
     Ok(())
 }
 
@@ -1475,6 +1491,12 @@ fn raise_recording_chrome(app: &AppHandle) {
 
 #[tauri::command]
 pub fn hide_annotation_overlay(app: AppHandle) -> tauri::Result<()> {
+    // Cancel any deferred show still in flight (pencil off / stop recording).
+    ANNOTATION_SHOW_EPOCH.fetch_add(1, Ordering::SeqCst);
+    hide_annotation_overlay_inner(&app)
+}
+
+fn hide_annotation_overlay_inner(app: &AppHandle) -> tauri::Result<()> {
     stop_annotation_display_follow();
     // Next show starts following again; the WebView re-reports on mount when a
     // tool is armed. Resetting on hide (not show) means a re-show mid-draw
@@ -1484,7 +1506,7 @@ pub fn hide_annotation_overlay(app: AppHandle) -> tauri::Result<()> {
         set_follows_spaces(&win, false);
         win.hide()?;
         let _ = app.emit(ANNOTATION_VISIBILITY_EVENT, false);
-        disarm_annotation_escape(&app);
+        disarm_annotation_escape(app);
     }
     Ok(())
 }

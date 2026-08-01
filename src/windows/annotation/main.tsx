@@ -1,10 +1,17 @@
 import ReactDOM from "react-dom/client";
-import { installProductionErrorLogging } from "@/lib/log";
+import { SettingsProvider } from "@/lib/settings";
+import { initTheme } from "@/lib/theme";
 import { AnnotationApp } from "./AnnotationApp";
 import "../../styles.css";
 
 document.documentElement.classList.add("annotation-shell");
-installProductionErrorLogging();
+// Same as the editor: apply stored light/dark before paint so the bar matches
+// Capptivo's theme (tokens are already semantic — only the html class was missing).
+initTheme();
 
 // No StrictMode — double-mount would leak listeners / stop getUserMedia.
-ReactDOM.createRoot(document.getElementById("root")!).render(<AnnotationApp />);
+ReactDOM.createRoot(document.getElementById("root")!).render(
+  <SettingsProvider>
+    <AnnotationApp />
+  </SettingsProvider>,
+);

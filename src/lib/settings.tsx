@@ -25,6 +25,7 @@ import {
   resolveTheme,
   storeTheme,
   systemTheme,
+  THEME_STORAGE_KEY,
   type ResolvedTheme,
   type ThemeMode,
 } from "./theme";
@@ -53,6 +54,17 @@ export function SettingsProvider({ children }: { children: ReactNode }) {
     applyTheme(resolved);
     storeTheme(theme);
   }, [theme]);
+
+  // Other Capptivo webviews (annotation overlay, etc.) pick up theme changes
+  // written by the editor — `storage` only fires in *other* documents.
+  useEffect(() => {
+    const onStorage = (e: StorageEvent) => {
+      if (e.key !== THEME_STORAGE_KEY) return;
+      setTheme(getStoredTheme());
+    };
+    window.addEventListener("storage", onStorage);
+    return () => window.removeEventListener("storage", onStorage);
+  }, []);
 
   useEffect(() => {
     if (theme !== "system" || typeof window === "undefined" || !window.matchMedia) return;

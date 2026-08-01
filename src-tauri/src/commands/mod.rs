@@ -5,7 +5,6 @@
 pub mod backgrounds;
 pub mod captions;
 pub mod export;
-pub mod log;
 pub mod project;
 pub mod recording;
 
@@ -24,7 +23,6 @@ macro_rules! command_handlers {
             $crate::commands::recording::request_screen_permission,
             $crate::commands::recording::open_screen_recording_settings,
             $crate::commands::recording::relaunch,
-            $crate::commands::log::log_js,
             $crate::commands::recording::recorder_state,
             $crate::commands::recording::start_recording,
             $crate::commands::recording::pause_recording,

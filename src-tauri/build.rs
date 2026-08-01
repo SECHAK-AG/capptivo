@@ -13,7 +13,6 @@ fn main() {
         "request_screen_permission",
         "open_screen_recording_settings",
         "relaunch",
-        "log_js",
         "recorder_state",
         "start_recording",
         "pause_recording",

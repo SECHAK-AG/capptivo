@@ -30,7 +30,6 @@ import {
 } from "./micCapture";
 import { probeCameraPermission } from "./cameraAccess";
 import { flushCameraCaptureWithTimeout } from "./flushCamera";
-import { logError, logWarn } from "@/lib/log";
 
 export type CaptureMode = CaptureSourceKind | "area" | "device";
 
@@ -454,19 +453,12 @@ export const useRecorderStore = create<RecorderStore>((set, get) => ({
         .showAnnotationOverlay()
         .then(() => {
           if (!get().annotationVisible) {
-            void commands.hideAnnotationOverlay().catch((e) => {
-              logWarn(`hideAnnotationOverlay: ${describeError(e)}`);
-            });
+            void commands.hideAnnotationOverlay().catch(() => undefined);
           }
         })
-        .catch((e) => {
-          logError(`showAnnotationOverlay: ${describeError(e)}`);
-          set({ annotationVisible: false });
-        });
+        .catch(() => undefined);
     } else {
-      void commands.hideAnnotationOverlay().catch((e) => {
-        logWarn(`hideAnnotationOverlay: ${describeError(e)}`);
-      });
+      void commands.hideAnnotationOverlay().catch(() => undefined);
     }
   },
 

@@ -6,7 +6,7 @@ export type ResolvedTheme = "light" | "dark";
 export const THEME_MODES: readonly ThemeMode[] = ["light", "dark", "system"];
 export const DEFAULT_THEME: ThemeMode = "system";
 
-const STORAGE_KEY = "capptivo.theme";
+export const THEME_STORAGE_KEY = "capptivo.theme";
 
 function isThemeMode(value: unknown): value is ThemeMode {
   return value === "light" || value === "dark" || value === "system";
@@ -14,7 +14,7 @@ function isThemeMode(value: unknown): value is ThemeMode {
 
 export function getStoredTheme(): ThemeMode {
   try {
-    const raw = localStorage.getItem(STORAGE_KEY);
+    const raw = localStorage.getItem(THEME_STORAGE_KEY);
     return isThemeMode(raw) ? raw : DEFAULT_THEME;
   } catch {
     return DEFAULT_THEME;
@@ -23,7 +23,7 @@ export function getStoredTheme(): ThemeMode {
 
 export function storeTheme(mode: ThemeMode): void {
   try {
-    localStorage.setItem(STORAGE_KEY, mode);
+    localStorage.setItem(THEME_STORAGE_KEY, mode);
   } catch {
     /* storage may be unavailable (private mode) — preference is best-effort */
   }

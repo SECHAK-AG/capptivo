@@ -86,7 +86,6 @@ fn idle_menu(app: &AppHandle) -> tauri::Result<Menu<tauri::Wry>> {
     let annotate =
         MenuItem::with_id(app, "annotate", "Annotate Screen…", true, None::<&str>)?;
     let open_library = MenuItem::with_id(app, "open_library", "Recordings…", true, None::<&str>)?;
-    let open_logs = MenuItem::with_id(app, "open_logs", "Open Logs…", true, None::<&str>)?;
     let settings = MenuItem::with_id(app, "settings", "Settings…", true, None::<&str>)?;
     let separator = PredefinedMenuItem::separator(app)?;
     let quit = MenuItem::with_id(app, "quit", "Quit Capptivo", true, None::<&str>)?;
@@ -96,7 +95,6 @@ fn idle_menu(app: &AppHandle) -> tauri::Result<Menu<tauri::Wry>> {
             &open_recorder,
             &annotate,
             &open_library,
-            &open_logs,
             &settings,
             &separator,
             &quit,
@@ -118,7 +116,6 @@ fn live_menu(app: &AppHandle, paused: bool) -> tauri::Result<Menu<tauri::Wry>> {
     let open_recorder =
         MenuItem::with_id(app, "open_recorder", "Show Recorder", true, None::<&str>)?;
     let open_library = MenuItem::with_id(app, "open_library", "Recordings…", true, None::<&str>)?;
-    let open_logs = MenuItem::with_id(app, "open_logs", "Open Logs…", true, None::<&str>)?;
     let sep2 = PredefinedMenuItem::separator(app)?;
     let quit = MenuItem::with_id(app, "quit", "Quit Capptivo", true, None::<&str>)?;
     Menu::with_items(
@@ -130,7 +127,6 @@ fn live_menu(app: &AppHandle, paused: bool) -> tauri::Result<Menu<tauri::Wry>> {
             &annotate,
             &open_recorder,
             &open_library,
-            &open_logs,
             &sep2,
             &quit,
         ],
@@ -183,7 +179,6 @@ fn on_menu_event(app: &AppHandle, event: tauri::menu::MenuEvent) {
                 tracing::warn!(%e, "failed to open recordings library");
             }
         }
-        "open_logs" => open_logs_folder(app),
         "settings" => {
             // Settings window is a Phase 5 item; open the popover for now.
             let _ = windows::show_recorder_popover(app);
@@ -216,15 +211,6 @@ fn on_menu_event(app: &AppHandle, event: tauri::menu::MenuEvent) {
             });
         }
         other => tracing::debug!(id = other, "unhandled tray menu item"),
-    }
-}
-
-fn open_logs_folder(app: &AppHandle) {
-    use tauri_plugin_opener::OpenerExt;
-    let dir = crate::production_log_dir();
-    let _ = std::fs::create_dir_all(&dir);
-    if let Err(e) = app.opener().open_path(dir.to_string_lossy(), None::<&str>) {
-        tracing::warn!(%e, path = %dir.display(), "failed to open logs folder");
     }
 }
 
