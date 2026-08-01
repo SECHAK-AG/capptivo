@@ -48,8 +48,6 @@ fn encode_preview(image: &CGImage) -> Option<SourcePreview> {
     }
     let png_base64 = png_base64(image)?;
     Some(SourcePreview {
-        width,
-        height,
         png_base64,
     })
 }

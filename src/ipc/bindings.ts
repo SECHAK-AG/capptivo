@@ -31,6 +31,9 @@ export const commands = {
     invoke<void>("open_screen_recording_settings"),
   relaunch: () => invoke<void>("relaunch"),
   recorderState: () => invoke<RecorderState>("recorder_state"),
+  /** macOS: unminimize / raise a window source during the countdown. */
+  prepareWindowCapture: (sourceId: string) =>
+    invoke<void>("prepare_window_capture", { sourceId }),
   startRecording: (config: RecorderConfig) =>
     invoke<void>("start_recording", { config }),
   pauseRecording: () => invoke<void>("pause_recording"),
@@ -93,12 +96,13 @@ export const commands = {
   setAnnotationDisplayFollow: (follow: boolean) =>
     invoke<void>("set_annotation_display_follow", { follow }),
   openLibrary: () => invoke<void>("open_library"),
-  openEditor: (projectId: string) =>
-    invoke<void>("open_editor", { projectId }),
+  openEditor: (projectId: string) => invoke<void>("open_editor", { projectId }),
   presentWindow: () => invoke<void>("present_window"),
 
   getWhisperModelStatus: () =>
-    invoke<{ exists: boolean; path: string | null }>("get_whisper_model_status"),
+    invoke<{ exists: boolean; path: string | null }>(
+      "get_whisper_model_status",
+    ),
   downloadWhisperModel: () => invoke<string>("download_whisper_model"),
   deleteWhisperModel: () => invoke<void>("delete_whisper_model"),
   generateCaptions: (projectId: string, language?: string) =>
@@ -172,5 +176,6 @@ export const commands = {
   }) => invoke<string | null>("prepare_export_audio", args),
   attachExportAudio: (args: { videoPath: string; audioPath: string }) =>
     invoke<void>("attach_export_audio", args),
-  removeTempFile: (args: { path: string }) => invoke<void>("remove_temp_file", args),
+  removeTempFile: (args: { path: string }) =>
+    invoke<void>("remove_temp_file", args),
 } as const;

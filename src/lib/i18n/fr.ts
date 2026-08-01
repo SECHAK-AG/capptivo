@@ -302,6 +302,8 @@ export const fr: Record<TranslationKey, string> = {
     "Connectez un iPhone ou iPad avec un câble, puis sélectionnez-le.",
   "recorder.error.noArea": "Faites d'abord glisser pour sélectionner une zone.",
   "recorder.error.noSource": "Choisissez d'abord un écran ou une fenêtre.",
+  "recorder.error.captureInterrupted":
+    "La source de capture s'est fermée ou a été déconnectée. Ce qui a été enregistré jusqu'à ce moment a été conservé — choisissez une source et recommencez.",
   "recorder.camera": "Caméra",
   "recorder.camera.off": "Pas de caméra",
   "recorder.camera.grant": "Autoriser la caméra…",

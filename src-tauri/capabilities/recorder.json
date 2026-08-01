@@ -13,6 +13,7 @@
     "allow-open-screen-recording-settings",
     "allow-relaunch",
     "allow-recorder-state",
+    "allow-prepare-window-capture",
     "allow-start-recording",
     "allow-pause-recording",
     "allow-resume-recording",
@@ -41,6 +42,7 @@
     "allow-show-annotation-overlay",
     "allow-hide-annotation-overlay",
     "allow-open-library",
-    "allow-open-editor"
+    "allow-open-editor",
+    "notification:allow-is-permission-granted"
   ]
 }

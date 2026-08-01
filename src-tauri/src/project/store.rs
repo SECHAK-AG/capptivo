@@ -437,6 +437,7 @@ mod tests {
             height: 1080,
             fps: 30,
             error: None,
+            interrupted: false,
         }
     }
 

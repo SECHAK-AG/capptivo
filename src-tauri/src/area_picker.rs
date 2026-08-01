@@ -6,9 +6,9 @@
 use crate::error::{AppError, AppResult};
 use crate::recorder::types::{CaptureAreaSelection, CaptureCrop};
 #[cfg(target_os = "macos")]
-use core_graphics::display::CGDisplay;
+use crate::recorder::backend::picker_sources;
 #[cfg(target_os = "macos")]
-use scap::Target;
+use core_graphics::display::CGDisplay;
 use tauri::{AppHandle, Emitter, Manager, PhysicalPosition, PhysicalSize, WebviewUrl, WebviewWindowBuilder};
 use std::sync::mpsc;
 
@@ -275,14 +275,13 @@ fn resolve_selection(
 #[cfg(target_os = "macos")]
 fn match_display_source(mx: f64, my: f64, mw: f64, mh: f64) -> AppResult<String> {
     let mut best: Option<(u32, f64)> = None;
-    for target in scap::get_all_targets() {
-        let Target::Display(d) = target else { continue };
-        let b = CGDisplay::new(d.id).bounds();
+    for (id, _) in picker_sources::list_displays()? {
+        let b = CGDisplay::new(id).bounds();
         let overlap = rect_overlap(mx, my, mw, mh, b.origin.x, b.origin.y, b.size.width, b.size.height);
         if overlap > 0.0 {
             let prev = best.map(|(_, o)| o).unwrap_or(0.0);
             if overlap > prev {
-                best = Some((d.id, overlap));
+                best = Some((id, overlap));
             }
         }
     }

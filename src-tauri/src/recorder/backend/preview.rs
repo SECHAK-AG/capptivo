@@ -9,12 +9,6 @@ use std::io::Cursor;
 pub const PREVIEW_MAX_WIDTH: u32 = 240;
 
 pub struct SourcePreview {
-    // Source dimensions: the macOS picker reads these for window sources;
-    // Windows gets them from the window rect instead.
-    #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
-    pub width: u32,
-    #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
-    pub height: u32,
     pub png_base64: String,
 }
 
@@ -52,8 +46,6 @@ pub fn encode_bgra(raw: &[u8], width: u32, height: u32, stride: usize) -> Option
     let mut out = Vec::new();
     buf.write_to(&mut Cursor::new(&mut out), ImageFormat::Png).ok()?;
     Some(SourcePreview {
-        width,
-        height,
         png_base64: STANDARD.encode(out),
     })
 }

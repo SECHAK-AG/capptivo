@@ -289,6 +289,8 @@ export const ko: Record<TranslationKey, string> = {
     "케이블로 iPhone 또는 iPad를 연결한 다음 선택하세요.",
   "recorder.error.noArea": "먼저 드래그하여 영역을 선택하세요.",
   "recorder.error.noSource": "먼저 화면 또는 창을 선택하세요.",
+  "recorder.error.captureInterrupted":
+    "캡처 소스가 닫히거나 연결이 끊어졌습니다. 그때까지 녹화된 내용은 저장되었습니다. 소스를 다시 선택한 뒤 녹화를 시작하세요.",
   "recorder.camera": "카메라",
   "recorder.camera.off": "카메라 없음",
   "recorder.camera.grant": "카메라 접근 허용…",

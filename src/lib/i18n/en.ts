@@ -285,6 +285,8 @@ export const en = {
   "recorder.error.noDevice": "Connect an iPhone or iPad with a cable, then pick it.",
   "recorder.error.noArea": "Drag to select a region first.",
   "recorder.error.noSource": "Pick a screen or window first.",
+  "recorder.error.captureInterrupted":
+    "The capture source closed or was disconnected. What was recorded up to that point has been saved — choose a source and record again.",
   "recorder.camera": "Camera",
   "recorder.camera.off": "No camera",
   "recorder.camera.grant": "Grant camera access…",

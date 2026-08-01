@@ -292,6 +292,8 @@ export const ar: Record<TranslationKey, string> = {
   "recorder.error.noDevice": "وصّل iPhone أو iPad بكابل، ثم اخترْه.",
   "recorder.error.noArea": "اسحب أولاً لتحديد منطقة.",
   "recorder.error.noSource": "اختر شاشة أو نافذة أولاً.",
+  "recorder.error.captureInterrupted":
+    "أُغلق مصدر الالتقاط أو انقطع. تم حفظ ما سُجّل حتى تلك اللحظة — اختر مصدراً وابدأ تسجيلاً جديداً.",
   "recorder.camera": "الكاميرا",
   "recorder.camera.off": "بدون كاميرا",
   "recorder.camera.grant": "السماح بالكاميرا…",

@@ -1,7 +1,24 @@
 /** Recorder popover — setup bar, countdown, or in-record HUD. */
 
-import { useCallback, useEffect, useRef, useState, type ComponentPropsWithoutRef, type ReactNode } from "react";
-import { Maximize2, Mic, MicOff, Minus, Pause, Pencil, Play, Square, X } from "lucide-react";
+import {
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+  type ComponentPropsWithoutRef,
+  type ReactNode,
+} from "react";
+import {
+  Maximize2,
+  Mic,
+  MicOff,
+  Minus,
+  Pause,
+  Pencil,
+  Play,
+  Square,
+  X,
+} from "lucide-react";
 import { useI18n } from "@/lib/settings";
 import { cn } from "@/lib/utils";
 import { commands } from "../../ipc/bindings";
@@ -164,7 +181,7 @@ export function RecorderApp() {
   const onRecord = useCallback(() => {
     // Clear a stale error before counting, so the `starting` hand-off above
     // cannot mistake it for this attempt failing.
-    useRecorderStore.setState({ lastError: null });
+    useRecorderStore.setState({ lastError: null, elapsed: 0 });
     setCounting(true);
     // Mic / face-cam come up during the countdown rather than after it.
     void prewarmCapture();
@@ -365,7 +382,11 @@ function RecordingHud({ starting }: { starting: boolean }) {
             paused ? "text-muted-foreground" : "text-primary",
           )}
         >
-          {finalizing ? t("recorder.hud.finalizing") : paused ? t("recorder.hud.paused") : "REC"}
+          {finalizing
+            ? t("recorder.hud.finalizing")
+            : paused
+              ? t("recorder.hud.paused")
+              : "REC"}
         </span>
         <span className="min-w-11 text-sm font-semibold tabular-nums text-foreground">
           {formatElapsed(elapsed)}
@@ -383,7 +404,11 @@ function RecordingHud({ starting }: { starting: boolean }) {
           onClick={() => toggleMicMute()}
           className={micSessionMuted ? "text-muted-foreground" : undefined}
         >
-          {micSessionMuted ? <MicOff className="size-4" /> : <Mic className="size-4" />}
+          {micSessionMuted ? (
+            <MicOff className="size-4" />
+          ) : (
+            <Mic className="size-4" />
+          )}
         </HudIconBtn>
       ) : (
         <HudIconBtn
@@ -403,7 +428,11 @@ function RecordingHud({ starting }: { starting: boolean }) {
         onClick={() => void togglePause()}
         className={paused ? "text-primary" : undefined}
       >
-        {paused ? <Play className="size-4 fill-current" /> : <Pause className="size-4" />}
+        {paused ? (
+          <Play className="size-4 fill-current" />
+        ) : (
+          <Pause className="size-4" />
+        )}
       </HudIconBtn>
 
       <HudIconBtn
@@ -423,7 +452,9 @@ function RecordingHud({ starting }: { starting: boolean }) {
         aria-pressed={annotationVisible}
         onClick={() => setAnnotationVisible(!annotationVisible)}
         className={
-          annotationVisible ? "bg-primary/15 text-primary hover:bg-primary/20" : undefined
+          annotationVisible
+            ? "bg-primary/15 text-primary hover:bg-primary/20"
+            : undefined
         }
       >
         <Pencil className="size-4" />

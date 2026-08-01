@@ -9,7 +9,7 @@ import { create } from "zustand";
 import { emit, listen } from "@tauri-apps/api/event";
 import { translateNow } from "@/lib/i18n";
 import { commands } from "../../ipc/bindings";
-import { onElapsed, onError, onStateChanged } from "../../ipc/events";
+import { onElapsed, onError, onInterrupted, onStateChanged } from "../../ipc/events";
 import type {
   CaptureAreaSelection,
   CaptureDevice,
@@ -213,9 +213,29 @@ export const useRecorderStore = create<RecorderStore>((set, get) => {
     if (!subscribed) {
       subscribed = true;
       ensureMicCaptureListeners();
-      await onStateChanged((state) => set({ state }));
+      await onStateChanged((state) => {
+        set((prev) => {
+          const nextLive =
+            state.status === "recording" ||
+            state.status === "paused" ||
+            state.status === "finalizing";
+          const prevLive =
+            prev.state.status === "recording" ||
+            prev.state.status === "paused" ||
+            prev.state.status === "finalizing";
+          // New take — zero the HUD; `Elapsed` only ticks while the encode loop runs.
+          const elapsed = nextLive && !prevLive ? 0 : prev.elapsed;
+          return { state, elapsed };
+        });
+      });
       await onElapsed((seconds) => set({ elapsed: seconds }));
       await onError((message) => reportError(message));
+      await onInterrupted(() => {
+        const { state } = get();
+        if (state.status !== "recording" && state.status !== "paused") return;
+        reportError(translateNow("recorder.error.captureInterrupted"));
+        void get().stopRecording();
+      });
       // Bubble X button — sync toggle without re-invoking hide.
       void listen("camera://closed", () => {
         set({ cameraEnabled: false });
@@ -264,7 +284,10 @@ export const useRecorderStore = create<RecorderStore>((set, get) => {
 
   async refreshSources(options = {}) {
     const thumbnails = options.thumbnails === true;
-    if (!get().permissions?.canRecord) return;
+    if (!get().permissions?.canRecord) {
+      reportError(translateNow("recorder.error.screenPermission"));
+      return;
+    }
     set({ loadingSources: true });
     try {
       const sources = await commands.listCaptureSources(thumbnails);
@@ -492,8 +515,18 @@ export const useRecorderStore = create<RecorderStore>((set, get) => {
   },
 
   prewarmCapture() {
-    const { micEnabled, micDeviceId, cameraEnabled, cameraDeviceId } = get();
+    const {
+      micEnabled,
+      micDeviceId,
+      cameraEnabled,
+      cameraDeviceId,
+      captureMode,
+      selectedSourceId,
+    } = get();
     prewarmInFlight = (async () => {
+      if (captureMode === "window" && selectedSourceId) {
+        await commands.prepareWindowCapture(selectedSourceId).catch(() => undefined);
+      }
       if (micEnabled && micDeviceId) {
         await prepareMic(micDeviceId).catch(() => undefined);
       }
@@ -563,7 +596,7 @@ export const useRecorderStore = create<RecorderStore>((set, get) => {
       config = { sourceId: selectedSourceId!, ...options, captureMicrophone };
     }
     try {
-      set({ lastError: null });
+      set({ lastError: null, elapsed: 0 });
       // Annotations start closed on every recording — the overlay is opt-in
       // via the HUD toggle. Without this, a toggle left on from the previous
       // recording leaks into the next one (Rust hides the window on stop, but

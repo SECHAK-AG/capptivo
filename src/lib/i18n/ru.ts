@@ -292,6 +292,8 @@ export const ru: Record<TranslationKey, string> = {
     "Подключите iPhone или iPad кабелем, затем выберите его.",
   "recorder.error.noArea": "Сначала выделите область перетаскиванием.",
   "recorder.error.noSource": "Сначала выберите экран или окно.",
+  "recorder.error.captureInterrupted":
+    "Источник захвата закрылся или был отключён. Записанное до этого момента сохранено — выберите источник и начните новую запись.",
   "recorder.camera": "Камера",
   "recorder.camera.off": "Без камеры",
   "recorder.camera.grant": "Разрешить доступ к камере…",

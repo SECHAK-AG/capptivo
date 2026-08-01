@@ -24,6 +24,7 @@ macro_rules! command_handlers {
             $crate::commands::recording::open_screen_recording_settings,
             $crate::commands::recording::relaunch,
             $crate::commands::recording::recorder_state,
+            $crate::commands::recording::prepare_window_capture,
             $crate::commands::recording::start_recording,
             $crate::commands::recording::pause_recording,
             $crate::commands::recording::resume_recording,

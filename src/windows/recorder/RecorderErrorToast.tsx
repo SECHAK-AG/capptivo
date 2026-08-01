@@ -1,16 +1,17 @@
 /**
- * Error banner pinned to the recording bar — centered in the flex column,
- * directly above the pill (or below when the bar is near the top).
+ * Error banner — fixed above the dock so it is never clipped by the recorder
+ * webview's overflow or the compact HUD/countdown layouts.
  */
 
-import { useEffect, useRef, useState, type ReactNode } from "react";
+import { useEffect, type ReactNode } from "react";
 import { X } from "lucide-react";
 import { useI18n } from "@/lib/settings";
 import { cn } from "@/lib/utils";
 import { useRecorderStore } from "./store";
 
-const TOAST_RESERVE_PX = 80;
 const DISMISS_MS = 6000;
+/** Sit above the dock + recorder bar (bar ~56px + margin). */
+const TOAST_BOTTOM_PX = 88;
 
 const TOAST_SURFACE: React.CSSProperties = {
   background: "#dc2626",
@@ -18,39 +19,13 @@ const TOAST_SURFACE: React.CSSProperties = {
   boxShadow: "0 8px 24px rgb(0 0 0 / 0.45)",
 };
 
-/** Wrap the recorder pill; the error banner stacks above/below in normal flow. */
+/** Wrap the recorder pill; error toast is viewport-fixed, not in this flow. */
 export function RecorderBarAnchor({ children }: { children: ReactNode }) {
-  const barRef = useRef<HTMLDivElement>(null);
-  const error = useRecorderStore((s) => s.lastError);
-  const [below, setBelow] = useState(false);
-
-  useEffect(() => {
-    if (!error?.trim()) return;
-
-    const measure = () => {
-      const el = barRef.current;
-      if (!el) return;
-      setBelow(el.getBoundingClientRect().top < TOAST_RESERVE_PX);
-    };
-
-    measure();
-    const ro = new ResizeObserver(measure);
-    if (barRef.current) ro.observe(barRef.current);
-    window.addEventListener("resize", measure);
-    return () => {
-      ro.disconnect();
-      window.removeEventListener("resize", measure);
-    };
-  }, [error]);
-
-  const show = Boolean(error?.trim());
-
   return (
-    <div ref={barRef} className="flex w-fit flex-col items-center">
-      {show && !below ? <RecorderErrorToast className="mb-2" /> : null}
-      {children}
-      {show && below ? <RecorderErrorToast className="mt-2" /> : null}
-    </div>
+    <>
+      <RecorderErrorToast />
+      <div className="flex w-fit flex-col items-center">{children}</div>
+    </>
   );
 }
 
@@ -70,13 +45,13 @@ export function RecorderErrorToast({ className }: { className?: string }) {
   return (
     <div
       role="alert"
-      style={TOAST_SURFACE}
+      style={{ ...TOAST_SURFACE, bottom: TOAST_BOTTOM_PX }}
       className={cn(
-        "pointer-events-auto z-50 flex w-max max-w-[min(420px,calc(100vw-2rem))] items-start gap-2 rounded-lg px-3 py-2 text-xs font-medium leading-snug",
+        "pointer-events-auto fixed left-1/2 z-[9999] flex w-[min(420px,calc(100vw-2rem))] -translate-x-1/2 items-start gap-2 rounded-lg px-3 py-2 text-xs font-medium leading-snug",
         className,
       )}
     >
-      <p className="min-w-0 flex-1">{error}</p>
+      <p className="min-w-0 flex-1 break-words">{error}</p>
       <button
         type="button"
         aria-label={t("recorder.error.dismiss")}

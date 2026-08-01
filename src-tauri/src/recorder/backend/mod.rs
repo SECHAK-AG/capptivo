@@ -29,7 +29,13 @@ pub use avf_device::{AvfDeviceBackend, DEVICE_ID_PREFIX};
 mod preview;
 
 #[cfg(all(target_os = "macos", feature = "scap-capture"))]
-mod picker_sources;
+pub(crate) mod picker_sources;
+#[cfg(all(target_os = "macos", feature = "scap-capture"))]
+mod sck_window;
+#[cfg(all(target_os = "macos", feature = "scap-capture"))]
+pub(crate) mod window_prepare;
+#[cfg(all(target_os = "macos", feature = "scap-capture"))]
+pub(crate) use window_prepare::prepare_for_capture;
 #[cfg(all(target_os = "macos", feature = "scap-capture"))]
 mod scap_backend;
 #[cfg(all(target_os = "macos", feature = "scap-capture"))]

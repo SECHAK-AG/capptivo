@@ -1,13 +1,16 @@
-//! ScreenCaptureKit capture via the `scap` crate. **This is the only file that
-//! drives video through `scap`** (TAURI_DESKTOP_MIGRATION.md §15). System audio
-//! is a companion SCStream in [`super::system_audio`] — scap 0.0.8 has no
-//! `captures_audio`.
+//! Display capture via the `scap` crate; window capture via native SCK
+//! (`sck_window`). **scap is only used for `display:` sources**
+//! (TAURI_DESKTOP_MIGRATION.md §15). scap's `Target::Window` looks up windows
+//! through `NSApp windowWithWindowNumber`, which is null for other apps and
+//! aborts the process — window video uses `DesktopIndependentWindow` instead.
+//! System audio is a companion SCStream in [`super::system_audio`].
 //!
 //! Threading: the `scap::Capturer` is not `Send`, so it is *built and driven
 //! entirely inside the producer thread*. `start()` hands the thread a plain
 //! `source_id` string and receives the resolved output size back over a
 //! rendezvous channel before returning the [`CaptureHandle`].
 
+use super::sck_window;
 use super::system_audio::SystemAudioTap;
 use super::picker_sources;
 use super::source_preview;
@@ -58,29 +61,23 @@ impl CaptureBackend for ScapBackend {
         let main_id = CGDisplay::main().id;
         let mut sources = Vec::new();
 
-        for target in scap::get_all_targets() {
-            if let Target::Display(display) = target {
-                let cg = CGDisplay::new(display.id);
-                let bounds = cg.bounds();
-                let preview = if include_thumbnails {
-                    source_preview::display_thumbnail(display.id)
-                } else {
-                    None
-                };
-                sources.push(CaptureSource {
-                    id: format!("display:{}", display.id),
-                    kind: CaptureSourceKind::Display,
-                    title: if display.title.is_empty() {
-                        format!("Display {}", display.id)
-                    } else {
-                        display.title.clone()
-                    },
-                    width: bounds.size.width as u32,
-                    height: bounds.size.height as u32,
-                    is_primary: display.id == main_id,
-                    thumbnail: preview.map(|p| p.png_base64),
-                });
-            }
+        for (id, title) in picker_sources::list_displays()? {
+            let cg = CGDisplay::new(id);
+            let bounds = cg.bounds();
+            let preview = if include_thumbnails {
+                source_preview::display_thumbnail(id)
+            } else {
+                None
+            };
+            sources.push(CaptureSource {
+                id: format!("display:{id}"),
+                kind: CaptureSourceKind::Display,
+                title,
+                width: bounds.size.width as u32,
+                height: bounds.size.height as u32,
+                is_primary: id == main_id,
+                thumbnail: preview.map(|p| p.png_base64),
+            });
         }
 
         for window in picker_sources::recordable_windows()? {
@@ -89,12 +86,22 @@ impl CaptureBackend for ScapBackend {
             } else {
                 None
             };
+            // Thumbnail picker: drop off-screen windows with no live preview (minimized
+            // / hidden). On-screen windows stay even without a thumb; boot-time lists
+            // skip this filter (`include_thumbnails: false`).
+            if include_thumbnails
+                && preview.is_none()
+                && !picker_sources::is_in_on_screen_set(window.id)?
+            {
+                continue;
+            }
+            let (width, height) = picker_sources::window_pixel_size(window.id).unwrap_or((0, 0));
             sources.push(CaptureSource {
                 id: format!("window:{}", window.id),
                 kind: CaptureSourceKind::Window,
                 title: window.title,
-                width: preview.as_ref().map(|p| p.width).unwrap_or(0),
-                height: preview.as_ref().map(|p| p.height).unwrap_or(0),
+                width,
+                height,
                 is_primary: false,
                 thumbnail: preview.map(|p| p.png_base64),
             });
@@ -114,10 +121,15 @@ impl CaptureBackend for ScapBackend {
         let fps = config.fps.clamp(1, 120);
         let source_id = config.source_id.clone();
         let crop = config.crop;
+        let is_window = source_id.starts_with("window:");
         // Resolve HUD/camera CGWindowIDs on this thread (needs AppHandle) before
         // the producer moves — never match by title (library used to setTitle
         // "Capptivo" and collide with the HUD, blacking fullscreen takes).
-        let exclude_ids = windows::overlay_cgwindow_ids(&self.app);
+        let exclude_ids = if is_window {
+            Vec::new()
+        } else {
+            windows::overlay_cgwindow_ids(&self.app)
+        };
 
         let (tx, rx) = crossbeam_channel::bounded::<RawFrame>(CAPTURE_CHANNEL_CAP);
         let (meta_tx, meta_rx) =
@@ -127,11 +139,35 @@ impl CaptureBackend for ScapBackend {
 
         let producer_stop = stop_flag.clone();
         let producer_dropped = dropped.clone();
+        let producer_source = source_id.clone();
         std::thread::Builder::new()
-            .name("scap-capture".into())
+            .name(if is_window {
+                "sck-window-capture".into()
+            } else {
+                "scap-capture".into()
+            })
             .spawn(move || {
-                let target = match resolve_target(&source_id) {
-                    Ok(t) => t,
+                if is_window {
+                    let window_id = match parse_source_id(&producer_source) {
+                        Ok(id) => id,
+                        Err(e) => {
+                            let _ = meta_tx.send(Err(e));
+                            return;
+                        }
+                    };
+                    sck_window::run_window_capture(
+                        window_id,
+                        fps,
+                        producer_stop,
+                        producer_dropped,
+                        tx,
+                        meta_tx,
+                    );
+                    return;
+                }
+
+                let target = match resolve_display_target(&producer_source) {
+                    Ok(target) => target,
                     Err(e) => {
                         let _ = meta_tx.send(Err(e));
                         return;
@@ -150,8 +186,6 @@ impl CaptureBackend for ScapBackend {
 
                 let options = Options {
                     fps,
-                    // Never bake the OS cursor into frames — Capptivo redraws a
-                    // customizable cursor in the editor from `cursor.json`.
                     show_cursor: false,
                     output_type: FrameType::BGRAFrame,
                     target: Some(target),
@@ -160,25 +194,15 @@ impl CaptureBackend for ScapBackend {
                     ..Default::default()
                 };
 
-                let mut capturer = match Capturer::build(options) {
-                    Ok(c) => c,
+                let epoch = Instant::now();
+                let epoch_host_ns = host_clock_ns();
+                let (mut capturer, [w, h]) = match start_scap_capturer(options) {
+                    Ok(pair) => pair,
                     Err(e) => {
-                        let _ = meta_tx.send(Err(AppError::Other(format!(
-                            "failed to build capturer: {e}"
-                        ))));
+                        let _ = meta_tx.send(Err(e));
                         return;
                     }
                 };
-                // Anchor SCK's presentation clock to an `Instant` *before* any
-                // frame can be displayed: `display_time` minus this anchor puts
-                // every frame on the same time axis as the cursor sampler (the
-                // handle's `epoch`). Rebasing to the first frame instead made
-                // the cursor track lead the video by the whole warm-up gap.
-                let epoch = Instant::now();
-                let epoch_host_ns = host_clock_ns();
-                capturer.start_capture();
-
-                let [w, h] = capturer.get_output_frame_size();
                 if meta_tx.send(Ok(([w, h], epoch))).is_err() {
                     capturer.stop_capture();
                     return;
@@ -207,9 +231,22 @@ impl CaptureBackend for ScapBackend {
             })
             .map_err(|e| AppError::Other(format!("failed to spawn capture thread: {e}")))?;
 
-        let ([width, height], epoch) = meta_rx
-            .recv()
-            .map_err(|_| AppError::Other("capture thread exited before start".into()))??;
+        let ([width, height], epoch) = if is_window {
+            match meta_rx.recv_timeout(sck_window::FIRST_FRAME_TIMEOUT) {
+                Ok(Ok(meta)) => meta,
+                Ok(Err(e)) => return Err(e),
+                Err(_) => {
+                    stop_flag.store(true, Ordering::Relaxed);
+                    return Err(AppError::Other(
+                        "window capture timed out waiting for the first frame".into(),
+                    ));
+                }
+            }
+        } else {
+            meta_rx
+                .recv()
+                .map_err(|_| AppError::Other("capture thread exited before start".into()))??
+        };
 
         // Optional system-audio companion stream (same source id).
         let audio_tap = if config.capture_system_audio {
@@ -293,22 +330,52 @@ impl CaptureBackend for ScapBackend {
     }
 }
 
-fn resolve_target(source_id: &str) -> AppResult<Target> {
+fn start_scap_capturer(options: Options) -> AppResult<(Capturer, [u32; 2])> {
+    let mut capturer = Capturer::build(options)
+        .map_err(|e| AppError::Other(format!("failed to build capturer: {e}")))?;
+    capturer.start_capture();
+    let size = capturer.get_output_frame_size();
+    Ok((capturer, size))
+}
+
+fn parse_source_id(source_id: &str) -> AppResult<u32> {
     let (kind, id_str) = source_id
         .split_once(':')
         .ok_or_else(|| AppError::InvalidSource(source_id.to_string()))?;
-    let id: u32 = id_str
+    if kind != "window" {
+        return Err(AppError::InvalidSource(source_id.to_string()));
+    }
+    id_str
+        .parse()
+        .map_err(|_| AppError::InvalidSource(source_id.to_string()))
+}
+
+fn resolve_display_target(source_id: &str) -> AppResult<Target> {
+    let (kind, id_str) = source_id
+        .split_once(':')
+        .ok_or_else(|| AppError::InvalidSource(source_id.to_string()))?;
+    if kind != "display" {
+        return Err(AppError::InvalidSource(source_id.to_string()));
+    }
+    let display_id: u32 = id_str
         .parse()
         .map_err(|_| AppError::InvalidSource(source_id.to_string()))?;
-
-    for target in scap::get_all_targets() {
-        match (&target, kind) {
-            (Target::Display(d), "display") if d.id == id => return Ok(target),
-            (Target::Window(w), "window") if w.id == id => return Ok(target),
-            _ => {}
+    for target in safe_scap_targets()? {
+        if let Target::Display(d) = target {
+            if d.id == display_id {
+                return Ok(Target::Display(d));
+            }
         }
     }
-    Err(AppError::InvalidSource(source_id.to_string()))
+    Err(AppError::InvalidSource(format!("display:{display_id}")))
+}
+
+/// scap's `get_all_targets` panics when Screen Recording TCC is denied.
+fn safe_scap_targets() -> AppResult<Vec<Target>> {
+    match std::panic::catch_unwind(scap::get_all_targets) {
+        Ok(targets) => Ok(targets),
+        Err(_) => Err(AppError::PermissionDenied),
+    }
 }
 
 /// Capptivo chrome (HUD / face-cam) out of `screen.mp4`, keyed by CGWindowID —
@@ -317,7 +384,8 @@ fn overlay_exclude_targets(exclude_ids: &[u32]) -> Option<Vec<Target>> {
     if exclude_ids.is_empty() {
         return None;
     }
-    let excluded: Vec<Target> = scap::get_all_targets()
+    let excluded: Vec<Target> = safe_scap_targets()
+        .unwrap_or_default()
         .into_iter()
         .filter(|t| match t {
             Target::Window(w) => exclude_ids.contains(&w.id),

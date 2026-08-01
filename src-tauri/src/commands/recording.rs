@@ -82,6 +82,21 @@ pub fn recorder_state(state: State<AppState>) -> RecorderState {
 /// empty no-op on macOS (`windows.rs`) and its Windows arm is already invoked
 /// off-main by [`stop_recording`], which is an `async fn`; the `emit_*` calls
 /// are Tauri events, which are thread-safe by construction.
+/// `(async)` — raises/unminimizes a window source during the countdown so the
+/// user sees what will be recorded before capture starts.
+#[tauri::command(async)]
+pub fn prepare_window_capture(source_id: String) -> AppResult<()> {
+    #[cfg(all(target_os = "macos", feature = "scap-capture"))]
+    {
+        if let Some(window_id) = crate::recorder::backend::picker_sources::parse_window_id(&source_id)
+        {
+            return crate::recorder::backend::prepare_for_capture(window_id);
+        }
+    }
+    let _ = source_id;
+    Ok(())
+}
+
 #[tauri::command(async)]
 pub fn start_recording(
     app: AppHandle,
@@ -91,6 +106,8 @@ pub fn start_recording(
     if state.current_project.lock().is_some() {
         return Err(AppError::Busy("recording".into()));
     }
+
+    prepare_window_capture(config.source_id.clone())?;
 
     let (id, dir) = state.store.create()?;
     state.store.write_recording_stub(&id, &config)?;
@@ -335,6 +352,7 @@ pub async fn stop_recording(app: AppHandle, state: State<'_, AppState>) -> AppRe
     let _ = state.mic_sink.lock().take();
     let config = current.config;
 
+    let _ = windows::restore_recorder_setup_layout(&app);
     let _ = windows::hide_recorder(app.clone());
     let _ = windows::hide_annotation_overlay(app.clone());
     let _ = windows::dismiss_camera_preview(app.clone());
@@ -360,12 +378,6 @@ pub async fn stop_recording(app: AppHandle, state: State<'_, AppState>) -> AppRe
             "recording encode failed; partial take kept on disk"
         );
         return Err(e);
-    }
-
-    // Capture is stopped — safe to show the editor. Mic mux / progressive remux
-    // below can still take a moment; the editor loads and waits on finalized.
-    if let Err(e) = windows::open_editor_window(&app, &project_id) {
-        tracing::warn!(%e, "failed to open editor window");
     }
 
     let mic_path = state.store.project_dir(&project_id)?.join("mic.webm");
@@ -395,6 +407,29 @@ pub async fn stop_recording(app: AppHandle, state: State<'_, AppState>) -> AppRe
     .map_err(|e| AppError::Other(format!("finalize task failed: {e}")))?
     {
         tracing::warn!(%e, "failed to finalize screen.mp4 to a progressive MP4");
+    }
+
+    let screen_bytes = std::fs::metadata(&artifacts.screen_path)
+        .ok()
+        .map(|m| m.len());
+    if !take_is_usable(artifacts.stats.frames_encoded, screen_bytes) {
+        tracing::warn!(
+            project = %project_id,
+            frames = artifacts.stats.frames_encoded,
+            bytes = ?screen_bytes,
+            interrupted = artifacts.interrupted,
+            "rejecting unusable take"
+        );
+        return Err(AppError::Other(
+            "Nothing was recorded. Choose your source again and start a new recording.".into(),
+        ));
+    }
+
+    // Capture is stopped and the take is real — safe to show the editor. Mic mux /
+    // progressive remux above can still take a moment; the editor loads and waits
+    // on finalized.
+    if let Err(e) = windows::open_editor_window(&app, &project_id) {
+        tracing::warn!(%e, "failed to open editor window");
     }
 
     let project = store.finalize(&project_id, &config, &artifacts)?;
@@ -451,4 +486,40 @@ pub fn show_area_frame_guide(
 #[tauri::command]
 pub fn hide_area_frame_guide(app: AppHandle) {
     crate::area_picker::hide_area_frame_guide(&app);
+}
+
+/// Minimum `screen.mp4` size for a take to be considered real.
+const MIN_SCREEN_BYTES: u64 = 1024;
+
+/// Whether a stopped take has enough encoded content to open in the editor.
+fn take_is_usable(frames_encoded: u64, screen_bytes: Option<u64>) -> bool {
+    frames_encoded > 0 && screen_bytes.is_some_and(|b| b >= MIN_SCREEN_BYTES)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::take_is_usable;
+
+    #[test]
+    fn take_is_usable_rejects_zero_frames() {
+        assert!(!take_is_usable(0, Some(5_000)));
+        assert!(!take_is_usable(0, None));
+    }
+
+    #[test]
+    fn take_is_usable_rejects_tiny_file() {
+        assert!(!take_is_usable(30, Some(200)));
+        assert!(!take_is_usable(1, Some(super::MIN_SCREEN_BYTES - 1)));
+    }
+
+    #[test]
+    fn take_is_usable_accepts_normal_take() {
+        assert!(take_is_usable(900, Some(50_000)));
+    }
+
+    #[test]
+    fn take_is_usable_accepts_short_real_clip() {
+        // A 1-second 30fps clip with a few KB of muxed data must not be rejected.
+        assert!(take_is_usable(30, Some(4_096)));
+    }
 }

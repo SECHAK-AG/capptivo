@@ -424,6 +424,12 @@ fn set_follows_spaces(win: &tauri::WebviewWindow, follows: bool) {
                 "overlay: failed to set visible on all workspaces"
             );
         }
+        if follows {
+            // `CanJoinAllSpaces` (all the above sets) skips Spaces owned by
+            // fullscreen apps — a 3-finger swipe onto one left the bar behind.
+            // Add `FullScreenAuxiliary`, same policy the ink overlay uses.
+            apply_overlay_spaces(&win);
+        }
     });
     if let Err(e) = queued {
         tracing::warn!(%e, follows, "overlay: could not reach the AppKit main thread");
@@ -825,6 +831,37 @@ pub fn hide_recorder(app: AppHandle) -> tauri::Result<()> {
     Ok(())
 }
 
+/// True while countdown / record / pause / finalize is in flight.
+fn recorder_capture_active(app: &AppHandle) -> bool {
+    app.try_state::<crate::state::AppState>()
+        .map(|s| s.recorder.state().is_active())
+        .unwrap_or(false)
+}
+
+/// The webview returns to the setup toolbar when capture is idle. Reset native
+/// geometry so the next show does not reopen at HUD size (420×56) and clip the bar.
+pub fn restore_recorder_setup_layout(app: &AppHandle) -> tauri::Result<()> {
+    if recorder_capture_active(app) {
+        return Ok(());
+    }
+    {
+        let mut g = geometry();
+        g.layout = RecorderLayout::Setup;
+        g.menu_height = 0.0;
+        g.menu_side = MenuSide::Top;
+        *BAR_HITBOX.lock().unwrap_or_else(|e| e.into_inner()) = None;
+    }
+    let Some(win) = app.get_webview_window(RECORDER_LABEL) else {
+        return Ok(());
+    };
+    let _ = win.set_min_size(None::<tauri::LogicalSize<f64>>);
+    let _ = win.set_max_size(None::<tauri::LogicalSize<f64>>);
+    apply_setup_overlay(app, &win)?;
+    pin_to_all_spaces_if_shown(&win);
+    ensure_setup_click_through(app.clone());
+    Ok(())
+}
+
 /// Resize the recorder window: `setup` | `alert` | `hud` | `hud-mini` |
 /// `countdown`. Setup/alert cover the monitor work area so the pill can
 /// CSS-drag and popovers can flip inside the window — never a per-drag resize.
@@ -1106,19 +1143,23 @@ fn apply_centered_recorder_layout(
 pub fn show_recorder_popover(app: &AppHandle) -> tauri::Result<()> {
     if let Some(win) = app.get_webview_window(RECORDER_LABEL) {
         if !win.is_visible().unwrap_or(false) {
-            let layout = {
-                let mut g = geometry();
-                g.menu_height = 0.0;
-                g.layout
-            };
-            if layout == RecorderLayout::Countdown {
-                let size = layout.size();
-                apply_centered_recorder_layout(app, &win, size.width, size.height)?;
-            } else if layout.is_setup_bar() {
-                apply_setup_overlay(app, &win)?;
+            if recorder_capture_active(app) {
+                let layout = {
+                    let mut g = geometry();
+                    g.menu_height = 0.0;
+                    g.layout
+                };
+                if layout == RecorderLayout::Countdown {
+                    let size = layout.size();
+                    apply_centered_recorder_layout(app, &win, size.width, size.height)?;
+                } else if layout.is_setup_bar() {
+                    apply_setup_overlay(app, &win)?;
+                } else {
+                    let size = layout.size();
+                    apply_docked_recorder_size(app, &win, size.width, size.height)?;
+                }
             } else {
-                let size = layout.size();
-                apply_docked_recorder_size(app, &win, size.width, size.height)?;
+                restore_recorder_setup_layout(app)?;
             }
         }
         set_follows_spaces(&win, true);
@@ -1162,11 +1203,18 @@ fn create_recorder_popover(app: &AppHandle) -> tauri::Result<()> {
         // other window) takes key status, macOS otherwise swallows the next
         // HUD click just to refocus — the "click twice to toggle" feel.
         .accept_first_mouse(true)
-        .visible(true)
+        // Built hidden, shown only after the Spaces pin: macOS bakes a
+        // window's Space eligibility at its *first* orderFront, so a
+        // `.visible(true)` build (default collection behavior) left the bar
+        // glued to one Space no matter what was set afterwards. The
+        // annotation overlay always used this hidden→pin→show sequence and
+        // is the one overlay that followed Spaces correctly.
+        .visible(false)
         .position(x, y)
         .build()?;
     apply_setup_overlay(app, &win)?;
     set_follows_spaces(&win, true);
+    win.show()?;
     win.set_focus()?;
     ensure_setup_click_through(app.clone());
     Ok(())
@@ -1214,11 +1262,14 @@ pub fn show_camera_preview(app: AppHandle, device_id: String) -> tauri::Result<(
         // Exclude via ScreenCaptureKit `excluded_targets` — content_protected
         // blacks the bubble on some macOS versions once capture starts.
         .content_protected(false)
-        .visible(true)
+        // Hidden→pin→show, same as the recorder bar: the first orderFront
+        // bakes Space eligibility (see create_recorder_popover).
+        .visible(false)
         .position(x, y)
         .build()?;
     let _ = win.set_content_protected(false);
     set_follows_spaces(&win, true);
+    win.show()?;
     // Bubble opened mid-recording: apply the Windows capture opt-out now
     // (recordings started later re-apply it to all overlay chrome).
     if recording_active(&app) {

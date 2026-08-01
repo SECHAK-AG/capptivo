@@ -165,6 +165,8 @@ pub enum RecorderEvent {
     #[allow(dead_code)]
     Level { mic_db: f32 },
     Error { message: String, fatal: bool },
+    /// Capture producer vanished (window closed, display unplugged, etc.).
+    Interrupted { frames_encoded: u64 },
 }
 
 impl RecorderEvent {
@@ -175,6 +177,7 @@ impl RecorderEvent {
             RecorderEvent::Elapsed { .. } => "recorder://elapsed",
             RecorderEvent::Level { .. } => "recorder://level",
             RecorderEvent::Error { .. } => "recorder://error",
+            RecorderEvent::Interrupted { .. } => "recorder://interrupted",
         }
     }
 }

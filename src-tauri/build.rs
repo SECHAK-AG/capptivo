@@ -14,6 +14,7 @@ fn main() {
         "open_screen_recording_settings",
         "relaunch",
         "recorder_state",
+        "prepare_window_capture",
         "start_recording",
         "pause_recording",
         "resume_recording",

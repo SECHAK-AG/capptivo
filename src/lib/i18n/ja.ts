@@ -289,6 +289,8 @@ export const ja: Record<TranslationKey, string> = {
     "ケーブルで iPhone または iPad を接続し、選択してください。",
   "recorder.error.noArea": "先にドラッグして範囲を選択してください。",
   "recorder.error.noSource": "先に画面またはウィンドウを選択してください。",
+  "recorder.error.captureInterrupted":
+    "キャプチャ元が閉じられたか切断されました。それまでに録画した内容は保存されています。ソースを選び直して、もう一度録画してください。",
   "recorder.camera": "カメラ",
   "recorder.camera.off": "カメラなし",
   "recorder.camera.grant": "カメラへのアクセスを許可…",

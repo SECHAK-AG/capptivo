@@ -97,22 +97,6 @@ pub fn run() {
             tray::build(&handle)?;
             register_global_hotkey(&handle);
 
-            // Launch straight into the recorder — clicking the app means the
-            // user wants to record, not hunt the tray icon first.
-            if let Err(e) = windows::show_recorder_popover(&handle) {
-                tracing::warn!(%e, "failed to open recorder on launch");
-            }
-
-            // Warm the H.264 encoder probe off the critical path.
-            //
-            // `hw_encoder::pick` is `OnceLock`-cached, but filling it spawns an
-            // FFmpeg process that encodes two synthetic frames — ~145 ms. Left
-            // lazy, that cost lands on the user's *first* recording, inside
-            // `recorder.start()`, between the countdown ending and capture being
-            // live. Doing it here moves it into idle startup time; every later
-            // `pick()` is then a cache read. Best-effort on a detached thread:
-            // it must not delay launch, and on failure `pick()` simply probes
-            // lazily as before.
             std::thread::Builder::new()
                 .name("encoder-probe-warm".into())
                 .spawn(|| {
@@ -137,19 +121,26 @@ pub fn run() {
         .invoke_handler(crate::command_handlers!())
         .build(tauri::generate_context!())
         .expect("error while building Capptivo Desktop")
-        .run(|app, event| {
+        .run(|app, event| match event {
+            // Launch straight into the recorder — clicking the app means the
+            // user wants to record, not hunt the tray icon first. Deferred to
+            // `Ready` (event loop live, Accessory policy applied) so the
+            // window's first orderFront happens in a settled app — see the
+            // comment in `setup`.
+            tauri::RunEvent::Ready => {
+                if let Err(e) = windows::show_recorder_popover(app) {
+                    tracing::warn!(%e, "failed to open recorder on launch");
+                }
+            }
             // Dock / Finder reopen (macOS): show the recorder rather than
-            // silently sitting in the menubar. No-op on other platforms.
+            // silently sitting in the menubar.
             #[cfg(target_os = "macos")]
-            if let tauri::RunEvent::Reopen { .. } = event {
+            tauri::RunEvent::Reopen { .. } => {
                 if let Err(e) = windows::show_recorder_popover(app) {
                     tracing::warn!(%e, "failed to open recorder on reopen");
                 }
             }
-            #[cfg(not(target_os = "macos"))]
-            {
-                let _ = (app, event);
-            }
+            _ => {}
         });
 }
 

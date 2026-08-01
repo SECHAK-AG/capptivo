@@ -280,6 +280,8 @@ export const zh: Record<TranslationKey, string> = {
   "recorder.error.noDevice": "用线连接 iPhone 或 iPad，然后选择它。",
   "recorder.error.noArea": "请先拖动以选择区域。",
   "recorder.error.noSource": "请先选择显示器或窗口。",
+  "recorder.error.captureInterrupted":
+    "捕获源已关闭或断开连接。此前录制的内容已保存 — 请重新选择源并再次录制。",
   "recorder.camera": "摄像头",
   "recorder.camera.off": "无摄像头",
   "recorder.camera.grant": "授予摄像头权限…",

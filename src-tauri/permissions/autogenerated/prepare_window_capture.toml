@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-prepare-window-capture"
+description = "Enables the prepare_window_capture command without any pre-configured scope."
+commands.allow = ["prepare_window_capture"]
+
+[[permission]]
+identifier = "deny-prepare-window-capture"
+description = "Denies the prepare_window_capture command without any pre-configured scope."
+commands.deny = ["prepare_window_capture"]

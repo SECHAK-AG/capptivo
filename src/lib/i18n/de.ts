@@ -294,6 +294,8 @@ export const de: Record<TranslationKey, string> = {
   "recorder.error.noArea": "Zuerst einen Bereich durch Ziehen auswählen.",
   "recorder.error.noSource":
     "Zuerst einen Bildschirm oder ein Fenster auswählen.",
+  "recorder.error.captureInterrupted":
+    "Die Aufnahmequelle wurde geschlossen oder getrennt. Bis zu diesem Zeitpunkt Aufgenommenes wurde gespeichert — wähle eine Quelle und starte eine neue Aufnahme.",
   "recorder.camera": "Kamera",
   "recorder.camera.off": "Keine Kamera",
   "recorder.camera.grant": "Kamerazugriff erlauben…",

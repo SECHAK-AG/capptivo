@@ -38,6 +38,8 @@ pub struct RecordingArtifacts {
     pub fps: u32,
     /// Set when the encode loop hit an error but still salvaged a partial take.
     pub error: Option<AppError>,
+    /// Capture ended because the producer disconnected before the user stopped.
+    pub interrupted: bool,
 }
 
 struct ActiveRecording {
@@ -163,6 +165,7 @@ impl RecorderController {
             project_dir: project_dir.to_path_buf(),
         });
         self.set_state(RecorderState::Recording);
+        (self.emit)(RecorderEvent::Elapsed { seconds: 0.0 });
         Ok(())
     }
 
@@ -208,6 +211,11 @@ impl RecorderController {
                         message,
                         fatal: true,
                     });
+                } else if artifacts.interrupted {
+                    // `Interrupted` + `StateChanged(Idle)` were emitted from the
+                    // encode thread at detection time; re-assert idle here in
+                    // case the frontend missed the event.
+                    self.set_state(RecorderState::Idle);
                 } else {
                     self.set_state(RecorderState::Idle);
                 }
@@ -288,6 +296,7 @@ fn spawn_encode_loop(
             let mut hud_pause_mark: Option<Instant> = None;
             let mut hud_paused_accum = Duration::ZERO;
             let mut encode_error: Option<AppError> = None;
+            let mut interrupted = false;
 
             loop {
                 if encode_error.is_none() {
@@ -390,7 +399,17 @@ fn spawn_encode_loop(
                 // until the queue drains (that extended capture past Stop and
                 // could encode post-stop screen content). Drain happens below
                 // after `capture.stop()`.
-                if stop_flag.load(Ordering::Relaxed) || video_done {
+                if video_done && !stop_flag.load(Ordering::Relaxed) {
+                    interrupted = true;
+                    emit(RecorderEvent::Interrupted {
+                        frames_encoded,
+                    });
+                    emit(RecorderEvent::StateChanged {
+                        state: RecorderState::Idle,
+                    });
+                    break;
+                }
+                if stop_flag.load(Ordering::Relaxed) {
                     break;
                 }
             }
@@ -496,6 +515,7 @@ fn spawn_encode_loop(
                 height,
                 fps,
                 error: encode_error,
+                interrupted,
             })
         })
         .unwrap_or_else(|_| {
