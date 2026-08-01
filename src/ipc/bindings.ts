@@ -94,6 +94,10 @@ export const commands = {
     invoke<void>("open_editor", { projectId }),
   presentWindow: () => invoke<void>("present_window"),
 
+  /** Write a line into the production log file (Rust + JS share one file). */
+  logJs: (level: "error" | "warn" | "info", message: string) =>
+    invoke<void>("log_js", { level, message }),
+
   getWhisperModelStatus: () =>
     invoke<{ exists: boolean; path: string | null }>("get_whisper_model_status"),
   downloadWhisperModel: () => invoke<string>("download_whisper_model"),

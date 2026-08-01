@@ -1,12 +1,14 @@
 import React from "react";
 import ReactDOM from "react-dom/client";
 import { setCursorDebugOverlay } from "@/engine";
+import { installProductionErrorLogging } from "@/lib/log";
 import { SettingsProvider } from "@/lib/settings";
 import { initTheme } from "@/lib/theme";
 import { EditorApp } from "./EditorApp";
 import "../../styles.css";
 
 document.documentElement.classList.add("editor-shell");
+installProductionErrorLogging();
 // Apply the stored theme to <html> before first paint to avoid a theme flash.
 initTheme();
 

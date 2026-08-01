@@ -1389,6 +1389,7 @@ pub fn toggle_annotation_overlay(app: &AppHandle) -> tauri::Result<()> {
 #[tauri::command]
 pub fn show_annotation_overlay(app: AppHandle) -> tauri::Result<()> {
     if let Some(win) = app.get_webview_window(ANNOTATION_LABEL) {
+        tracing::info!("annotation: re-showing existing overlay");
         position_annotation_on_active_display(&app, &win)?;
         // `position_…` only re-asserts the policy when the window is already
         // visible, which it is not here — so apply it explicitly before showing.
@@ -1398,6 +1399,15 @@ pub fn show_annotation_overlay(app: AppHandle) -> tauri::Result<()> {
             apply_overlay_spaces(&w);
         });
         win.show()?;
+        if let (Ok(pos), Ok(size)) = (win.outer_position(), win.outer_size()) {
+            tracing::info!(
+                x = pos.x,
+                y = pos.y,
+                w = size.width,
+                h = size.height,
+                "annotation: shown"
+            );
+        }
         let _ = app.emit(ANNOTATION_VISIBILITY_EVENT, true);
         arm_annotation_escape(&app);
         start_annotation_display_follow(&app);
@@ -1405,6 +1415,7 @@ pub fn show_annotation_overlay(app: AppHandle) -> tauri::Result<()> {
         return Ok(());
     }
 
+    tracing::info!("annotation: creating overlay window");
     let win = WebviewWindowBuilder::new(
         &app,
         ANNOTATION_LABEL,
@@ -1433,6 +1444,15 @@ pub fn show_annotation_overlay(app: AppHandle) -> tauri::Result<()> {
         apply_overlay_spaces(&w);
     });
     win.show()?;
+    if let (Ok(pos), Ok(size)) = (win.outer_position(), win.outer_size()) {
+        tracing::info!(
+            x = pos.x,
+            y = pos.y,
+            w = size.width,
+            h = size.height,
+            "annotation: created and shown"
+        );
+    }
     let _ = app.emit(ANNOTATION_VISIBILITY_EVENT, true);
     arm_annotation_escape(&app);
     start_annotation_display_follow(&app);

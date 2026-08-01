@@ -66,7 +66,16 @@ mod tray;
 mod windows;
 
 use state::AppState;
+use std::path::PathBuf;
+use std::sync::OnceLock;
 use tauri::Manager;
+use tracing_appender::non_blocking::WorkerGuard;
+
+/// Keeps the non-blocking file writer alive for the process lifetime.
+static LOG_GUARD: OnceLock<WorkerGuard> = OnceLock::new();
+
+/// Bundle id from `tauri.conf.json` — must match Tauri's `app_log_dir`.
+const LOG_BUNDLE_ID: &str = "com.capptivo.desktop";
 
 /// Global start/stop-and-show hotkey for the recorder popover.
 const RECORDER_HOTKEY: &str = "Alt+Shift+R";
@@ -169,13 +178,63 @@ fn register_global_hotkey(app: &tauri::AppHandle) {
     }
 }
 
+/// OS log folder — same layout Tauri uses for `app_log_dir` / plugin-log.
+pub fn production_log_dir() -> PathBuf {
+    #[cfg(target_os = "macos")]
+    {
+        let home = std::env::var_os("HOME")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| PathBuf::from("."));
+        home.join("Library/Logs").join(LOG_BUNDLE_ID)
+    }
+    #[cfg(target_os = "windows")]
+    {
+        let base = std::env::var_os("LOCALAPPDATA")
+            .map(PathBuf::from)
+            .unwrap_or_else(std::env::temp_dir);
+        base.join(LOG_BUNDLE_ID).join("logs")
+    }
+    #[cfg(target_os = "linux")]
+    {
+        let base = std::env::var_os("XDG_DATA_HOME")
+            .map(PathBuf::from)
+            .or_else(|| {
+                std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".local/share"))
+            })
+            .unwrap_or_else(|| PathBuf::from("."));
+        base.join(LOG_BUNDLE_ID).join("logs")
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "windows", target_os = "linux")))]
+    {
+        std::env::temp_dir().join("capptivo-logs")
+    }
+}
+
 fn init_tracing() {
-    use tracing_subscriber::EnvFilter;
+    use tracing_subscriber::prelude::*;
+    use tracing_subscriber::{fmt, EnvFilter};
+
+    let dir = production_log_dir();
+    let _ = std::fs::create_dir_all(&dir);
+
+    let file_appender = tracing_appender::rolling::daily(&dir, "capptivo");
+    let (non_blocking, guard) = tracing_appender::non_blocking(file_appender);
+    let _ = LOG_GUARD.set(guard);
+
     let filter = EnvFilter::try_from_default_env()
         .unwrap_or_else(|_| EnvFilter::new("info,desktop_lib=debug"));
-    // `try_init` so tests / repeated inits don't panic.
-    let _ = tracing_subscriber::fmt()
-        .with_env_filter(filter)
-        .with_target(false)
+
+    // stderr for dev; file for production (Windows has no console).
+    let _ = tracing_subscriber::registry()
+        .with(filter)
+        .with(fmt::layer().with_target(true).with_writer(std::io::stderr))
+        .with(
+            fmt::layer()
+                .with_ansi(false)
+                .with_target(true)
+                .with_writer(non_blocking),
+        )
         .try_init();
+
+    tracing::info!(dir = %dir.display(), "file logging enabled");
 }

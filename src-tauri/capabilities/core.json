@@ -11,5 +11,5 @@
     "area-picker",
     "area-frame"
   ],
-  "permissions": ["core:default"]
+  "permissions": ["core:default", "allow-log-js"]
 }
