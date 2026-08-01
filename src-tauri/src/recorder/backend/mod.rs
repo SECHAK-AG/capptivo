@@ -10,6 +10,7 @@ use crossbeam_channel::Receiver;
 use std::time::{Duration, Instant};
 
 mod router;
+#[cfg(target_os = "macos")]
 pub use router::RoutingBackend;
 
 mod test_pattern;
