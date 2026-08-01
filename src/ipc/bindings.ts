@@ -153,6 +153,9 @@ export const commands = {
   /** Migrates fragmented recordings to seekable MP4; no-op once progressive. */
   ensureSeekableRecording: (projectId: string) =>
     invoke<void>("ensure_seekable_recording", { projectId }),
+  /** Fail before encode when the destination volume is too full. */
+  checkExportDiskSpace: (args: { path: string; needed: number }) =>
+    invoke<void>("check_export_disk_space", args),
   finishExport: (handle: number) => invoke<string>("finish_export", { handle }),
   abortExport: (handle: number, reason: string) =>
     invoke<void>("abort_export", { handle, reason }),

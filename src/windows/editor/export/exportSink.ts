@@ -1,8 +1,8 @@
 /**
  * Streaming export sink — a thin JS handle over the Rust file writer
- * (`begin_export` / `write_export_chunk` / `finish_export`). The whole point is
- * that peak memory stays at one chunk: the encoder produces data and we pipe it
- * straight to disk instead of accumulating the entire MP4/WebM/GIF in RAM.
+ * (`begin_export` / `write_export_chunk` / `finish_export`). Rust writes to a
+ * temp sidecar beside the chosen path and renames on `finish()` so a failed or
+ * cancelled export never truncates an existing destination file.
  *
  * The Rust side does positioned writes, so this works for both streaming muxers
  * (mediabunny `StreamTarget`, which writes out of order) and sequential

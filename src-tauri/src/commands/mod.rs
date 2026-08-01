@@ -79,6 +79,7 @@ macro_rules! command_handlers {
             $crate::commands::backgrounds::delete_custom_background,
             // export
             $crate::commands::export::ensure_seekable_recording,
+            $crate::commands::export::check_export_disk_space,
             $crate::commands::export::begin_export,
             $crate::commands::export::write_export_chunk,
             $crate::commands::export::finish_export,

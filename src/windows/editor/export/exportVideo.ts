@@ -25,6 +25,7 @@ import {
 } from "mediabunny";
 
 import type { TrimSegment } from "@/engine";
+import { totalKeptDuration } from "@/engine";
 import { mediaUrl } from "@/lib/platform";
 import { commands } from "../../../ipc/bindings";
 import { describeError } from "../../recorder/store";
@@ -50,6 +51,7 @@ import {
 } from "./exportCancel";
 import {
   DEFAULT_EXPORT_SETTINGS,
+  estimateExportBytes,
   resolveExportParams,
   type ExportAudioEnhance,
   type ExportSettings,
@@ -106,6 +108,17 @@ async function pickSavePath(
   return path;
 }
 
+/** MediaRecorder fallback may only support WebM — never write those bytes to `.mp4`. */
+function alignExportPathExtension(
+  path: string,
+  ext: "mp4" | "webm",
+): string {
+  const lastSlash = Math.max(path.lastIndexOf("/"), path.lastIndexOf("\\"));
+  const dot = path.lastIndexOf(".");
+  if (dot <= lastSlash) return `${path}.${ext}`;
+  return `${path.slice(0, dot)}.${ext}`;
+}
+
 export async function exportProject(
   settings: ExportSettings = DEFAULT_EXPORT_SETTINGS,
 ): Promise<void> {
@@ -141,6 +154,23 @@ export async function exportProject(
     const s = useEditorStore.getState();
     s.setExporting(false);
     s.setExportStatus(null);
+    return;
+  }
+
+  const keptDuration =
+    store.segments.length > 0
+      ? totalKeptDuration(store.segments)
+      : store.duration;
+  try {
+    await commands.checkExportDiskSpace({
+      path,
+      needed: estimateExportBytes(resolved, keptDuration),
+    });
+  } catch (e) {
+    endExportAbort();
+    store.setExportError(describeError(e));
+    store.setExporting(false);
+    store.setExportStatus(null);
     return;
   }
 
@@ -186,7 +216,23 @@ export async function exportProject(
       `[export] ensureSeekableRecording done in ${(performance.now() - t0).toFixed(0)}ms ` +
         `screenUrl=${screenUrl}`,
     );
-    sink = await ExportSink.open(path);
+    let exportPath = path;
+    if (resolved.format !== "gif") {
+      const tuning =
+        typeof VideoEncoder !== "undefined"
+          ? await pickVideoEncodeTuning(
+              codecCandidates(resolved.container),
+              resolved.width,
+              resolved.height,
+              resolved.bitrate,
+            )
+          : null;
+      if (!tuning) {
+        const { fileExt } = pickMime(resolved.container);
+        exportPath = alignExportPathExtension(path, fileExt);
+      }
+    }
+    sink = await ExportSink.open(exportPath);
     throwIfAborted(signal);
 
     if (resolved.format === "gif") {

@@ -173,7 +173,11 @@ pub fn begin_camera_file(
     }
     let path = state.store.project_dir(&project_id)?.join(&filename);
     let file = std::fs::File::create(&path)?;
-    *state.camera_sink.lock() = Some(ExportSink { file, path });
+    *state.camera_sink.lock() = Some(ExportSink {
+        file,
+        path,
+        final_path: None,
+    });
     Ok(())
 }
 
@@ -253,7 +257,11 @@ pub fn begin_mic_file(
     }
     let path = state.store.project_dir(&project_id)?.join(&filename);
     let file = std::fs::File::create(&path)?;
-    *state.mic_sink.lock() = Some(ExportSink { file, path });
+    *state.mic_sink.lock() = Some(ExportSink {
+        file,
+        path,
+        final_path: None,
+    });
     Ok(())
 }
 

@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-check-export-disk-space"
+description = "Enables the check_export_disk_space command without any pre-configured scope."
+commands.allow = ["check_export_disk_space"]
+
+[[permission]]
+identifier = "deny-check-export-disk-space"
+description = "Denies the check_export_disk_space command without any pre-configured scope."
+commands.deny = ["check_export_disk_space"]

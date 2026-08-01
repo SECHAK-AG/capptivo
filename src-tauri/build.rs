@@ -70,6 +70,7 @@ fn main() {
         "delete_custom_background",
         // export
         "ensure_seekable_recording",
+        "check_export_disk_space",
         "begin_export",
         "write_export_chunk",
         "finish_export",

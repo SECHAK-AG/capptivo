@@ -31,7 +31,11 @@ pub struct AppState {
 
 pub struct ExportSink {
     pub file: File,
+    /// Bytes are written here — a temp sidecar during editor export, or the
+    /// final path for in-flight capture sinks (mic / camera).
     pub path: PathBuf,
+    /// User-chosen export destination. On `finish`, `path` is renamed here.
+    pub final_path: Option<PathBuf>,
 }
 
 #[derive(Clone)]

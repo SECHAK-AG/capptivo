@@ -30,6 +30,7 @@
     "allow-list-custom-backgrounds",
     "allow-delete-custom-background",
     "allow-ensure-seekable-recording",
+    "allow-check-export-disk-space",
     "allow-begin-export",
     "allow-write-export-chunk",
     "allow-finish-export",

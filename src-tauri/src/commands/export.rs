@@ -14,8 +14,11 @@ use crate::recorder::encoder::{
 };
 use crate::state::{AppState, ExportSink};
 use std::io::{Seek, SeekFrom, Write};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use tauri::State;
+
+/// Suffix for in-progress editor exports — removed on abort; renamed on success.
+const EXPORT_PARTIAL_SUFFIX: &str = ".capptivo-export.partial";
 
 /// A kept timeline segment (source seconds) the export video is built from; the
 /// audio is trimmed to match.
@@ -148,7 +151,24 @@ pub async fn ensure_seekable_recording(
     .map_err(|e| AppError::Other(format!("finalize task failed: {e}")))?
 }
 
+/// Fail early when the volume hosting `path` cannot hold `needed` bytes.
+/// No-op when free space cannot be determined (unsupported platform / odd path).
+#[tauri::command(async)]
+pub fn check_export_disk_space(path: String, needed: u64) -> AppResult<()> {
+    let path = PathBuf::from(path);
+    let available = volume_available_bytes(&path);
+    if available.is_some_and(|free| free < needed) {
+        return Err(AppError::Other(
+            "Not enough free disk space to save the export here. Choose another location or free up space.".into(),
+        ));
+    }
+    Ok(())
+}
+
 /// Open a file sink at `path` and return an opaque handle for the chunk writes.
+///
+/// Writes to a temp sidecar beside the destination so re-exporting over an
+/// existing file does not truncate it until the muxer finishes and we rename.
 ///
 /// `(async)` runs the body on the Tauri worker pool. A `#[tauri::command]` that
 /// is neither `async fn` nor marked `(async)` executes *inline on the app's main
@@ -157,7 +177,12 @@ pub async fn ensure_seekable_recording(
 /// should be waiting on.
 #[tauri::command(async)]
 pub fn begin_export(state: State<AppState>, path: String) -> AppResult<u64> {
-    let file = std::fs::File::create(&path)?;
+    let final_path = PathBuf::from(path);
+    let temp_path = export_temp_path(&final_path);
+    if temp_path.exists() {
+        let _ = std::fs::remove_file(&temp_path);
+    }
+    let file = std::fs::File::create(&temp_path)?;
     let mut next = state.next_export_id.lock();
     let handle = *next;
     *next += 1;
@@ -167,7 +192,8 @@ pub fn begin_export(state: State<AppState>, path: String) -> AppResult<u64> {
         handle,
         ExportSink {
             file,
-            path: path.into(),
+            path: temp_path,
+            final_path: Some(final_path),
         },
     );
     Ok(handle)
@@ -241,15 +267,23 @@ pub async fn finish_export(state: State<'_, AppState>, handle: u64) -> AppResult
         .remove(&handle)
         .ok_or_else(|| AppError::Other(format!("unknown export handle {handle}")))?;
 
-    tauri::async_runtime::spawn_blocking(move || {
-        sink.file.sync_all()?;
-        Ok(sink.path.to_string_lossy().into_owned())
-    })
-    .await
-    .map_err(|e| AppError::Other(format!("export finish task failed: {e}")))?
+    tauri::async_runtime::spawn_blocking(move || finish_export_blocking(sink))
+        .await
+        .map_err(|e| AppError::Other(format!("export finish task failed: {e}")))?
 }
 
-/// Abort an export: close and delete the partial file.
+fn finish_export_blocking(sink: ExportSink) -> AppResult<String> {
+    sink.file.sync_all()?;
+    let result_path = if let Some(final_path) = sink.final_path {
+        promote_temp_to_final(&sink.path, &final_path)?;
+        final_path
+    } else {
+        sink.path
+    };
+    Ok(result_path.to_string_lossy().into_owned())
+}
+
+/// Abort an export: close and delete the partial temp file only.
 ///
 /// `(async)` — deleting a partial multi-GB export is filesystem work that does
 /// not belong on the app's main thread.
@@ -261,4 +295,135 @@ pub fn abort_export(state: State<AppState>, handle: u64, reason: String) -> AppR
         let _ = std::fs::remove_file(&sink.path);
     }
     Ok(())
+}
+
+fn export_temp_path(final_path: &Path) -> PathBuf {
+    let mut os = final_path.as_os_str().to_os_string();
+    os.push(EXPORT_PARTIAL_SUFFIX);
+    PathBuf::from(os)
+}
+
+/// Rename a completed temp export onto the user path. The destination is only
+/// replaced once the temp file is fully written and fsynced.
+fn promote_temp_to_final(temp: &Path, final_path: &Path) -> AppResult<()> {
+    if final_path.exists() {
+        std::fs::remove_file(final_path)?;
+    }
+    std::fs::rename(temp, final_path).map_err(|e| {
+        let _ = std::fs::remove_file(temp);
+        AppError::Other(format!("export rename failed: {e}"))
+    })?;
+    Ok(())
+}
+
+/// Free bytes on the volume hosting `path`. `None` when unknown — callers skip
+/// the precheck rather than blocking export.
+fn volume_available_bytes(path: &Path) -> Option<u64> {
+    let check = path
+        .parent()
+        .filter(|p| !p.as_os_str().is_empty())
+        .unwrap_or(path);
+    volume_available_bytes_at(check)
+}
+
+#[cfg(unix)]
+fn volume_available_bytes_at(path: &Path) -> Option<u64> {
+    use std::ffi::CString;
+    use std::os::unix::ffi::OsStrExt;
+
+    let cpath = CString::new(path.as_os_str().as_bytes()).ok()?;
+    let mut stat: libc::statvfs = unsafe { std::mem::zeroed() };
+    if unsafe { libc::statvfs(cpath.as_ptr(), &mut stat) } != 0 {
+        return None;
+    }
+    Some(stat.f_bavail as u64 * stat.f_bsize as u64)
+}
+
+#[cfg(target_os = "windows")]
+fn volume_available_bytes_at(path: &Path) -> Option<u64> {
+    use std::os::windows::ffi::OsStrExt;
+    use windows::core::PCWSTR;
+    use windows::Win32::Storage::FileSystem::GetDiskFreeSpaceExW;
+
+    let wide: Vec<u16> = path
+        .as_os_str()
+        .encode_wide()
+        .chain([0])
+        .collect();
+    let mut free = 0u64;
+    let ok = unsafe {
+        GetDiskFreeSpaceExW(PCWSTR(wide.as_ptr()), Some(&mut free), None, None).is_ok()
+    };
+    ok.then_some(free)
+}
+
+#[cfg(not(any(unix, target_os = "windows")))]
+fn volume_available_bytes_at(_path: &Path) -> Option<u64> {
+    None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::{Read, Write};
+
+    #[test]
+    fn export_temp_rename_leaves_final_and_removes_partial() {
+        let dir = std::env::temp_dir().join(format!(
+            "capptivo-export-test-{}",
+            uuid::Uuid::new_v4().simple()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let final_path = dir.join("out.mp4");
+        std::fs::write(&final_path, b"original").unwrap();
+
+        let temp_path = export_temp_path(&final_path);
+        let mut file = std::fs::File::create(&temp_path).unwrap();
+        file.write_all(b"new-export").unwrap();
+
+        let sink = ExportSink {
+            file,
+            path: temp_path.clone(),
+            final_path: Some(final_path.clone()),
+        };
+
+        let saved = finish_export_blocking(sink).unwrap();
+        assert_eq!(saved, final_path.to_string_lossy());
+        assert!(!temp_path.exists());
+        assert!(final_path.is_file());
+
+        let mut got = String::new();
+        std::fs::File::open(&final_path)
+            .unwrap()
+            .read_to_string(&mut got)
+            .unwrap();
+        assert_eq!(got, "new-export");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn abort_export_removes_only_temp() {
+        let dir = std::env::temp_dir().join(format!(
+            "capptivo-export-abort-{}",
+            uuid::Uuid::new_v4().simple()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let final_path = dir.join("keep.mp4");
+        std::fs::write(&final_path, b"keep-me").unwrap();
+
+        let temp_path = export_temp_path(&final_path);
+        std::fs::write(&temp_path, b"partial").unwrap();
+
+        let _ = std::fs::remove_file(&temp_path);
+        assert!(final_path.is_file());
+        let mut got = String::new();
+        std::fs::File::open(&final_path)
+            .unwrap()
+            .read_to_string(&mut got)
+            .unwrap();
+        assert_eq!(got, "keep-me");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }

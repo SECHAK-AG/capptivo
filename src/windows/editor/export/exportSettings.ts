@@ -72,6 +72,26 @@ const ENCODING_BITRATE: Record<ExportEncoding, number> = {
   quality: 16_000_000,
 };
 
+/** Reference pixel rate for "balanced" tiers (1080p @ 30 fps). */
+const REF_PIXEL_RATE = 1920 * 1080 * 30;
+const MIN_VIDEO_BITRATE = 500_000;
+const MAX_VIDEO_BITRATE = 50_000_000;
+
+function scaledVideoBitrate(
+  encoding: ExportEncoding,
+  width: number,
+  height: number,
+  fps: number,
+): number {
+  const base = ENCODING_BITRATE[encoding];
+  const scale = (width * height * fps) / REF_PIXEL_RATE;
+  const raw = Math.round(base * scale);
+  return Math.max(
+    MIN_VIDEO_BITRATE,
+    Math.min(MAX_VIDEO_BITRATE, raw),
+  );
+}
+
 /** Encoder output dims for the given stage: format long-edge cap + 16px align. */
 export function exportDimensionsFor(
   stageWidth: number,
@@ -107,11 +127,28 @@ export function resolveExportParams(
     width,
     height,
     fps: isGif ? GIF_FPS_FOR_PRESET[settings.fps] : settings.fps,
-    bitrate: ENCODING_BITRATE[settings.encoding],
+    bitrate: isGif
+      ? ENCODING_BITRATE[settings.encoding]
+      : scaledVideoBitrate(settings.encoding, width, height, settings.fps),
     gifColors: GIF_COLORS_FOR_ENCODING[settings.encoding],
     gifDither: isGif && GIF_DITHER_FOR_ENCODING[settings.encoding],
     format: settings.format,
     container: settings.container,
     ext: isGif ? "gif" : settings.container,
   };
+}
+
+/** Conservative bytes needed on disk before starting encode (video or GIF). */
+export function estimateExportBytes(
+  resolved: ResolvedExportParams,
+  keptDurationSec: number,
+): number {
+  if (keptDurationSec <= 0) return 0;
+  if (resolved.format === "gif") {
+    // Palette frames are much smaller than raw pixels, but GIFs balloon —
+    // use a generous floor so the precheck catches obvious shortfalls.
+    const raw = keptDurationSec * resolved.width * resolved.height * resolved.fps * 0.15;
+    return Math.max(64 * 1024 * 1024, Math.ceil(raw));
+  }
+  return Math.ceil((keptDurationSec * resolved.bitrate) / 8 * 1.2);
 }
