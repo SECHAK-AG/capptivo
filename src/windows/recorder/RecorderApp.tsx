@@ -93,9 +93,11 @@ export function RecorderApp() {
       setHudOn(true);
       setHudEnter(snap);
       if (snap) {
+        // Native frame already docked in `onCountdownDone` before we left the
+        // countdown tree — do not re-race layout here (Windows showed a centered
+        // 240×240 window with a horizontal scrollbar when HUD painted first).
         setMountSetup(false);
         resetBarOffset();
-        void commands.setRecorderLayout("hud");
         return;
       }
       // Keep setup overlay until the outgoing pane finishes fading.
@@ -143,10 +145,19 @@ export function RecorderApp() {
   // never re-runs either.
   const onCountdownDone = useCallback(() => {
     fromCountdownRef.current = true;
-    // Swap straight to the HUD; do not wait for `start()` to resolve.
-    setStarting(true);
-    setCounting(false);
-    void start();
+    // Dock the compact HUD frame *before* leaving the countdown tree. Painting
+    // the wide HUD inside the 240×240 centered badge first overflows on
+    // WebView2 (horizontal scrollbar flash in the middle of the screen).
+    void (async () => {
+      try {
+        await commands.setRecorderLayout("hud");
+      } catch (e) {
+        console.error("[recorder] hud layout before mount failed", e);
+      }
+      setStarting(true);
+      setCounting(false);
+      void start();
+    })();
   }, [start]);
 
   const onRecord = useCallback(() => {
@@ -160,7 +171,7 @@ export function RecorderApp() {
 
   if (counting) {
     return (
-      <div className="relative h-full bg-transparent font-sans text-foreground">
+      <div className="relative h-full overflow-hidden bg-transparent font-sans text-foreground">
         <div className="grid h-full place-items-center">
           <Countdown onDone={onCountdownDone} />
         </div>
@@ -176,7 +187,7 @@ export function RecorderApp() {
   // HUD uses a compact native window — center the chrome.
   if (showHud && !mountSetup) {
     return (
-      <div className="pointer-events-none flex h-full w-full items-center justify-center bg-transparent font-sans text-foreground">
+      <div className="pointer-events-none flex h-full w-full items-center justify-center overflow-hidden bg-transparent font-sans text-foreground">
         <div className="pointer-events-auto relative w-fit">
           {mountHud ? (
             <BarPane active={hudOn} enter={hudEnter}>
@@ -189,7 +200,7 @@ export function RecorderApp() {
   }
 
   return (
-    <div className="pointer-events-none relative h-full w-full bg-transparent font-sans text-foreground">
+    <div className="pointer-events-none relative h-full w-full overflow-hidden bg-transparent font-sans text-foreground">
       <div
         ref={chromeRef}
         className="pointer-events-auto absolute left-1/2 flex w-fit flex-col items-center"

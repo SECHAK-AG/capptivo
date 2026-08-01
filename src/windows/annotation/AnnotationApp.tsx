@@ -103,6 +103,16 @@ export function AnnotationApp() {
   const dragRafRef = useRef(0);
   const toolbarElRef = useRef<HTMLDivElement | null>(null);
   const ignoreRef = useRef(false);
+  /**
+   * `scaleFactor` / `outerPosition` for the overlay window. Both are fixed for
+   * a full-screen overlay and only change when it hops displays, so they are
+   * read once and reused instead of costing two IPC round-trips per 80 ms
+   * cursor poll — which runs the whole time the user is annotating a live
+   * recording. Cleared on `annotation://display`.
+   */
+  const winMetricsRef = useRef<{ scale: number; x: number; y: number } | null>(
+    null,
+  );
   // The overlay WebView is reused (Rust show/hide, never closed), so this app
   // stays mounted while hidden. Track native visibility to suspend the idle
   // cursor-poll when off-screen — the window is created to be shown, so `true`.
@@ -240,6 +250,7 @@ export function AnnotationApp() {
     let unlisten: (() => void) | undefined;
     let disposed = false;
     void listen(ANNOTATION_DISPLAY_EVENT, () => {
+      winMetricsRef.current = null;
       dragOffsetRef.current = { x: 0, y: 0 };
       setBarOffset({ x: 0, y: 0 });
       const el = toolbarElRef.current;
@@ -266,6 +277,8 @@ export function AnnotationApp() {
       return;
     }
 
+    // Hide/show can land on another display without `annotation://display`.
+    winMetricsRef.current = null;
     let cancelled = false;
     let timer = 0;
 
@@ -289,14 +302,20 @@ export function AnnotationApp() {
       }
       try {
         const win = getCurrentWindow();
-        const [cursor, scale, outer] = await Promise.all([
-          cursorPosition(),
-          win.scaleFactor(),
-          win.outerPosition(),
-        ]);
+        let metrics = winMetricsRef.current;
+        if (!metrics) {
+          const [scale, outer] = await Promise.all([
+            win.scaleFactor(),
+            win.outerPosition(),
+          ]);
+          if (cancelled) return;
+          metrics = { scale, x: outer.x, y: outer.y };
+          winMetricsRef.current = metrics;
+        }
+        const cursor = await cursorPosition();
         if (cancelled) return;
-        const x = (cursor.x - outer.x) / scale;
-        const y = (cursor.y - outer.y) / scale;
+        const x = (cursor.x - metrics.x) / metrics.scale;
+        const y = (cursor.y - metrics.y) / metrics.scale;
         const r = el.getBoundingClientRect();
         // Extra left pad so color/shape/size menus stay interactive.
         const over =
@@ -306,6 +325,7 @@ export function AnnotationApp() {
           y <= r.bottom + 12;
         applyIgnore(!over);
       } catch {
+        winMetricsRef.current = null;
         applyIgnore(true);
       }
       timer = window.setTimeout(tick, 80);
