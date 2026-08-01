@@ -72,6 +72,16 @@ export function translate(lang: Language, key: TranslationKey, params?: Translat
   return text;
 }
 
+/**
+ * Translate outside React — stores and async flows that produce user-facing
+ * text before any component sees it. Reads the persisted language directly, so
+ * it works in every window without a provider. Components should keep using
+ * `useI18n()`, which re-renders on a language switch; this does not.
+ */
+export function translateNow(key: TranslationKey, params?: TranslateParams): string {
+  return translate(getStoredLanguage(), key, params);
+}
+
 /** Document text direction for the active UI language. */
 export function languageDir(lang: Language): "ltr" | "rtl" {
   return lang === "ar" ? "rtl" : "ltr";

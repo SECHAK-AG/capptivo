@@ -68,6 +68,10 @@ export const ru: Record<TranslationKey, string> = {
   "export.exporting": "Экспорт…",
   "export.progressTitle": "Экспорт",
   "export.rendering": "Рендеринг файла.",
+  "export.status.choosePath": "Выберите место сохранения…",
+  "export.status.renderingGif": "Рендеринг GIF…",
+  "export.status.saving": "Сохранение…",
+  "export.status.addingAudio": "Добавление аудио…",
   "export.cancel": "Отмена",
   "export.dialog.title": "Экспорт",
   "export.dialog.description": "Выберите формат, кодирование, частоту кадров и тип файла.",
@@ -262,6 +266,7 @@ export const ru: Record<TranslationKey, string> = {
   "captions.transcribing": "Распознавание…",
   "captions.preparing": "Подготовка…",
   "captions.clear": "Очистить",
+  "captions.error.noSpeech": "В этой записи не обнаружена речь.",
 
   "recorder.drag": "Перетащить",
   "recorder.recordings": "Записи",
@@ -279,6 +284,14 @@ export const ru: Record<TranslationKey, string> = {
   "recorder.refresh": "Обновить",
   "recorder.devices.empty":
     "Подключите iPhone или iPad кабелем, разблокируйте и нажмите «Доверять».",
+  "recorder.error.screenPermission":
+    "Разрешите Capptivo в разделе Системные настройки → Конфиденциальность и безопасность → Запись экрана, затем завершите и снова откройте приложение.",
+  "recorder.error.cameraPermission":
+    "Разрешите Capptivo в разделе Системные настройки → Конфиденциальность и безопасность → Камера, чтобы записывать устройство.",
+  "recorder.error.noDevice":
+    "Подключите iPhone или iPad кабелем, затем выберите его.",
+  "recorder.error.noArea": "Сначала выделите область перетаскиванием.",
+  "recorder.error.noSource": "Сначала выберите экран или окно.",
   "recorder.camera": "Камера",
   "recorder.camera.off": "Без камеры",
   "recorder.camera.grant": "Разрешить доступ к камере…",

@@ -67,6 +67,10 @@ export const ar: Record<TranslationKey, string> = {
   "export.exporting": "جارٍ التصدير…",
   "export.progressTitle": "جارٍ التصدير",
   "export.rendering": "جارٍ إنشاء ملفك.",
+  "export.status.choosePath": "اختر مكان الحفظ…",
+  "export.status.renderingGif": "جارٍ إنشاء GIF…",
+  "export.status.saving": "جارٍ الحفظ…",
+  "export.status.addingAudio": "جارٍ إضافة الصوت…",
   "export.cancel": "إلغاء",
   "export.dialog.title": "تصدير",
   "export.dialog.description":
@@ -263,6 +267,7 @@ export const ar: Record<TranslationKey, string> = {
   "captions.transcribing": "جارٍ التفريغ…",
   "captions.preparing": "جارٍ التحضير…",
   "captions.clear": "مسح",
+  "captions.error.noSpeech": "لم يتم اكتشاف كلام في هذا التسجيل.",
 
   "recorder.drag": "سحب",
   "recorder.recordings": "التسجيلات",
@@ -280,6 +285,13 @@ export const ar: Record<TranslationKey, string> = {
   "recorder.refresh": "تحديث",
   "recorder.devices.empty":
     "وصّل iPhone أو iPad بكابل، افتح القفل واضغط Trust.",
+  "recorder.error.screenPermission":
+    "اسمح لـ Capptivo من إعدادات النظام → الخصوصية والأمان → تسجيل الشاشة، ثم أغلق التطبيق وأعد فتحه.",
+  "recorder.error.cameraPermission":
+    "اسمح لـ Capptivo من إعدادات النظام → الخصوصية والأمان → الكاميرا لتسجيل جهاز.",
+  "recorder.error.noDevice": "وصّل iPhone أو iPad بكابل، ثم اخترْه.",
+  "recorder.error.noArea": "اسحب أولاً لتحديد منطقة.",
+  "recorder.error.noSource": "اختر شاشة أو نافذة أولاً.",
   "recorder.camera": "الكاميرا",
   "recorder.camera.off": "بدون كاميرا",
   "recorder.camera.grant": "السماح بالكاميرا…",

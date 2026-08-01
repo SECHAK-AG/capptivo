@@ -7,6 +7,7 @@
 
 import { create } from "zustand";
 import { emit, listen } from "@tauri-apps/api/event";
+import { translateNow } from "@/lib/i18n";
 import { commands } from "../../ipc/bindings";
 import { onElapsed, onError, onStateChanged } from "../../ipc/events";
 import type {
@@ -299,7 +300,7 @@ export const useRecorderStore = create<RecorderStore>((set, get) => ({
         devices: [],
         selectedDeviceId: null,
         deviceError: /permission/i.test(message)
-          ? "Allow Capptivo in System Settings → Privacy → Camera to record a device."
+          ? translateNow("recorder.error.cameraPermission")
           : message,
       });
     } finally {
@@ -372,10 +373,7 @@ export const useRecorderStore = create<RecorderStore>((set, get) => ({
     if (!get().permissions?.canRecord) {
       await get().requestPermission();
       if (!get().permissions?.canRecord) {
-        set({
-          lastError:
-            "Allow Capptivo in System Settings → Privacy → Screen Recording, then quit and reopen the app.",
-        });
+        set({ lastError: translateNow("recorder.error.screenPermission") });
         return;
       }
     }
@@ -520,24 +518,21 @@ export const useRecorderStore = create<RecorderStore>((set, get) => ({
     if (captureMode !== "device" && !get().permissions?.canRecord) {
       await get().requestPermission();
       if (!get().permissions?.canRecord) {
-        set({
-          lastError:
-            "Allow Capptivo in System Settings → Privacy → Screen Recording, then quit and reopen the app.",
-        });
+        set({ lastError: translateNow("recorder.error.screenPermission") });
         return;
       }
     }
     if (captureMode === "device" && !selectedDeviceId) {
-      set({ lastError: "Connect an iPhone or iPad with a cable, then pick it." });
+      set({ lastError: translateNow("recorder.error.noDevice") });
       return;
     }
     if (captureMode === "area") {
       if (!areaSelection) {
-        set({ lastError: "Drag to select a region first." });
+        set({ lastError: translateNow("recorder.error.noArea") });
         return;
       }
     } else if (captureMode !== "device" && !selectedSourceId) {
-      set({ lastError: "Pick a screen or window first." });
+      set({ lastError: translateNow("recorder.error.noSource") });
       return;
     }
     const captureMicrophone = micEnabled && !!micDeviceId;

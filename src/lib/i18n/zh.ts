@@ -65,6 +65,10 @@ export const zh: Record<TranslationKey, string> = {
   "export.exporting": "正在导出…",
   "export.progressTitle": "正在导出",
   "export.rendering": "正在生成文件。",
+  "export.status.choosePath": "选择保存位置…",
+  "export.status.renderingGif": "正在生成 GIF…",
+  "export.status.saving": "正在保存…",
+  "export.status.addingAudio": "正在添加音频…",
   "export.cancel": "取消",
   "export.dialog.title": "导出",
   "export.dialog.description": "选择格式、编码、帧率和文件类型。",
@@ -252,6 +256,7 @@ export const zh: Record<TranslationKey, string> = {
   "captions.transcribing": "正在转录…",
   "captions.preparing": "正在准备…",
   "captions.clear": "清除",
+  "captions.error.noSpeech": "此录制中未检测到语音。",
 
   "recorder.drag": "拖动",
   "recorder.recordings": "录制",
@@ -268,6 +273,13 @@ export const zh: Record<TranslationKey, string> = {
   "recorder.devices": "设备",
   "recorder.refresh": "刷新",
   "recorder.devices.empty": "用线连接 iPhone 或 iPad，解锁并点击信任。",
+  "recorder.error.screenPermission":
+    "请在系统设置 → 隐私与安全性 → 屏幕录制中允许 Capptivo，然后退出并重新打开应用。",
+  "recorder.error.cameraPermission":
+    "请在系统设置 → 隐私与安全性 → 相机中允许 Capptivo，以录制设备。",
+  "recorder.error.noDevice": "用线连接 iPhone 或 iPad，然后选择它。",
+  "recorder.error.noArea": "请先拖动以选择区域。",
+  "recorder.error.noSource": "请先选择显示器或窗口。",
   "recorder.camera": "摄像头",
   "recorder.camera.off": "无摄像头",
   "recorder.camera.grant": "授予摄像头权限…",

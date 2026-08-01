@@ -65,6 +65,10 @@ export const en = {
   "export.exporting": "Exporting…",
   "export.progressTitle": "Exporting",
   "export.rendering": "Rendering your file.",
+  "export.status.choosePath": "Choose where to save…",
+  "export.status.renderingGif": "Rendering GIF…",
+  "export.status.saving": "Saving…",
+  "export.status.addingAudio": "Adding audio…",
   "export.cancel": "Cancel",
   "export.dialog.title": "Export",
   "export.dialog.description": "Choose format, encoding, frame rate, and file type.",
@@ -256,6 +260,7 @@ export const en = {
   "captions.transcribing": "Transcribing…",
   "captions.preparing": "Preparing…",
   "captions.clear": "Clear",
+  "captions.error.noSpeech": "No speech was detected in this recording.",
 
   "recorder.drag": "Drag",
   "recorder.recordings": "Recordings",
@@ -273,6 +278,13 @@ export const en = {
   "recorder.refresh": "Refresh",
   "recorder.devices.empty":
     "Connect an iPhone or iPad with a cable, unlock it, and tap Trust.",
+  "recorder.error.screenPermission":
+    "Allow Capptivo in System Settings → Privacy → Screen Recording, then quit and reopen the app.",
+  "recorder.error.cameraPermission":
+    "Allow Capptivo in System Settings → Privacy → Camera to record a device.",
+  "recorder.error.noDevice": "Connect an iPhone or iPad with a cable, then pick it.",
+  "recorder.error.noArea": "Drag to select a region first.",
+  "recorder.error.noSource": "Pick a screen or window first.",
   "recorder.camera": "Camera",
   "recorder.camera.off": "No camera",
   "recorder.camera.grant": "Grant camera access…",

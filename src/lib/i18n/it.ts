@@ -69,6 +69,10 @@ export const it: Record<TranslationKey, string> = {
   "export.exporting": "Esportazione…",
   "export.progressTitle": "Esportazione",
   "export.rendering": "Generazione del file in corso.",
+  "export.status.choosePath": "Scegli dove salvare…",
+  "export.status.renderingGif": "Generazione GIF…",
+  "export.status.saving": "Salvataggio…",
+  "export.status.addingAudio": "Aggiunta dell'audio…",
   "export.cancel": "Annulla",
   "export.dialog.title": "Esporta",
   "export.dialog.description":
@@ -269,6 +273,7 @@ export const it: Record<TranslationKey, string> = {
   "captions.transcribing": "Trascrizione…",
   "captions.preparing": "Preparazione…",
   "captions.clear": "Cancella",
+  "captions.error.noSpeech": "Nessun parlato rilevato in questa registrazione.",
 
   "recorder.drag": "Trascina",
   "recorder.recordings": "Registrazioni",
@@ -286,6 +291,14 @@ export const it: Record<TranslationKey, string> = {
   "recorder.refresh": "Aggiorna",
   "recorder.devices.empty":
     "Collega un iPhone o iPad con un cavo, sbloccalo e tocca Trust.",
+  "recorder.error.screenPermission":
+    "Consenti Capptivo in Impostazioni di Sistema → Privacy e sicurezza → Registrazione schermo, poi chiudi e riapri l'app.",
+  "recorder.error.cameraPermission":
+    "Consenti Capptivo in Impostazioni di Sistema → Privacy e sicurezza → Fotocamera per registrare un dispositivo.",
+  "recorder.error.noDevice":
+    "Collega un iPhone o iPad con un cavo, poi selezionalo.",
+  "recorder.error.noArea": "Trascina prima per selezionare un'area.",
+  "recorder.error.noSource": "Scegli prima uno schermo o una finestra.",
   "recorder.camera": "Fotocamera",
   "recorder.camera.off": "Nessuna fotocamera",
   "recorder.camera.grant": "Consenti accesso alla fotocamera…",

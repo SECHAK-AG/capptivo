@@ -6,6 +6,7 @@
  */
 
 import { save } from "@tauri-apps/plugin-dialog";
+import { translateNow } from "@/lib/i18n";
 import {
   isPermissionGranted,
   requestPermission,
@@ -130,7 +131,7 @@ export async function exportProject(
   // encoded video. Cancelling here also skips all render work.
   let path: string | null = null;
   try {
-    store.setExportStatus("Choose where to save…");
+    store.setExportStatus(translateNow("export.status.choosePath"));
     path = await pickSavePath(suggestedName, fileExt);
   } catch (e) {
     store.setExportError(describeError(e));
@@ -144,7 +145,11 @@ export async function exportProject(
   }
 
   store.setExportStatus(
-    resolved.format === "gif" ? "Rendering GIF…" : "Rendering your file.",
+    translateNow(
+      resolved.format === "gif"
+        ? "export.status.renderingGif"
+        : "export.rendering",
+    ),
   );
   let sink: ExportSink | null = null;
   // Prepared audio track (trimmed/enhanced) built while seekable-ensure runs —
@@ -199,7 +204,7 @@ export async function exportProject(
         signal,
       );
       throwIfAborted(signal);
-      store.setExportStatus("Saving…");
+      store.setExportStatus(translateNow("export.status.saving"));
       const saved = await sink.finish();
       sink = null;
 
@@ -207,7 +212,7 @@ export async function exportProject(
       // FFmpeg attach (or the classic one-shot mux if prepare also failed).
       if (!audioMuxed) {
         if (prepared) {
-          store.setExportStatus("Adding audio…");
+          store.setExportStatus(translateNow("export.status.addingAudio"));
           await commands
             .attachExportAudio({
               videoPath: saved,
@@ -227,7 +232,7 @@ export async function exportProject(
       await notifyDone(saved);
       return;
     }
-    store.setExportStatus("Saving…");
+    store.setExportStatus(translateNow("export.status.saving"));
     const saved = await sink.finish();
     await notifyDone(saved);
   } catch (e) {
@@ -273,7 +278,9 @@ async function muxRecordedAudio(
       ? segments.map((s) => ({ start: s.start, end: s.end }))
       : [{ start: 0, end: duration }];
 
-  useEditorStore.getState().setExportStatus("Adding audio…");
+  useEditorStore
+    .getState()
+    .setExportStatus(translateNow("export.status.addingAudio"));
   await commands.muxExportAudio({
     projectId: project.id,
     videoPath,

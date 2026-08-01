@@ -67,6 +67,10 @@ export const ja: Record<TranslationKey, string> = {
   "export.exporting": "書き出し中…",
   "export.progressTitle": "書き出し中",
   "export.rendering": "ファイルを書き出しています。",
+  "export.status.choosePath": "保存先を選択…",
+  "export.status.renderingGif": "GIF を生成中…",
+  "export.status.saving": "保存中…",
+  "export.status.addingAudio": "オーディオを追加中…",
   "export.cancel": "キャンセル",
   "export.dialog.title": "書き出し",
   "export.dialog.description": "形式、エンコード、フレームレート、ファイル種別を選びます。",
@@ -259,6 +263,7 @@ export const ja: Record<TranslationKey, string> = {
   "captions.transcribing": "文字起こし中…",
   "captions.preparing": "準備中…",
   "captions.clear": "クリア",
+  "captions.error.noSpeech": "この録画では話し声が検出されませんでした。",
 
   "recorder.drag": "ドラッグ",
   "recorder.recordings": "録画",
@@ -276,6 +281,14 @@ export const ja: Record<TranslationKey, string> = {
   "recorder.refresh": "更新",
   "recorder.devices.empty":
     "ケーブルで iPhone または iPad を接続し、ロック解除して「信頼」をタップしてください。",
+  "recorder.error.screenPermission":
+    "システム設定 → プライバシーとセキュリティ → 画面収録 で Capptivo を許可し、アプリを終了して再度開いてください。",
+  "recorder.error.cameraPermission":
+    "デバイスを録画するには、システム設定 → プライバシーとセキュリティ → カメラ で Capptivo を許可してください。",
+  "recorder.error.noDevice":
+    "ケーブルで iPhone または iPad を接続し、選択してください。",
+  "recorder.error.noArea": "先にドラッグして範囲を選択してください。",
+  "recorder.error.noSource": "先に画面またはウィンドウを選択してください。",
   "recorder.camera": "カメラ",
   "recorder.camera.off": "カメラなし",
   "recorder.camera.grant": "カメラへのアクセスを許可…",

@@ -68,6 +68,10 @@ export const de: Record<TranslationKey, string> = {
   "export.exporting": "Wird exportiert…",
   "export.progressTitle": "Exportieren",
   "export.rendering": "Datei wird gerendert.",
+  "export.status.choosePath": "Speicherort wählen…",
+  "export.status.renderingGif": "GIF wird gerendert…",
+  "export.status.saving": "Wird gespeichert…",
+  "export.status.addingAudio": "Audio wird hinzugefügt…",
   "export.cancel": "Abbrechen",
   "export.dialog.title": "Exportieren",
   "export.dialog.description": "Format, Kodierung, Bildrate und Dateityp wählen.",
@@ -262,6 +266,8 @@ export const de: Record<TranslationKey, string> = {
   "captions.transcribing": "Wird transkribiert…",
   "captions.preparing": "Wird vorbereitet…",
   "captions.clear": "Löschen",
+  "captions.error.noSpeech":
+    "In dieser Aufnahme wurde keine Sprache erkannt.",
 
   "recorder.drag": "Ziehen",
   "recorder.recordings": "Aufnahmen",
@@ -279,6 +285,15 @@ export const de: Record<TranslationKey, string> = {
   "recorder.refresh": "Aktualisieren",
   "recorder.devices.empty":
     "iPhone oder iPad per Kabel verbinden, entsperren und auf Vertrauen tippen.",
+  "recorder.error.screenPermission":
+    "Capptivo in Systemeinstellungen → Datenschutz & Sicherheit → Bildschirmaufnahme erlauben, dann die App beenden und neu öffnen.",
+  "recorder.error.cameraPermission":
+    "Capptivo in Systemeinstellungen → Datenschutz & Sicherheit → Kamera erlauben, um ein Gerät aufzunehmen.",
+  "recorder.error.noDevice":
+    "iPhone oder iPad per Kabel verbinden und dann auswählen.",
+  "recorder.error.noArea": "Zuerst einen Bereich durch Ziehen auswählen.",
+  "recorder.error.noSource":
+    "Zuerst einen Bildschirm oder ein Fenster auswählen.",
   "recorder.camera": "Kamera",
   "recorder.camera.off": "Keine Kamera",
   "recorder.camera.grant": "Kamerazugriff erlauben…",

@@ -70,6 +70,10 @@ export const fr: Record<TranslationKey, string> = {
   "export.exporting": "Exportation…",
   "export.progressTitle": "Exportation",
   "export.rendering": "Génération de votre fichier.",
+  "export.status.choosePath": "Choisissez où enregistrer…",
+  "export.status.renderingGif": "Génération du GIF…",
+  "export.status.saving": "Sauvegarde…",
+  "export.status.addingAudio": "Ajout de l'audio…",
   "export.cancel": "Annuler",
   "export.dialog.title": "Exporter",
   "export.dialog.description":
@@ -271,6 +275,8 @@ export const fr: Record<TranslationKey, string> = {
   "captions.transcribing": "Transcription…",
   "captions.preparing": "Préparation…",
   "captions.clear": "Effacer",
+  "captions.error.noSpeech":
+    "Aucune parole n'a été détectée dans cet enregistrement.",
 
   "recorder.drag": "Déplacer",
   "recorder.recordings": "Enregistrements",
@@ -288,6 +294,14 @@ export const fr: Record<TranslationKey, string> = {
   "recorder.refresh": "Actualiser",
   "recorder.devices.empty":
     "Connectez un iPhone ou iPad avec un câble, déverrouillez-le et appuyez sur Trust.",
+  "recorder.error.screenPermission":
+    "Autorisez Capptivo dans Réglages Système → Confidentialité et sécurité → Enregistrement de l'écran, puis quittez et rouvrez l'app.",
+  "recorder.error.cameraPermission":
+    "Autorisez Capptivo dans Réglages Système → Confidentialité et sécurité → Caméra pour enregistrer un appareil.",
+  "recorder.error.noDevice":
+    "Connectez un iPhone ou iPad avec un câble, puis sélectionnez-le.",
+  "recorder.error.noArea": "Faites d'abord glisser pour sélectionner une zone.",
+  "recorder.error.noSource": "Choisissez d'abord un écran ou une fenêtre.",
   "recorder.camera": "Caméra",
   "recorder.camera.off": "Pas de caméra",
   "recorder.camera.grant": "Autoriser la caméra…",

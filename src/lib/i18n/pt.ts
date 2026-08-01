@@ -68,6 +68,10 @@ export const pt: Record<TranslationKey, string> = {
   "export.exporting": "A exportar…",
   "export.progressTitle": "A exportar",
   "export.rendering": "A renderizar o ficheiro.",
+  "export.status.choosePath": "Escolha onde guardar…",
+  "export.status.renderingGif": "A gerar GIF…",
+  "export.status.saving": "A guardar…",
+  "export.status.addingAudio": "A adicionar áudio…",
   "export.cancel": "Cancelar",
   "export.dialog.title": "Exportar",
   "export.dialog.description": "Escolha formato, codificação, taxa de fotogramas e tipo de ficheiro.",
@@ -262,6 +266,7 @@ export const pt: Record<TranslationKey, string> = {
   "captions.transcribing": "A transcrever…",
   "captions.preparing": "A preparar…",
   "captions.clear": "Limpar",
+  "captions.error.noSpeech": "Não foi detetada fala nesta gravação.",
 
   "recorder.drag": "Arrastar",
   "recorder.recordings": "Gravações",
@@ -279,6 +284,14 @@ export const pt: Record<TranslationKey, string> = {
   "recorder.refresh": "Atualizar",
   "recorder.devices.empty":
     "Ligue um iPhone ou iPad com um cabo, desbloqueie-o e toque em Confiar.",
+  "recorder.error.screenPermission":
+    "Permita o Capptivo em Definições do Sistema → Privacidade e Segurança → Gravação do Ecrã e, em seguida, feche e reabra a app.",
+  "recorder.error.cameraPermission":
+    "Permita o Capptivo em Definições do Sistema → Privacidade e Segurança → Câmara para gravar um dispositivo.",
+  "recorder.error.noDevice":
+    "Ligue um iPhone ou iPad com um cabo e, em seguida, selecione-o.",
+  "recorder.error.noArea": "Arraste primeiro para selecionar uma região.",
+  "recorder.error.noSource": "Escolha primeiro um ecrã ou uma janela.",
   "recorder.camera": "Câmara",
   "recorder.camera.off": "Sem câmara",
   "recorder.camera.grant": "Permitir acesso à câmara…",

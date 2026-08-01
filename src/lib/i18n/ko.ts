@@ -67,6 +67,10 @@ export const ko: Record<TranslationKey, string> = {
   "export.exporting": "내보내는 중…",
   "export.progressTitle": "내보내기",
   "export.rendering": "파일을 렌더링하는 중.",
+  "export.status.choosePath": "저장 위치 선택…",
+  "export.status.renderingGif": "GIF 렌더링 중…",
+  "export.status.saving": "저장 중…",
+  "export.status.addingAudio": "오디오 추가 중…",
   "export.cancel": "취소",
   "export.dialog.title": "내보내기",
   "export.dialog.description": "형식, 인코딩, 프레임 레이트, 파일 유형을 선택하세요.",
@@ -259,6 +263,7 @@ export const ko: Record<TranslationKey, string> = {
   "captions.transcribing": "받아쓰는 중…",
   "captions.preparing": "준비 중…",
   "captions.clear": "지우기",
+  "captions.error.noSpeech": "이 녹화에서 음성이 감지되지 않았습니다.",
 
   "recorder.drag": "드래그",
   "recorder.recordings": "녹화",
@@ -276,6 +281,14 @@ export const ko: Record<TranslationKey, string> = {
   "recorder.refresh": "새로고침",
   "recorder.devices.empty":
     "케이블로 iPhone 또는 iPad를 연결하고, 잠금을 해제한 뒤 신뢰함을 탭하세요.",
+  "recorder.error.screenPermission":
+    "시스템 설정 → 개인정보 보호 및 보안 → 화면 기록에서 Capptivo를 허용한 다음, 앱을 종료하고 다시 여세요.",
+  "recorder.error.cameraPermission":
+    "기기를 녹화하려면 시스템 설정 → 개인정보 보호 및 보안 → 카메라에서 Capptivo를 허용하세요.",
+  "recorder.error.noDevice":
+    "케이블로 iPhone 또는 iPad를 연결한 다음 선택하세요.",
+  "recorder.error.noArea": "먼저 드래그하여 영역을 선택하세요.",
+  "recorder.error.noSource": "먼저 화면 또는 창을 선택하세요.",
   "recorder.camera": "카메라",
   "recorder.camera.off": "카메라 없음",
   "recorder.camera.grant": "카메라 접근 허용…",

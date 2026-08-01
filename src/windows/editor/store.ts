@@ -34,6 +34,7 @@ import {
   type TrimSegment,
   type ZoomFragment,
 } from "@/engine";
+import { translateNow } from "@/lib/i18n";
 import { commands } from "../../ipc/bindings";
 import type { Project } from "../../ipc/types";
 import { describeError } from "../recorder/store";
@@ -1143,7 +1144,7 @@ export const useEditorStore = create<EditorStore>((set, get) => ({
         silences: artifacts.silences,
       });
       if (cues.length === 0) {
-        throw new Error("No speech was detected in this recording.");
+        throw new Error(translateNow("captions.error.noSpeech"));
       }
       set({
         captions: cues,
