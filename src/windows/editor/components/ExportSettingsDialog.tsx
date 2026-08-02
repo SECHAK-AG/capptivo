@@ -9,13 +9,19 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import { Slider } from "@/components/ui/slider";
 import { cn } from "@/lib/utils";
 import { useI18n } from "@/lib/settings";
 import type { TranslationKey } from "@/lib/i18n";
 
 import {
   exportDimensionsFor,
+  formatGifSpeed,
   gifFpsForPreset,
+  GIF_SPEED_MAX,
+  GIF_SPEED_MIN,
+  GIF_SPEED_STEP,
+  clampGifSpeed,
   type ExportAudioEnhance,
   type ExportContainer,
   type ExportEncoding,
@@ -166,7 +172,24 @@ export function ExportSettingsDialog({
             </Field>
           </>
         ) : (
-          <p className="text-[11px] leading-snug text-muted-foreground">{t("export.gif.hint")}</p>
+          <Field label={t("export.gifSpeed")}>
+            <div className="flex items-center gap-3">
+              <Slider
+                id="export-gif-speed"
+                min={GIF_SPEED_MIN}
+                max={GIF_SPEED_MAX}
+                step={GIF_SPEED_STEP}
+                value={[clampGifSpeed(settings.gifSpeed)]}
+                onValueChange={([v]) =>
+                  patch("gifSpeed", clampGifSpeed(v ?? settings.gifSpeed))
+                }
+                className="flex-1"
+              />
+              <span className="w-10 shrink-0 text-right text-sm tabular-nums text-foreground">
+                {formatGifSpeed(settings.gifSpeed)}
+              </span>
+            </div>
+          </Field>
         )}
 
         <Button

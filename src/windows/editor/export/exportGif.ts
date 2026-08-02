@@ -42,7 +42,7 @@ export async function renderGifToSink(
   signal: AbortSignal,
 ): Promise<void> {
   throwIfAborted(signal);
-  const { width, height, fps, gifColors, gifDither } = params;
+  const { width, height, fps, gifColors, gifDither, gifSpeed } = params;
   // GIF is the one consumer of getImageData — the only path that wants a
   // CPU-resident canvas (see CompositorOptions.cpuReadback).
   const sequential = await openSequentialMedia(screenUrl, faceCam).catch(() => null);
@@ -61,7 +61,11 @@ export async function renderGifToSink(
     pool || !gifDither ? null : createDitherPalettizer(width, height);
 
   try {
-    const frameTimes = planFrameTimes(segments, fps);
+    // Speed > 1 samples the timeline less often but keeps the same per-frame
+    // delay, so playback finishes sooner (setpts-style) without changing
+    // display smoothness. Clamp is already applied in resolveExportParams.
+    const sampleFps = fps / Math.max(1, gifSpeed);
+    const frameTimes = planFrameTimes(segments, sampleFps);
     const firstT = frameTimes[0] ?? segments[0]?.start ?? 0;
 
     // Warm the first frame and prove the canvas is readable (not tainted).

@@ -79,8 +79,7 @@ export const ru: Record<TranslationKey, string> = {
   "export.size": "Размер вывода:",
   "export.encoding": "Кодирование",
   "export.gifQuality": "Качество цвета",
-  "export.gif.hint":
-    "GIF использует меньшие размеры и частоту кадров, чтобы файл было удобно делить. Кодирование соответствует размеру палитры.",
+  "export.gifSpeed": "Скорость",
   "export.fps": "Кадр/с",
   "export.type": "Тип",
   "export.confirm": "Экспорт",

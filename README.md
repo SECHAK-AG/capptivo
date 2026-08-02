@@ -8,7 +8,7 @@
 </p>
 
 <p align="center">
-  <img alt="version" src="https://img.shields.io/badge/version-1.0.1-e66028?style=for-the-badge&labelColor=111" />
+  <img alt="version" src="https://img.shields.io/badge/version-1.0.2-e66028?style=for-the-badge&labelColor=111" />
   <img alt="license" src="https://img.shields.io/badge/license-MIT-blue?style=for-the-badge&labelColor=111" />
   <img alt="platform" src="https://img.shields.io/badge/macOS%20%7C%20Windows%20%7C%20Linux-555?style=for-the-badge&labelColor=111&label=platform" />
   <img alt="tauri" src="https://img.shields.io/badge/Tauri-24C8DB?style=for-the-badge&labelColor=111&logo=tauri&logoColor=24C8DB" />

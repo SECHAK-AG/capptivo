@@ -79,8 +79,7 @@ export const de: Record<TranslationKey, string> = {
   "export.size": "Ausgabegröße:",
   "export.encoding": "Kodierung",
   "export.gifQuality": "Farbqualität",
-  "export.gif.hint":
-    "GIF nutzt kleinere Größen und niedrigere Bildraten, damit die Datei teilbar bleibt. Kodierung entspricht der Palettengröße.",
+  "export.gifSpeed": "Geschwindigkeit",
   "export.fps": "FPS",
   "export.type": "Typ",
   "export.confirm": "Exportieren",

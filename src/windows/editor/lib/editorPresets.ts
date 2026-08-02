@@ -22,6 +22,7 @@ import {
 } from "./composition";
 import {
   DEFAULT_EXPORT_SETTINGS,
+  clampGifSpeed,
   type ExportSettings,
 } from "../export/exportSettings";
 import type { FaceCamParams, LookParams, PersistedBackground } from "../store";
@@ -195,7 +196,8 @@ function normalizeExportSettings(raw: unknown): ExportSettings {
     d.audioEnhance === "podcast" || d.audioEnhance === "off"
       ? d.audioEnhance
       : DEFAULT_EXPORT_SETTINGS.audioEnhance;
-  return { format, container, encoding, fps, audioEnhance };
+  const gifSpeed = clampGifSpeed(d.gifSpeed);
+  return { format, container, encoding, fps, audioEnhance, gifSpeed };
 }
 
 function normalizeFaceCam(raw: unknown): FaceCamParams {

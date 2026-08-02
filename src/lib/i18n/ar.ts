@@ -79,8 +79,7 @@ export const ar: Record<TranslationKey, string> = {
   "export.size": "حجم الإخراج:",
   "export.encoding": "الترميز",
   "export.gifQuality": "جودة الألوان",
-  "export.gif.hint":
-    "يستخدم GIF أحجامًا ومعدلات إطارات أقل ليبقى قابلاً للمشاركة. الترميز يتحكم بحجم لوحة الألوان.",
+  "export.gifSpeed": "السرعة",
   "export.fps": "إطار/ث",
   "export.type": "النوع",
   "export.confirm": "تصدير",

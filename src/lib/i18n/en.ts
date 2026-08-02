@@ -76,8 +76,7 @@ export const en = {
   "export.size": "Output size:",
   "export.encoding": "Encoding",
   "export.gifQuality": "Color quality",
-  "export.gif.hint":
-    "GIF uses smaller sizes and lower frame rates so the file stays shareable. Encoding maps to palette size.",
+  "export.gifSpeed": "Speed",
   "export.fps": "FPS",
   "export.type": "Type",
   "export.confirm": "Export",

@@ -78,8 +78,7 @@ export const ko: Record<TranslationKey, string> = {
   "export.size": "출력 크기:",
   "export.encoding": "인코딩",
   "export.gifQuality": "색상 품질",
-  "export.gif.hint":
-    "GIF는 공유하기 쉽도록 작은 크기와 낮은 프레임 레이트를 사용합니다. 인코딩은 팔레트 크기에 해당합니다.",
+  "export.gifSpeed": "속도",
   "export.fps": "FPS",
   "export.type": "유형",
   "export.confirm": "내보내기",

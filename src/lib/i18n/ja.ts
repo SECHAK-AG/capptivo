@@ -78,8 +78,7 @@ export const ja: Record<TranslationKey, string> = {
   "export.size": "出力サイズ:",
   "export.encoding": "エンコード",
   "export.gifQuality": "色の品質",
-  "export.gif.hint":
-    "GIFは共有しやすいよう小さめのサイズと低いフレームレートを使います。エンコードはパレットサイズに対応します。",
+  "export.gifSpeed": "速度",
   "export.fps": "FPS",
   "export.type": "種別",
   "export.confirm": "書き出し",

@@ -76,8 +76,7 @@ export const zh: Record<TranslationKey, string> = {
   "export.size": "输出尺寸：",
   "export.encoding": "编码",
   "export.gifQuality": "色彩质量",
-  "export.gif.hint":
-    "GIF 使用较小尺寸和较低帧率以便分享。编码对应调色板大小。",
+  "export.gifSpeed": "速度",
   "export.fps": "帧率",
   "export.type": "类型",
   "export.confirm": "导出",

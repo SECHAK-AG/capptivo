@@ -12,6 +12,29 @@ export type ExportFps = 24 | 30 | 60;
 /** Voice-enhancement preset applied to the exported audio (ignored for GIF). */
 export type ExportAudioEnhance = "off" | "podcast";
 
+/**
+ * GIF playback speed multiplier (timeline → wall-clock). 1 = real-time;
+ * higher values sample fewer source frames and keep the same frame delay,
+ * so the GIF finishes sooner and stays smaller. Ignored for video.
+ */
+export const GIF_SPEED_MIN = 1;
+export const GIF_SPEED_MAX = 4;
+export const GIF_SPEED_STEP = 0.25;
+export const DEFAULT_GIF_SPEED = 1;
+
+export function clampGifSpeed(raw: unknown): number {
+  const n = typeof raw === "number" ? raw : Number(raw);
+  if (!Number.isFinite(n)) return DEFAULT_GIF_SPEED;
+  const clamped = Math.min(GIF_SPEED_MAX, Math.max(GIF_SPEED_MIN, n));
+  const snapped = Math.round(clamped / GIF_SPEED_STEP) * GIF_SPEED_STEP;
+  // Avoid 1.0000001-style float noise from the step multiply.
+  return Math.round(snapped * 100) / 100;
+}
+
+export function formatGifSpeed(speed: number): string {
+  return `${clampGifSpeed(speed)}×`;
+}
+
 export type ExportSettings = {
   format: ExportFormat;
   /** File container when format is video (ignored for GIF). */
@@ -19,6 +42,8 @@ export type ExportSettings = {
   encoding: ExportEncoding;
   fps: ExportFps;
   audioEnhance: ExportAudioEnhance;
+  /** GIF-only playback speed (1…4). Ignored when format is video. */
+  gifSpeed: number;
 };
 
 export const DEFAULT_EXPORT_SETTINGS: ExportSettings = {
@@ -27,6 +52,7 @@ export const DEFAULT_EXPORT_SETTINGS: ExportSettings = {
   encoding: "balanced",
   fps: 30,
   audioEnhance: "off",
+  gifSpeed: DEFAULT_GIF_SPEED,
 };
 
 /**
@@ -111,6 +137,11 @@ export type ResolvedExportParams = {
   gifColors: number;
   /** Apply Floyd–Steinberg dithering when encoding GIF (ignored for video). */
   gifDither: boolean;
+  /**
+   * GIF playback speed (≥1). Encode samples the timeline at `fps / gifSpeed`
+   * and keeps frame delay at `1/fps`, so output duration ≈ source / speed.
+   */
+  gifSpeed: number;
   format: ExportFormat;
   container: ExportContainer;
   ext: "mp4" | "webm" | "gif";
@@ -132,6 +163,7 @@ export function resolveExportParams(
       : scaledVideoBitrate(settings.encoding, width, height, settings.fps),
     gifColors: GIF_COLORS_FOR_ENCODING[settings.encoding],
     gifDither: isGif && GIF_DITHER_FOR_ENCODING[settings.encoding],
+    gifSpeed: isGif ? clampGifSpeed(settings.gifSpeed) : 1,
     format: settings.format,
     container: settings.container,
     ext: isGif ? "gif" : settings.container,
@@ -147,7 +179,13 @@ export function estimateExportBytes(
   if (resolved.format === "gif") {
     // Palette frames are much smaller than raw pixels, but GIFs balloon —
     // use a generous floor so the precheck catches obvious shortfalls.
-    const raw = keptDurationSec * resolved.width * resolved.height * resolved.fps * 0.15;
+    // Speed shortens wall-clock output (fewer frames), so scale the estimate.
+    const raw =
+      (keptDurationSec / resolved.gifSpeed) *
+      resolved.width *
+      resolved.height *
+      resolved.fps *
+      0.15;
     return Math.max(64 * 1024 * 1024, Math.ceil(raw));
   }
   return Math.ceil((keptDurationSec * resolved.bitrate) / 8 * 1.2);

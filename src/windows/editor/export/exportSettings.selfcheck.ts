@@ -1,15 +1,28 @@
-/** Selfcheck: export bitrate scales with resolution and fps. */
+/** Selfcheck: export bitrate scales; GIF speed clamp + sample rate. */
 
-// ponytail: mirrors `scaledVideoBitrate` in exportSettings.ts — keeps this file
+// ponytail: mirrors helpers in exportSettings.ts — keeps this file
 // dependency-free for Node selfcheck (exportSettings pulls composition).
 const BALANCED = 8_000_000;
 const REF_PIXEL_RATE = 1920 * 1080 * 30;
 const MIN = 500_000;
 const MAX = 50_000_000;
 
+const GIF_SPEED_MIN = 1;
+const GIF_SPEED_MAX = 4;
+const GIF_SPEED_STEP = 0.25;
+const DEFAULT_GIF_SPEED = 1;
+
 function scaled(encodingBitrate: number, w: number, h: number, fps: number): number {
   const raw = Math.round(encodingBitrate * ((w * h * fps) / REF_PIXEL_RATE));
   return Math.max(MIN, Math.min(MAX, raw));
+}
+
+function clampGifSpeed(raw: unknown): number {
+  const n = typeof raw === "number" ? raw : Number(raw);
+  if (!Number.isFinite(n)) return DEFAULT_GIF_SPEED;
+  const clamped = Math.min(GIF_SPEED_MAX, Math.max(GIF_SPEED_MIN, n));
+  const snapped = Math.round(clamped / GIF_SPEED_STEP) * GIF_SPEED_STEP;
+  return Math.round(snapped * 100) / 100;
 }
 
 function assert(cond: boolean, msg: string): void {
@@ -24,6 +37,25 @@ assert(hd60 > sd24, `1080p60 (${hd60}) should exceed 640×360@24 (${sd24})`);
 assert(
   Math.abs(hd30 - BALANCED) < 500_000,
   `1080p30 balanced should be ~8 Mbps, got ${hd30}`,
+);
+
+assert(clampGifSpeed(undefined) === DEFAULT_GIF_SPEED, "missing → default");
+assert(clampGifSpeed(0) === GIF_SPEED_MIN, "below min clamps");
+assert(clampGifSpeed(99) === GIF_SPEED_MAX, "above max clamps");
+assert(clampGifSpeed(1.3) === 1.25, "snaps to step");
+assert(clampGifSpeed(2) === 2, "exact step preserved");
+
+// Encode samples at fps/speed and keeps delay at 1/fps → duration ≈ source/speed.
+const fps = 15;
+const sourceSec = 10;
+const speed = 2;
+const sampleFps = fps / speed;
+const frameCount = Math.round(sourceSec * sampleFps);
+const delaySec = 1 / fps;
+const playbackSec = frameCount * delaySec;
+assert(
+  Math.abs(playbackSec - sourceSec / speed) < 1e-9,
+  `2× should halve wall-clock (got ${playbackSec}s for ${sourceSec}s @ ${fps}fps)`,
 );
 
 console.log("exportSettings.selfcheck: ok");
