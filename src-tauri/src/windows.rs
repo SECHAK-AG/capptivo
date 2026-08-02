@@ -1219,8 +1219,26 @@ fn create_recorder_popover(app: &AppHandle) -> tauri::Result<()> {
     Ok(())
 }
 
+/// Schedule `work` for the next UI-thread turn *after* the current stack
+/// unwinds. `AppHandle::run_on_main_thread` runs inline when already on the UI
+/// thread, so we must hop off first — otherwise a sync `#[tauri::command]`
+/// from another WebView would still build WebView2 inside that invoke
+/// (blank window or native abort on Windows).
+///
+/// Use this for every *new* WebView creation reachable from recorder/editor IPC.
+pub(crate) fn defer_on_ui(app: AppHandle, work: impl FnOnce(&AppHandle) + Send + 'static) {
+    let _ = std::thread::Builder::new()
+        .name("capptivo-ui".into())
+        .spawn(move || {
+            let app2 = app.clone();
+            let _ = app.run_on_main_thread(move || work(&app2));
+        });
+}
+
 /// Show (or update) the frameless always-on-top webcam preview. Placement only —
 /// shape/radius for the *export* face-cam live in the editor.
+///
+/// New-window creation is deferred — same Windows WebView2 rule as library/editor.
 #[tauri::command]
 pub fn show_camera_preview(app: AppHandle, device_id: String) -> tauri::Result<()> {
     if device_id.is_empty() {
@@ -1244,12 +1262,30 @@ pub fn show_camera_preview(app: AppHandle, device_id: String) -> tauri::Result<(
         *last = Some(device_id.clone());
     }
 
+    defer_on_ui(app, move |app| {
+        if let Err(e) = create_camera_preview_window(app, &device_id) {
+            tracing::warn!(%e, "camera preview: create failed");
+        }
+    });
+    Ok(())
+}
+
+fn create_camera_preview_window(app: &AppHandle, device_id: &str) -> tauri::Result<()> {
+    // Race: a prior deferred create (or another caller) may have won.
+    if let Some(win) = app.get_webview_window(CAMERA_LABEL) {
+        let _ = win.emit(CAMERA_DEVICE_EVENT, device_id);
+        let _ = win.set_content_protected(false);
+        set_follows_spaces(&win, true);
+        win.show()?;
+        return Ok(());
+    }
+
     let url = format!(
         "camera.html?device={}",
-        urlencoding_minimal(&device_id)
+        urlencoding_minimal(device_id)
     );
-    let (x, y) = camera_default_position(&app);
-    let win = WebviewWindowBuilder::new(&app, CAMERA_LABEL, WebviewUrl::App(url.into()))
+    let (x, y) = camera_default_position(app);
+    let win = WebviewWindowBuilder::new(app, CAMERA_LABEL, WebviewUrl::App(url.into()))
         .title("Capptivo Camera")
         .inner_size(CAMERA_W, CAMERA_H)
         .resizable(false)
@@ -1271,8 +1307,8 @@ pub fn show_camera_preview(app: AppHandle, device_id: String) -> tauri::Result<(
     win.show()?;
     // Bubble opened mid-recording: apply the Windows capture opt-out now
     // (recordings started later re-apply it to all overlay chrome).
-    if recording_active(&app) {
-        set_capture_exclusion(&app, true);
+    if recording_active(app) {
+        set_capture_exclusion(app, true);
     }
     Ok(())
 }
@@ -1478,20 +1514,6 @@ pub fn toggle_annotation_overlay(app: &AppHandle) -> tauri::Result<()> {
         }
     }
     show_annotation_overlay_inner(app)
-}
-
-/// Schedule `work` for the next UI-thread turn *after* the current stack
-/// unwinds. `AppHandle::run_on_main_thread` runs inline when already on the UI
-/// thread, so we must hop off first — otherwise a sync `#[tauri::command]`
-/// from the recorder webview would still build WebView2 inside that invoke
-/// (native abort on Windows).
-fn defer_on_ui(app: AppHandle, work: impl FnOnce(&AppHandle) + Send + 'static) {
-    let _ = std::thread::Builder::new()
-        .name("annotation-ui".into())
-        .spawn(move || {
-            let app2 = app.clone();
-            let _ = app.run_on_main_thread(move || work(&app2));
-        });
 }
 
 /// Full-screen ink overlay while recording. Not SCK-excluded so drawings land
@@ -1847,6 +1869,35 @@ fn build_editor_window(
     Ok(win)
 }
 
+/// Focus an existing editor/library window, or schedule creation off the caller
+/// stack. New WebViews must never be built inside a sync IPC invoke from another
+/// WebView (Windows WebView2 blank/abort) — see [`defer_on_ui`].
+fn ensure_editor_window(
+    app: &AppHandle,
+    label: &str,
+    url: &str,
+    title: &str,
+) -> tauri::Result<()> {
+    if let Some(win) = app.get_webview_window(label) {
+        return present_on_active_monitor(app, &win);
+    }
+
+    let app = app.clone();
+    let label = label.to_string();
+    let url = url.to_string();
+    let title = title.to_string();
+    defer_on_ui(app, move |app| {
+        if let Some(win) = app.get_webview_window(&label) {
+            let _ = present_on_active_monitor(app, &win);
+            return;
+        }
+        if let Err(e) = build_editor_window(app, &label, &url, &title) {
+            tracing::warn!(%e, %label, "failed to create editor window");
+        }
+    });
+    Ok(())
+}
+
 fn emit_show_library(win: &tauri::WebviewWindow) {
     let _ = win.emit(SHOW_LIBRARY_EVENT, ());
 }
@@ -1863,6 +1914,8 @@ pub fn present_window(app: AppHandle, window: tauri::WebviewWindow) -> tauri::Re
 /// Opening the library flips macOS to `Regular` (same as a project editor) so
 /// the green traffic light shows expand arrows. Overlays are dismissed/unpinned
 /// first so that flip does not yank Mission Control to the primary display.
+///
+/// Creating the standalone library WebView is deferred (Windows-safe).
 #[tauri::command]
 pub fn open_library(app: AppHandle) -> tauri::Result<()> {
     // Prefer an already-open editor — same window, just swap the shell.
@@ -1884,13 +1937,12 @@ pub fn open_library(app: AppHandle) -> tauri::Result<()> {
         return Ok(());
     }
 
-    let _win = build_editor_window(
+    ensure_editor_window(
         &app,
         LIBRARY_LABEL,
         "editor.html?view=library",
         "Capptivo Library",
-    )?;
-    Ok(())
+    )
 }
 
 /// Open (or focus) the editor for a project. Used after stop and from the library.
@@ -1901,17 +1953,13 @@ pub fn open_editor(app: AppHandle, project_id: String) -> tauri::Result<()> {
 
 /// Open (or focus) the editor window for a project. Switches the app to a
 /// Dock-visible `Regular` activation policy on macOS.
+///
+/// New windows are created via [`ensure_editor_window`] (deferred) so this is
+/// safe from sync recorder/library IPC on Windows.
 pub fn open_editor_window(app: &AppHandle, project_id: &str) -> tauri::Result<()> {
     let label = format!("{EDITOR_LABEL_PREFIX}{project_id}");
-
-    if let Some(win) = app.get_webview_window(&label) {
-        present_on_active_monitor(app, &win)?;
-        return Ok(());
-    }
-
     let url = format!("editor.html?project={project_id}");
-    let _win = build_editor_window(app, &label, &url, "Capptivo Editor")?;
-    Ok(())
+    ensure_editor_window(app, &label, &url, "Capptivo Editor")
 }
 
 /// Close the editor for a project if it is open (e.g. after delete).
