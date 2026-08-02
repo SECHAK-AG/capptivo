@@ -131,6 +131,17 @@ assert(
   texture.bind(element as unknown as HTMLVideoElement) !== null,
   "video element binds",
 );
+
+// Metadata-only elements must not bind — face-cam would show shadow with no pixels.
+const metaOnly = new FakeVideoElement();
+metaOnly.readyState = 1; // HAVE_METADATA
+const face = new SourceTexture("camera", 1920);
+assert(
+  face.bind(metaOnly as unknown as HTMLVideoElement) === null,
+  "metadata-only video refuses bind",
+);
+face.destroy();
+
 texture.destroy();
 assert(element.src === "blob:selfcheck", "destroy leaves the element's src");
 assert(element.loadCalls === 0, "destroy does not re-load the element");

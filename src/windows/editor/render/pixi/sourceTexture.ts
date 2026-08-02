@@ -121,6 +121,12 @@ export class SourceTexture {
       this.release();
       return null;
     }
+    // WKWebView sets videoWidth after metadata while GPU upload stays blank.
+    // Refuse until HAVE_CURRENT_DATA so face-cam does not show shadow-only.
+    if (isVideoElement(image) && !hasDecodedPixels(image)) {
+      this.release();
+      return null;
+    }
     const size = sizeOf(image);
     if (size.width <= 0 || size.height <= 0) {
       this.release();

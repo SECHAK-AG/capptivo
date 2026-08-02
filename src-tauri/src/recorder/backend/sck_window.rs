@@ -208,7 +208,7 @@ fn run_window_capture_inner(
     Ok(())
 }
 
-/// SCK stream size hint — Recordly formula (truncate, not round). Encoder
+/// SCK stream size hint — truncate, not round. Encoder
 /// dimensions still come from the first CVPixelBuffer, not this value.
 fn stream_config_pixels(window: &UnsafeSCWindow, displays: &[ShareId<UnsafeSCDisplay>]) -> (u32, u32) {
     let f = window.get_frame();
@@ -224,7 +224,7 @@ fn stream_config_pixels(window: &UnsafeSCWindow, displays: &[ShareId<UnsafeSCDis
     picker_sources::points_to_even_pixels(rect.width, rect.height, scale)
 }
 
-/// macOS 14+: exclude window shadow from single-window capture (matches Recordly).
+/// macOS 14+: exclude window shadow from single-window capture.
 fn tune_window_stream_config(config_ref: &UnsafeStreamConfigurationRef) {
     unsafe {
         let _: () = msg_send![config_ref, setIgnoreShadowsSingleWindow: BOOL::from(true)];

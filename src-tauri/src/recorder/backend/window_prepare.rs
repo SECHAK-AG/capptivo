@@ -1,7 +1,7 @@
 //! Bring a target window forward before window capture.
 //!
-//! SCK only streams frames for windows in the on-screen shareable set (Recordly
-//! uses the same gate). Activation uses AppKit + `reopen` (no Accessibility);
+//! SCK only streams frames for windows in the on-screen shareable set.
+//! Activation uses AppKit + `reopen` (no Accessibility);
 //! PID-based System Events is best-effort for unminimize / raise.
 
 use crate::error::{AppError, AppResult};
@@ -280,7 +280,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn sanitize_app_name_matches_recordly_allowlist() {
+    fn sanitize_app_name_matches_allowlist() {
         assert_eq!(sanitize_app_name("Google Chrome"), Some("Google Chrome"));
         assert_eq!(sanitize_app_name("  Safari  "), Some("Safari"));
         assert!(sanitize_app_name("bad;script").is_none());

@@ -63,7 +63,7 @@ pub fn display_for_rect(rect: &CaptureRect) -> Option<u32> {
     best.map(|(id, _)| id)
 }
 
-/// Integer backing scale for a display (matches Recordly's `scaleFactor(for:)`).
+/// Integer backing scale for a display (matches `scaleFactor(for:)`).
 pub fn display_scale_factor(display_id: u32) -> u32 {
     let cg = CGDisplay::new(display_id);
     cg.display_mode()
@@ -74,7 +74,7 @@ pub fn display_scale_factor(display_id: u32) -> u32 {
         .unwrap_or(1)
 }
 
-/// Points → even pixel dimensions (truncate like Recordly's `Int(frame) * scale`).
+/// Points → even pixel dimensions (truncate like `Int(frame) * scale`).
 pub fn points_to_even_pixels(width_pts: f64, height_pts: f64, scale: u32) -> (u32, u32) {
     let mut w = (width_pts as u32).saturating_mul(scale).max(2);
     let mut h = (height_pts as u32).saturating_mul(scale).max(2);
@@ -83,7 +83,7 @@ pub fn points_to_even_pixels(width_pts: f64, height_pts: f64, scale: u32) -> (u3
     (w.max(2), h.max(2))
 }
 
-/// Display that contains or intersects a window frame (Recordly picker logic).
+/// Display that contains or intersects a window frame.
 pub fn display_for_window_frame(
     frame: &CaptureRect,
     displays: &[ShareId<UnsafeSCDisplay>],
@@ -208,7 +208,7 @@ fn shareable_content() -> AppResult<objc_id::Id<UnsafeSCShareableContent>> {
     })
 }
 
-/// On-screen windows only — matches Recordly's capture-time `SCShareableContent` query.
+/// On-screen windows only — matches the capture-time `SCShareableContent` query.
 pub fn shareable_content_on_screen() -> AppResult<objc_id::Id<UnsafeSCShareableContent>> {
     use screencapturekit_sys::shareable_content::ExcludingDesktopWindowsConfig;
     let config = ExcludingDesktopWindowsConfig::default();
