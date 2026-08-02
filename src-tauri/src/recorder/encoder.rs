@@ -1116,11 +1116,12 @@ fn mux_pcm_audio(
 }
 
 pub(crate) fn ffmpeg_path() -> PathBuf {
-    proc::sidecar_or_path("ffmpeg")
+    // Namespaced so Linux .deb/.rpm don't overwrite system `/usr/bin/ffmpeg`.
+    proc::sidecar_or_path("capptivo-ffmpeg", &["ffmpeg"])
 }
 
 pub(crate) fn ffprobe_path() -> PathBuf {
-    proc::sidecar_or_path("ffprobe")
+    proc::sidecar_or_path("capptivo-ffprobe", &["ffprobe"])
 }
 
 #[cfg(test)]

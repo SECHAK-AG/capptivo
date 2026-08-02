@@ -10,12 +10,15 @@ stricter terms than MIT and are not re-licensed by Capptivo.
 ## FFmpeg / ffprobe (sidecar binaries)
 
 Capptivo downloads static **FFmpeg** and **ffprobe** binaries at build time
-(`scripts/fetch-ffmpeg.mjs`) and bundles them as Tauri `externalBin` sidecars.
-They run as a **separate process** (no linking into Capptivo).
+(`scripts/fetch-ffmpeg.mjs`) and bundles them as Tauri `externalBin` sidecars
+named `capptivo-ffmpeg` / `capptivo-ffprobe` (so Linux packages install them
+beside the app without colliding with the system `ffmpeg` package). They run
+as a **separate process** (no linking into Capptivo).
 
 | Item | Detail |
 |------|--------|
 | Component | FFmpeg / ffprobe |
+| Bundled names | `capptivo-ffmpeg`, `capptivo-ffprobe` |
 | Typical license | GPL (static builds include GPL-licensed codecs such as libx264) |
 | Sources used | [BtbN/FFmpeg-Builds](https://github.com/BtbN/FFmpeg-Builds) (Windows/Linux GPL builds); [ffmpeg.martin-riedl.de](https://ffmpeg.martin-riedl.de/) (macOS) |
 | Upstream | https://ffmpeg.org/ · https://github.com/FFmpeg/FFmpeg |

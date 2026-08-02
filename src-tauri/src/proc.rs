@@ -4,6 +4,9 @@
 //! Centralized so platform quirks live in exactly one place:
 //! - Windows: `CREATE_NO_WINDOW`, or every spawn flashes a console window.
 //! - Windows: sidecar binaries carry an `.exe` suffix.
+//! - Linux packages: sidecars are namespaced (`capptivo-ffmpeg`) so they do
+//!   not collide with system `/usr/bin/ffmpeg` when Tauri installs them
+//!   beside the app binary.
 
 use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
@@ -34,18 +37,23 @@ pub fn exe_name(base: &str) -> String {
 }
 
 /// Resolve a sidecar tool: prefer a copy bundled next to the app executable
-/// (Tauri `externalBin` drops it there), fall back to `$PATH`.
-pub fn sidecar_or_path(base: &str) -> PathBuf {
-    let name = exe_name(base);
+/// (Tauri `externalBin` drops it there), then the first of `path_fallbacks`
+/// found on `$PATH`, else the first fallback as a bare name for `Command`.
+pub fn sidecar_or_path(sidecar: &str, path_fallbacks: &[&str]) -> PathBuf {
+    let name = exe_name(sidecar);
     if let Ok(exe) = std::env::current_exe() {
         if let Some(dir) = exe.parent() {
-            let sidecar = dir.join(&name);
-            if sidecar.exists() {
-                return sidecar;
+            let path = dir.join(&name);
+            if path.is_file() {
+                return path;
             }
         }
     }
-    PathBuf::from(name)
+    find_in_path(path_fallbacks).unwrap_or_else(|| {
+        PathBuf::from(exe_name(
+            path_fallbacks.first().copied().unwrap_or(sidecar),
+        ))
+    })
 }
 
 /// Walk `$PATH` for the first existing candidate among `names`.
@@ -66,3 +74,24 @@ pub fn find_in_path(names: &[&str]) -> Option<PathBuf> {
 fn is_executable_file(path: &Path) -> bool {
     path.is_file()
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn sidecar_or_path_falls_back_to_bare_ffmpeg_name() {
+        // When the namespaced sidecar isn't next to the test binary, resolve
+        // via PATH / bare `ffmpeg` — never return the missing sidecar stem.
+        let got = sidecar_or_path(
+            "capptivo-ffmpeg-definitely-not-bundled-for-test",
+            &["ffmpeg"],
+        );
+        let name = got.file_name().and_then(|s| s.to_str()).unwrap_or("");
+        assert!(
+            name == exe_name("ffmpeg") || name.ends_with(&exe_name("ffmpeg")),
+            "unexpected fallback: {got:?}"
+        );
+    }
+}
+

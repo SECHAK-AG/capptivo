@@ -129,7 +129,9 @@ pnpm tauri dev
 ```
 
 Requires **Rust**, **Node**, and **pnpm**. FFmpeg is fetched automatically as a
-per-platform sidecar on first dev/build (`scripts/fetch-ffmpeg.mjs`).
+per-platform sidecar on first dev/build (`scripts/fetch-ffmpeg.mjs`), installed
+as `capptivo-ffmpeg` / `capptivo-ffprobe` so Linux packages do not collide with
+the system `ffmpeg` package.
 
 macOS: grant Screen Recording in System Settings on first launch, then relaunch.  
 Open the recorder with **⌥⇧R** (**Alt+Shift+R** on Windows/Linux), or click the tray icon.

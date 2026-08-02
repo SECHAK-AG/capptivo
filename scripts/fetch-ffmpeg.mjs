@@ -2,9 +2,13 @@
  * Fetch static FFmpeg + ffprobe sidecar binaries into `src-tauri/binaries/`,
  * named per target triple the way Tauri's `bundle.externalBin` expects:
  *
- *   src-tauri/binaries/ffmpeg-aarch64-apple-darwin
- *   src-tauri/binaries/ffprobe-x86_64-pc-windows-msvc.exe
+ *   src-tauri/binaries/capptivo-ffmpeg-aarch64-apple-darwin
+ *   src-tauri/binaries/capptivo-ffprobe-x86_64-pc-windows-msvc.exe
  *   …
+ *
+ * Sidecars are namespaced (`capptivo-*`) so Linux .deb/.rpm installs land at
+ * `/usr/bin/capptivo-ffmpeg` instead of colliding with the system `ffmpeg`
+ * package (https://github.com/SECHAK-AG/capptivo/issues/3).
  *
  * Runs automatically via `beforeDevCommand` / `beforeBuildCommand` and is
  * idempotent: if the binaries for the requested target already exist, it
@@ -46,7 +50,12 @@ import { fileURLToPath } from "node:url";
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const DEST_DIR = join(ROOT, "src-tauri", "binaries");
-const TOOLS = ["ffmpeg", "ffprobe"];
+
+/** Archive member name → installed sidecar stem (Tauri `externalBin` basename). */
+const TOOLS = [
+  { archive: "ffmpeg", sidecar: "capptivo-ffmpeg" },
+  { archive: "ffprobe", sidecar: "capptivo-ffprobe" },
+];
 
 /**
  * One entry per supported target triple.
@@ -58,9 +67,9 @@ const SOURCES = {
     kind: "zips",
     exe: "",
     urls: Object.fromEntries(
-      TOOLS.map((t) => [
-        t,
-        `https://ffmpeg.martin-riedl.de/redirect/latest/macos/arm64/release/${t}.zip`,
+      TOOLS.map(({ archive }) => [
+        archive,
+        `https://ffmpeg.martin-riedl.de/redirect/latest/macos/arm64/release/${archive}.zip`,
       ]),
     ),
   },
@@ -68,9 +77,9 @@ const SOURCES = {
     kind: "zips",
     exe: "",
     urls: Object.fromEntries(
-      TOOLS.map((t) => [
-        t,
-        `https://ffmpeg.martin-riedl.de/redirect/latest/macos/amd64/release/${t}.zip`,
+      TOOLS.map(({ archive }) => [
+        archive,
+        `https://ffmpeg.martin-riedl.de/redirect/latest/macos/amd64/release/${archive}.zip`,
       ]),
     ),
   },
@@ -102,12 +111,12 @@ function defaultTriple() {
   return fromTauri || hostTriple();
 }
 
-function destPath(tool, triple) {
-  return join(DEST_DIR, `${tool}-${triple}${SOURCES[triple].exe}`);
+function destPath(sidecar, triple) {
+  return join(DEST_DIR, `${sidecar}-${triple}${SOURCES[triple].exe}`);
 }
 
 function hasAll(triple) {
-  return TOOLS.every((tool) => existsSync(destPath(tool, triple)));
+  return TOOLS.every(({ sidecar }) => existsSync(destPath(sidecar, triple)));
 }
 
 async function download(url, toFile) {
@@ -135,8 +144,8 @@ function findFile(dir, name) {
   return null;
 }
 
-function install(from, tool, triple) {
-  const to = destPath(tool, triple);
+function install(from, sidecar, triple) {
+  const to = destPath(sidecar, triple);
   copyFileSync(from, to);
   if (!SOURCES[triple].exe) chmodSync(to, 0o755);
   console.log(`  ✓ ${to.replace(`${ROOT}/`, "")}`);
@@ -159,24 +168,24 @@ async function fetchTarget(triple, force) {
   const work = mkdtempSync(join(tmpdir(), "capptivo-ffmpeg-"));
   try {
     if (source.kind === "zips") {
-      for (const tool of TOOLS) {
-        const archive = join(work, `${tool}.zip`);
-        await download(source.urls[tool], archive);
-        const out = join(work, tool);
+      for (const { archive, sidecar } of TOOLS) {
+        const zipPath = join(work, `${archive}.zip`);
+        await download(source.urls[archive], zipPath);
+        const out = join(work, archive);
         mkdirSync(out);
-        extract(archive, out);
-        const bin = findFile(out, tool);
-        if (!bin) throw new Error(`${tool} not found in ${source.urls[tool]}`);
-        install(bin, tool, triple);
+        extract(zipPath, out);
+        const bin = findFile(out, archive);
+        if (!bin) throw new Error(`${archive} not found in ${source.urls[archive]}`);
+        install(bin, sidecar, triple);
       }
     } else {
-      const archive = join(work, source.url.split("/").pop());
-      await download(source.url, archive);
-      extract(archive, work);
-      for (const tool of TOOLS) {
-        const bin = findFile(work, `${tool}${source.exe}`);
-        if (!bin) throw new Error(`${tool} not found in ${source.url}`);
-        install(bin, tool, triple);
+      const archivePath = join(work, source.url.split("/").pop());
+      await download(source.url, archivePath);
+      extract(archivePath, work);
+      for (const { archive, sidecar } of TOOLS) {
+        const bin = findFile(work, `${archive}${source.exe}`);
+        if (!bin) throw new Error(`${archive} not found in ${source.url}`);
+        install(bin, sidecar, triple);
       }
     }
   } finally {
