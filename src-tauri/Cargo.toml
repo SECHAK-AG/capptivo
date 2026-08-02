@@ -99,6 +99,8 @@ tokio = { version = "1", features = ["rt", "time"], optional = true }
 # pipewire-pulse, and on plain PulseAudio).
 libpulse-binding = { version = "2", optional = true }
 libpulse-simple-binding = { version = "2", optional = true }
+# Mic device enumeration only (same host API as Windows). Capture stays on Pulse.
+cpal = { version = "0.16", optional = true }
 # Global cursor sampling on X11 sessions (pure-Rust XCB connection).
 x11rb = { version = "0.13", optional = true }
 
@@ -123,6 +125,7 @@ portal-capture = [
     "dep:tokio",
     "dep:libpulse-binding",
     "dep:libpulse-simple-binding",
+    "dep:cpal",
     "dep:x11rb",
 ]
 

@@ -173,7 +173,7 @@ fn run_mic(
 ) {
     let spec = Spec {
         format: Format::F32le,
-        channels: SYSTEM_AUDIO_CHANNELS,
+        channels: SYSTEM_AUDIO_CHANNELS as u8,
         rate: SYSTEM_AUDIO_RATE,
     };
     if !spec.is_valid() {
