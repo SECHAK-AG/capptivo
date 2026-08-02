@@ -22,6 +22,7 @@
     "allow-list-projects",
     "allow-load-project",
     "allow-ensure-proxy",
+    "allow-ensure-camera-track",
     "allow-save-editor-state",
     "allow-rename-project",
     "allow-delete-project",

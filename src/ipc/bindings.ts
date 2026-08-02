@@ -22,6 +22,9 @@ export const commands = {
     invoke<CaptureSource[]>("list_capture_sources", { includeThumbnails }),
   /** Attached iPhones / iPads — CoreMediaIO, gated by camera permission. */
   listCaptureDevices: () => invoke<CaptureDevice[]>("list_capture_devices"),
+  /** Native mics — never WebView getUserMedia (that blacks the face-cam). */
+  listMicrophones: () =>
+    invoke<{ deviceId: string; label: string }[]>("list_microphones"),
   platformCapabilities: () =>
     invoke<PlatformCapabilities>("platform_capabilities"),
   checkPermissions: () => invoke<PermissionStatus>("check_permissions"),
@@ -38,6 +41,8 @@ export const commands = {
     invoke<void>("start_recording", { config }),
   pauseRecording: () => invoke<void>("pause_recording"),
   resumeRecording: () => invoke<void>("resume_recording"),
+  setRecordingMicMuted: (muted: boolean) =>
+    invoke<void>("set_recording_mic_muted", { muted }),
   stopRecording: () => invoke<string>("stop_recording"),
   pickCaptureArea: () => invoke<CaptureAreaSelection>("pick_capture_area"),
   completeAreaPick: (x: number, y: number, width: number, height: number) =>
@@ -78,18 +83,21 @@ export const commands = {
   dismissCameraPreview: () => invoke<void>("dismiss_camera_preview"),
   setCameraPreviewVisible: (visible: boolean) =>
     invoke<void>("set_camera_preview_visible", { visible }),
+  /** Build the face-cam MediaRecorder during the countdown, without starting it. */
+  armCameraCapture: () => invoke<void>("arm_camera_capture"),
   flushCameraCapture: () => invoke<void>("flush_camera_capture"),
+  /**
+   * Stamp the face-cam's first frame onto the capture clock; returns the offset
+   * in ms from the screen's first frame (signed). Call immediately after
+   * `MediaRecorder.start()` — the measurement includes everything after it.
+   */
+  markCameraStarted: () => invoke<number>("mark_camera_started"),
   beginCameraFile: (projectId: string, filename: string) =>
     invoke<void>("begin_camera_file", { projectId, filename }),
   // Chunk must be the whole invoke arg — nested typed arrays JSON-encode per byte.
   writeCameraChunk: (chunk: Uint8Array) =>
     invoke<void>("write_camera_chunk", chunk),
   finishCameraFile: () => invoke<string | null>("finish_camera_file"),
-  flushMicCapture: () => invoke<void>("flush_mic_capture"),
-  beginMicFile: (projectId: string, filename: string) =>
-    invoke<void>("begin_mic_file", { projectId, filename }),
-  writeMicChunk: (chunk: Uint8Array) => invoke<void>("write_mic_chunk", chunk),
-  finishMicFile: () => invoke<string | null>("finish_mic_file"),
   showAnnotationOverlay: () => invoke<void>("show_annotation_overlay"),
   hideAnnotationOverlay: () => invoke<void>("hide_annotation_overlay"),
   /** Pause/resume native multi-monitor follow while a drawing tool is armed. */
@@ -150,6 +158,18 @@ export const commands = {
       "ensure_proxy",
       { projectId },
     ),
+  /**
+   * Normalizes the recorded face-cam WebM into a seekable H.264 MP4 the
+   * `<video>` compositing path can actually upload. `pending` means a transcode
+   * is running and `project://camera-ready` will follow.
+   */
+  ensureCameraTrack: (projectId: string) =>
+    invoke<{
+      camera: string | null;
+      pending: boolean;
+      /** Face-cam start offset vs the screen timeline; null when unmeasured. */
+      offsetMs: number | null;
+    }>("ensure_camera_track", { projectId }),
   /** Migrates fragmented recordings to seekable MP4; no-op once progressive. */
   ensureSeekableRecording: (projectId: string) =>
     invoke<void>("ensure_seekable_recording", { projectId }),

@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-arm-camera-capture"
+description = "Enables the arm_camera_capture command without any pre-configured scope."
+commands.allow = ["arm_camera_capture"]
+
+[[permission]]
+identifier = "deny-arm-camera-capture"
+description = "Denies the arm_camera_capture command without any pre-configured scope."
+commands.deny = ["arm_camera_capture"]

@@ -135,23 +135,28 @@ fn candidates() -> &'static [EncoderChoice] {
 /// return the cached pick.
 pub fn pick(ffmpeg: &Path) -> &'static EncoderChoice {
     static PICK: OnceLock<&'static EncoderChoice> = OnceLock::new();
-    PICK.get_or_init(|| {
-        let all = candidates();
-        for choice in all {
-            if probe(ffmpeg, choice) {
-                tracing::info!(encoder = choice.name, "selected H.264 encoder");
-                return choice;
-            }
-            tracing::debug!(encoder = choice.name, "H.264 encoder probe failed");
+    PICK.get_or_init(|| select(ffmpeg))
+}
+
+/// The probe loop behind [`pick`], without the cache. Split out so the fallback
+/// behaviour is testable — asserting on `pick` makes the result depend on
+/// whichever test happened to warm the `OnceLock` first.
+fn select(ffmpeg: &Path) -> &'static EncoderChoice {
+    let all = candidates();
+    for choice in all {
+        if probe(ffmpeg, choice) {
+            tracing::info!(encoder = choice.name, "selected H.264 encoder");
+            return choice;
         }
-        // Every hardware probe failed — software encode is the safe last resort.
-        let fallback = all.last().unwrap_or(&SOFTWARE_FALLBACK);
-        tracing::warn!(
-            encoder = fallback.name,
-            "all encoder probes failed; falling back to software encoder"
-        );
-        fallback
-    })
+        tracing::debug!(encoder = choice.name, "H.264 encoder probe failed");
+    }
+    // Every hardware probe failed — software encode is the safe last resort.
+    let fallback = all.last().unwrap_or(&SOFTWARE_FALLBACK);
+    tracing::warn!(
+        encoder = fallback.name,
+        "all encoder probes failed; falling back to software encoder"
+    );
+    fallback
 }
 
 /// Encode 2 synthetic frames to the null muxer. Cheap, and exercises the real
@@ -182,8 +187,8 @@ mod tests {
     }
 
     #[test]
-    fn pick_falls_back_to_software_when_all_probes_fail() {
-        let choice = pick(Path::new("/nonexistent/ffmpeg-for-test"));
+    fn selection_falls_back_to_software_when_all_probes_fail() {
+        let choice = select(Path::new("/nonexistent/ffmpeg-for-test"));
         assert_eq!(choice.name, "libx264");
     }
 }

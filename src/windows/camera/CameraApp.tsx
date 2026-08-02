@@ -93,7 +93,11 @@ export function CameraApp() {
     bindCameraCaptureApi({
       getDeviceId: () => deviceRef.current,
       getVideo: () => videoRef.current,
-      reopen: (deviceId) => reopen(deviceId, { force: true }),
+      // Unforced: a live preview stream is reused as-is. Re-acquiring on the
+      // record path costs face-cam frames the screen track already has, and a
+      // genuinely dead stream still reopens — `reopen` checks liveness, and the
+      // track's `ended` handler covers a stream that dies mid-take.
+      ensureStream: (deviceId) => reopen(deviceId),
     });
     const initial = deviceFromUrl();
     if (initial) void reopen(initial, { force: true });

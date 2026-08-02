@@ -22,11 +22,11 @@ pub struct AppState {
     pub next_export_id: Mutex<u64>,
     /// Optional face-cam file being written by the camera WebView during capture.
     pub camera_sink: Mutex<Option<ExportSink>>,
-    /// Narration track from the recorder WebView (`mic.webm`).
-    pub mic_sink: Mutex<Option<ExportSink>>,
     /// Project ids with a preview-proxy transcode in flight, so concurrent
     /// `ensure_proxy` calls coalesce to a single FFmpeg pass.
     pub proxy_jobs: Mutex<HashSet<String>>,
+    /// Same coalescing for the face-cam normalization pass (`ensure_camera_track`).
+    pub camera_jobs: Mutex<HashSet<String>>,
 }
 
 pub struct ExportSink {
@@ -75,8 +75,8 @@ impl AppState {
             exports: Mutex::new(HashMap::new()),
             next_export_id: Mutex::new(1),
             camera_sink: Mutex::new(None),
-            mic_sink: Mutex::new(None),
             proxy_jobs: Mutex::new(HashSet::new()),
+            camera_jobs: Mutex::new(HashSet::new()),
         }
     }
 }

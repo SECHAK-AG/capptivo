@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-mark-camera-started"
+description = "Enables the mark_camera_started command without any pre-configured scope."
+commands.allow = ["mark_camera_started"]
+
+[[permission]]
+identifier = "deny-mark-camera-started"
+description = "Denies the mark_camera_started command without any pre-configured scope."
+commands.deny = ["mark_camera_started"]

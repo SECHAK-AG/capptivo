@@ -325,6 +325,12 @@ interface EditorStore {
   proxyPending: boolean;
   /** Separate face-cam track (`camera.webm` / `camera.mp4`), when recorded. */
   cameraUrl: string | null;
+  /**
+   * Milliseconds the face-cam track lags the screen's first frame (signed).
+   * `null` on takes recorded before it was measured — treated as aligned.
+   * Preview and export both shift the face-cam by this; see `lib/faceCamSync`.
+   */
+  cameraOffsetMs: number | null;
   ready: boolean;
   error: string | null;
   /** One-time init guard — proxy hot-swap must not re-parse editor state. */
@@ -742,6 +748,7 @@ export const useEditorStore = create<EditorStore>((set, get) => ({
   proxyUrl: null,
   proxyPending: false,
   cameraUrl: null,
+  cameraOffsetMs: null,
   ready: false,
   error: null,
   mediaInitialized: false,
@@ -814,6 +821,7 @@ export const useEditorStore = create<EditorStore>((set, get) => ({
       proxyUrl: null,
       proxyPending: false,
       cameraUrl: null,
+      cameraOffsetMs: null,
       mediaInitialized: false,
       recordingMetadata: null,
       sourceVideoSize: null,
@@ -874,6 +882,18 @@ export const useEditorStore = create<EditorStore>((set, get) => ({
         if (info.proxy) patch.proxyUrl = mediaUrl(projectId, info.proxy);
         patch.proxyPending = !info.proxy;
         if (patch.proxyPending) scheduleProxyWaitTimeout(projectId, get);
+        set(patch);
+      }).catch(() => undefined);
+      // The recorded face-cam is a duration-less VP9 WebM that WKWebView will
+      // not upload to the GPU (see `project/camera_track.rs`). Swap in the
+      // normalized H.264 track as soon as it exists; until then the recorded
+      // file stays mounted so the face-cam panel and its controls keep working.
+      void commands.ensureCameraTrack(projectId).then((info) => {
+        if (get().projectId !== projectId) return;
+        // The offset is known even while the transcode is still running — it is
+        // a property of the take, not of the file the editor happens to play.
+        const patch: Partial<EditorStore> = { cameraOffsetMs: info.offsetMs };
+        if (info.camera) patch.cameraUrl = mediaUrl(projectId, info.camera);
         set(patch);
       }).catch(() => undefined);
     } catch (e) {
@@ -1667,5 +1687,23 @@ void listen<{ projectId: string; reason: string }>("project://proxy-failed", (e)
     console.warn("[editor] preview proxy failed", e.payload.reason);
     clearProxyWait();
     useEditorStore.setState({ proxyPending: false });
+  }
+});
+
+// `project://camera-ready` — swap the normalized face-cam track into the open
+// project. Preview and export both read `cameraUrl`, so they stay in step.
+void listen<{ projectId: string; camera: string }>("project://camera-ready", (e) => {
+  if (useEditorStore.getState().projectId === e.payload.projectId) {
+    useEditorStore.setState({
+      cameraUrl: mediaUrl(e.payload.projectId, e.payload.camera),
+    });
+  }
+});
+
+void listen<{ projectId: string; reason: string }>("project://camera-failed", (e) => {
+  if (useEditorStore.getState().projectId === e.payload.projectId) {
+    // Keep playing the recorded WebM — degraded on WKWebView, but a face-cam
+    // that may not composite beats no face-cam at all.
+    console.warn("[editor] face-cam normalization failed", e.payload.reason);
   }
 });

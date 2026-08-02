@@ -27,6 +27,12 @@ pub fn list_capture_devices(state: State<AppState>) -> AppResult<Vec<CaptureDevi
     state.recorder.list_devices()
 }
 
+/// Native mic list for the recorder bar — no WebView getUserMedia.
+#[tauri::command(async)]
+pub fn list_microphones() -> AppResult<Vec<crate::recorder::types::MicrophoneDevice>> {
+    crate::recorder::mic_devices::list_microphones()
+}
+
 /// `(async)` — cheap on its own, but it is awaited on the launch path
 /// immediately before [`request_screen_permission`]; splitting the two across
 /// thread policies would only make the pair harder to reason about.
@@ -112,27 +118,24 @@ pub fn start_recording(
     let (id, dir) = state.store.create()?;
     state.store.write_recording_stub(&id, &config)?;
 
+    // Session id must exist before face-cam opens its file sink.
+    *state.current_project.lock() = Some(CurrentProject {
+        id: id.clone(),
+        config: config.clone(),
+    });
+
+    // Native screen first; `start()` returns once capture is live — then start
+    // the face-cam MediaRecorder.
     match state.recorder.start(&config, &dir) {
         Ok(()) => {
-            let capture_microphone = config.capture_microphone;
-            *state.current_project.lock() = Some(CurrentProject {
-                id: id.clone(),
-                config,
-            });
-            // Keep overlay chrome (HUD, face-cam) out of the recorded frames.
-            // macOS handles this inside the backend (SCK excluded_targets);
-            // Windows opts our windows out via WDA_EXCLUDEFROMCAPTURE.
             windows::set_capture_exclusion(&app, true);
-            // Face-cam bubble stays put; it re-acquires the camera after SCK is live.
             if app.get_webview_window(windows::CAMERA_LABEL).is_some() {
                 windows::emit_camera_capture_start(&app, &id);
-            }
-            if capture_microphone {
-                windows::emit_mic_capture_start(&app, &id);
             }
             Ok(())
         }
         Err(e) => {
+            let _ = state.current_project.lock().take();
             let _ = state.store.delete(&id);
             Err(e)
         }
@@ -147,6 +150,21 @@ pub fn pause_recording(state: State<AppState>) -> AppResult<()> {
 #[tauri::command]
 pub fn resume_recording(state: State<AppState>) -> AppResult<()> {
     state.recorder.resume()
+}
+
+/// Stamp the face-cam's start onto the capture clock.
+///
+/// Offset = cameraStart − captureEpoch. The bubble calls this right after
+/// `MediaRecorder.start()`.
+#[tauri::command]
+pub fn mark_camera_started(state: State<AppState>) -> AppResult<i64> {
+    state.recorder.mark_camera_started()
+}
+
+/// Mute/unmute the native mic sidecar during an active recording.
+#[tauri::command]
+pub fn set_recording_mic_muted(state: State<AppState>, muted: bool) -> AppResult<()> {
+    state.recorder.set_mic_muted(muted)
 }
 
 /// Open a camera file sink under the current project (`camera.webm` / `camera.mp4`).
@@ -237,80 +255,6 @@ pub async fn finish_camera_file(state: State<'_, AppState>) -> AppResult<Option<
     .map_err(|e| AppError::Other(format!("camera finish task failed: {e}")))?
 }
 
-#[tauri::command(async)]
-pub fn begin_mic_file(
-    state: State<AppState>,
-    project_id: String,
-    filename: String,
-) -> AppResult<()> {
-    if filename != "mic.webm" {
-        return Err(AppError::Other("invalid mic filename".into()));
-    }
-    {
-        let current = state.current_project.lock();
-        let Some(cur) = current.as_ref() else {
-            return Err(AppError::NotRecording);
-        };
-        if cur.id != project_id {
-            return Err(AppError::Other("mic project mismatch".into()));
-        }
-    }
-    let path = state.store.project_dir(&project_id)?.join(&filename);
-    let file = std::fs::File::create(&path)?;
-    *state.mic_sink.lock() = Some(ExportSink {
-        file,
-        path,
-        final_path: None,
-    });
-    Ok(())
-}
-
-/// Append the request's raw body to the open mic file. Same raw-payload rule as
-/// [`write_camera_chunk`] — append-only, no headers.
-///
-/// `(async)` for the same reason, and safe for the same reason:
-/// `src/windows/recorder/micCapture.ts` serializes these writes through its own
-/// `writeChain`, so they cannot land out of order.
-#[tauri::command(async)]
-pub fn write_mic_chunk(
-    state: State<AppState>,
-    request: tauri::ipc::Request<'_>,
-) -> AppResult<()> {
-    let tauri::ipc::InvokeBody::Raw(chunk) = request.body() else {
-        return Err(AppError::Other(
-            "write_mic_chunk expects a raw byte body".into(),
-        ));
-    };
-    let mut sink = state.mic_sink.lock();
-    let sink = sink
-        .as_mut()
-        .ok_or_else(|| AppError::Other("no open mic file".into()))?;
-    sink.file.write_all(chunk)?;
-    Ok(())
-}
-
-/// Close the narration sink, returning its file name. Same fsync-on-the-blocking-pool
-/// reasoning as [`finish_camera_file`].
-#[tauri::command]
-pub async fn finish_mic_file(state: State<'_, AppState>) -> AppResult<Option<String>> {
-    let Some(sink) = state.mic_sink.lock().take() else {
-        return Ok(None);
-    };
-
-    tauri::async_runtime::spawn_blocking(move || {
-        sink.file.sync_all()?;
-        let name = sink
-            .path
-            .file_name()
-            .and_then(|s| s.to_str())
-            .unwrap_or("mic.webm")
-            .to_string();
-        Ok(Some(name))
-    })
-    .await
-    .map_err(|e| AppError::Other(format!("mic finish task failed: {e}")))?
-}
-
 /// Stop capture, finalize the project on disk, open the editor, and return the
 /// project id. Screen capture must finish before the editor is shown — the
 /// editor is intentionally capturable (for Capptivo demos), so opening it
@@ -334,7 +278,6 @@ pub async fn stop_recording(app: AppHandle, state: State<'_, AppState>) -> AppRe
         .ok_or(AppError::NotRecording)?;
 
     let project_id = current.id.clone();
-    let capture_system_audio = current.config.capture_system_audio;
 
     // Halt ScreenCaptureKit (+ encode drain) before opening the editor. HUD /
     // camera stay excluded; the editor itself is capturable, so stop-first is
@@ -357,7 +300,6 @@ pub async fn stop_recording(app: AppHandle, state: State<'_, AppState>) -> AppRe
     // stop never wedges `start_recording` or leaves overlays up.
     let _ = state.current_project.lock().take();
     let _ = state.camera_sink.lock().take();
-    let _ = state.mic_sink.lock().take();
     let config = current.config;
 
     let _ = windows::restore_recorder_setup_layout(&app);
@@ -388,25 +330,10 @@ pub async fn stop_recording(app: AppHandle, state: State<'_, AppState>) -> AppRe
         return Err(e);
     }
 
-    let mic_path = state.store.project_dir(&project_id)?.join("mic.webm");
-    if mic_path.is_file() {
-        if let Err(e) = tauri::async_runtime::spawn_blocking({
-            let screen = artifacts.screen_path.clone();
-            let mic = mic_path.clone();
-            move || crate::recorder::encoder::attach_mic_audio(&screen, &mic, capture_system_audio)
-        })
-        .await
-        .map_err(|e| AppError::Other(format!("mic mux task failed: {e}")))?
-        {
-            tracing::warn!(%e, "failed to mux mic into screen.mp4");
-        } else {
-            let _ = std::fs::remove_file(&mic_path);
-        }
-    }
-
-    // Recording is complete — remux the fragmented capture into a seekable
-    // progressive MP4 (crash-safe fragmentation is only needed *during* capture).
-    // Best-effort: on failure the still-playable fragmented file is left in place.
+    // Native mic/system PCM were muxed inside Encoder::finish. Remux the
+    // fragmented capture into a seekable progressive MP4 (crash-safe
+    // fragmentation is only needed *during* capture). Best-effort: on failure
+    // the still-playable fragmented file is left in place.
     if let Err(e) = tauri::async_runtime::spawn_blocking({
         let screen = artifacts.screen_path.clone();
         move || crate::recorder::encoder::finalize_recording_mp4(&screen)

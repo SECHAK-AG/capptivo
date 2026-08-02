@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-list-microphones"
+description = "Enables the list_microphones command without any pre-configured scope."
+commands.allow = ["list_microphones"]
+
+[[permission]]
+identifier = "deny-list-microphones"
+description = "Denies the list_microphones command without any pre-configured scope."
+commands.deny = ["list_microphones"]

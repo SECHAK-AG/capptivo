@@ -19,6 +19,7 @@ import {
 import { yieldToMain } from "./exportYield";
 import { throwIfAborted } from "./exportCancel";
 import { openSequentialMedia } from "./sequentialMedia";
+import type { FaceCamTrack } from "../lib/faceCamSync";
 import type { ExportSink } from "./exportSink";
 import { createDitherPalettizer } from "./gifDither";
 import {
@@ -36,7 +37,7 @@ const GIF_FLUSH_THRESHOLD = 4 * 1024 * 1024;
 export async function renderGifToSink(
   sink: ExportSink,
   screenUrl: string,
-  cameraUrl: string | null,
+  faceCam: FaceCamTrack,
   params: ResolvedExportParams,
   signal: AbortSignal,
 ): Promise<void> {
@@ -44,10 +45,10 @@ export async function renderGifToSink(
   const { width, height, fps, gifColors, gifDither } = params;
   // GIF is the one consumer of getImageData — the only path that wants a
   // CPU-resident canvas (see CompositorOptions.cpuReadback).
-  const sequential = await openSequentialMedia(screenUrl, cameraUrl).catch(() => null);
+  const sequential = await openSequentialMedia(screenUrl, faceCam).catch(() => null);
   const session = sequential
     ? await createExportCompositorFromMedia(sequential.media, width, height, { cpuReadback: true })
-    : await createExportCompositor(screenUrl, cameraUrl, width, height, { cpuReadback: true });
+    : await createExportCompositor(screenUrl, faceCam, width, height, { cpuReadback: true });
   const { ctx, video, camera, segments, drawAt, dispose, stats } = session;
   if (!ctx) {
     dispose();

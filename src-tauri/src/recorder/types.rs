@@ -48,6 +48,16 @@ pub struct CaptureDevice {
     pub has_audio: bool,
 }
 
+/// A microphone for the recorder bar — enumerated natively (never WebView gUM).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MicrophoneDevice {
+    /// Stable id for [`RecorderConfig::microphone_device_id`] (AVFoundation
+    /// `uniqueID` on macOS; device name on Windows/Linux).
+    pub device_id: String,
+    pub label: String,
+}
+
 /// Display-local crop rect (logical points), used with `display:{id}` sources.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -82,6 +92,13 @@ pub struct RecorderConfig {
   pub capture_system_audio: bool,
   #[serde(default)]
   pub capture_microphone: bool,
+  /// WebView / OS mic device id — resolved to a native unique id on macOS.
+  #[serde(default)]
+  pub microphone_device_id: Option<String>,
+  /// Human label used to match `AVCaptureDevice` / WASAPI / Pulse when the
+  /// WebView deviceId is an opaque hash.
+  #[serde(default)]
+  pub microphone_label: Option<String>,
   #[serde(default)]
   pub quality: QualityPreset,
 }

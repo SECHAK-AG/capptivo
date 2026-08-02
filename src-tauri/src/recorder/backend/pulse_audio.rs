@@ -16,6 +16,7 @@ use libpulse_simple_binding::Simple;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::thread::JoinHandle;
+use std::time::Instant;
 
 /// ~20 ms of stereo f32 at 48 kHz per read — small enough to stay responsive
 /// to stop, large enough to keep syscall overhead negligible.
@@ -29,7 +30,7 @@ pub struct PulseMonitorTap {
 }
 
 impl PulseMonitorTap {
-    pub fn start() -> AppResult<Self> {
+    pub fn start(epoch: Instant) -> AppResult<Self> {
         let (tx, rx) = crossbeam_channel::bounded::<RawAudio>(AUDIO_CHANNEL_CAP);
         let stop = Arc::new(AtomicBool::new(false));
         let stop_flag = stop.clone();
@@ -37,7 +38,7 @@ impl PulseMonitorTap {
         let (ready_tx, ready_rx) = crossbeam_channel::bounded::<Result<(), String>>(1);
         let join = std::thread::Builder::new()
             .name("pulse-monitor".into())
-            .spawn(move || run_tap(tx, stop_flag, ready_tx))
+            .spawn(move || run_tap(tx, stop_flag, ready_tx, epoch))
             .map_err(|e| AppError::Other(format!("failed to spawn audio thread: {e}")))?;
 
         match ready_rx.recv_timeout(std::time::Duration::from_secs(5)) {
@@ -64,7 +65,12 @@ impl Drop for PulseMonitorTap {
     }
 }
 
-fn run_tap(tx: Sender<RawAudio>, stop: Arc<AtomicBool>, ready: Sender<Result<(), String>>) {
+fn run_tap(
+    tx: Sender<RawAudio>,
+    stop: Arc<AtomicBool>,
+    ready: Sender<Result<(), String>>,
+    epoch: Instant,
+) {
     let spec = Spec {
         format: Format::FLOAT32NE,
         channels: SYSTEM_AUDIO_CHANNELS as u8,
@@ -104,10 +110,112 @@ fn run_tap(tx: Sender<RawAudio>, stop: Arc<AtomicBool>, ready: Sender<Result<(),
                     data: buf.clone(),
                     sample_rate: SYSTEM_AUDIO_RATE,
                     channels: SYSTEM_AUDIO_CHANNELS,
+                    timestamp: epoch.elapsed(),
                 });
             }
             Err(e) => {
                 tracing::warn!(%e, "pulse monitor read failed; stopping tap");
+                break;
+            }
+        }
+    }
+}
+
+/// Microphone capture from `@DEFAULT_SOURCE@` (or a named Pulse source).
+pub struct PulseMicTap {
+    stop: Arc<AtomicBool>,
+    join: Option<JoinHandle<()>>,
+    pub rx: Receiver<RawAudio>,
+}
+
+impl PulseMicTap {
+    pub fn start(device_name: Option<&str>, epoch: Instant) -> AppResult<Self> {
+        let (tx, rx) = crossbeam_channel::bounded::<RawAudio>(AUDIO_CHANNEL_CAP);
+        let stop = Arc::new(AtomicBool::new(false));
+        let stop_flag = stop.clone();
+        let device_name = device_name.map(str::to_owned);
+
+        let (ready_tx, ready_rx) = crossbeam_channel::bounded::<Result<(), String>>(1);
+        let join = std::thread::Builder::new()
+            .name("pulse-mic".into())
+            .spawn(move || run_mic(tx, stop_flag, ready_tx, device_name, epoch))
+            .map_err(|e| AppError::Other(format!("failed to spawn mic thread: {e}")))?;
+
+        match ready_rx.recv_timeout(std::time::Duration::from_secs(5)) {
+            Ok(Ok(())) => Ok(Self {
+                stop,
+                join: Some(join),
+                rx,
+            }),
+            Ok(Err(e)) => Err(AppError::Other(format!("microphone: {e}"))),
+            Err(_) => Err(AppError::Other("microphone init timed out".into())),
+        }
+    }
+
+    pub fn stop(&mut self) {
+        self.stop.store(true, Ordering::Relaxed);
+        let _ = self.join.take();
+    }
+}
+
+impl Drop for PulseMicTap {
+    fn drop(&mut self) {
+        self.stop();
+    }
+}
+
+fn run_mic(
+    tx: Sender<RawAudio>,
+    stop: Arc<AtomicBool>,
+    ready: Sender<Result<(), String>>,
+    device_name: Option<String>,
+    epoch: Instant,
+) {
+    let spec = Spec {
+        format: Format::F32le,
+        channels: SYSTEM_AUDIO_CHANNELS,
+        rate: SYSTEM_AUDIO_RATE,
+    };
+    if !spec.is_valid() {
+        let _ = ready.send(Err("invalid pulse mic sample spec".into()));
+        return;
+    }
+
+    let source = device_name
+        .filter(|s| !s.trim().is_empty())
+        .unwrap_or_else(|| "@DEFAULT_SOURCE@".into());
+
+    let simple = match Simple::new(
+        None,
+        "capptivo",
+        Direction::Record,
+        Some(source.as_str()),
+        "microphone",
+        &spec,
+        None,
+        None,
+    ) {
+        Ok(s) => s,
+        Err(e) => {
+            let _ = ready.send(Err(format!("pulse mic open: {e}")));
+            return;
+        }
+    };
+    let _ = ready.send(Ok(()));
+
+    let mut buf = vec![0u8; READ_CHUNK_BYTES];
+    while !stop.load(Ordering::Relaxed) {
+        match simple.read(&mut buf) {
+            Ok(()) => {
+                let _ = tx.try_send(RawAudio {
+                    data: buf.clone(),
+                    sample_rate: SYSTEM_AUDIO_RATE,
+                    channels: SYSTEM_AUDIO_CHANNELS,
+                    timestamp: epoch.elapsed(),
+                });
+            }
+            Err(e) => {
+                tracing::warn!(%e, "pulse mic read failed; stopping tap");
                 break;
             }
         }

@@ -34,6 +34,8 @@ import {
 } from "../lib/playback";
 import { PlaybackControls } from "./PlaybackControls";
 import { useSameOriginMediaUrl } from "../lib/useSameOriginMediaUrl";
+import { mediaDuration } from "../lib/mediaDuration";
+import { faceCamFrameAt } from "../lib/faceCamSync";
 import {
   MEDIA_DIRECT_PREVIEW_LIMIT,
   probeMediaSize,
@@ -92,7 +94,9 @@ export function PreviewStage({
     void probeMediaSize(screenUrl, { signal: ac.signal })
       .then((size) => {
         if (!ac.signal.aborted) {
-          setOriginalIsSmall(size === null || size <= MEDIA_DIRECT_PREVIEW_LIMIT);
+          setOriginalIsSmall(
+            size === null || size <= MEDIA_DIRECT_PREVIEW_LIMIT,
+          );
         }
       })
       .catch(() => {
@@ -175,21 +179,39 @@ export function PreviewStage({
         aspectRatioPresetId,
         backgroundType,
         sourceVideoSize,
+        cameraOffsetMs,
       } = store;
 
       const video = videoRef.current;
       const camera = cameraRef.current;
       const t = video?.currentTime ?? currentTime;
 
-      if (camera && Number.isFinite(camera.duration) && camera.duration > 0) {
-        // Same presentable park as screen — exact t=0 uploads blank in WKWebView.
-        const camT = presentableVideoTime(t, camera.duration);
-        if (Math.abs(camera.currentTime - camT) > 0.12) {
-          camera.currentTime = camT;
+      // The face-cam rides the screen timeline through its measured start
+      // offset — the same mapping the exporter uses, so what plays here is what
+      // gets written out.
+      const camFrame = camera
+        ? faceCamFrameAt(t, cameraOffsetMs, mediaDuration(camera))
+        : { state: "before" as const };
+      /** Withheld from the compositor when the cam has no picture for `t`. */
+      let cameraForFrame: HTMLVideoElement | null = null;
+
+      if (camera && camFrame.state !== "before") {
+        cameraForFrame = camera;
+        if (Math.abs(camera.currentTime - camFrame.mediaTime) > 0.12) {
+          camera.currentTime = camFrame.mediaTime;
         }
-        if (nowPlaying && camera.paused)
+        // Only drive the element inside the recorded span. Past the end it is
+        // parked on the last frame: replaying a finished element restarts and
+        // re-ends it every tick, which is what made the face-cam flicker at the
+        // tail of the timeline.
+        const shouldPlay = nowPlaying && camFrame.state === "active";
+        if (shouldPlay && camera.paused) {
           void camera.play().catch(() => undefined);
-        if (!nowPlaying && !camera.paused) camera.pause();
+        } else if (!shouldPlay && !camera.paused) {
+          camera.pause();
+        }
+      } else if (camera && !camera.paused) {
+        camera.pause();
       }
 
       const hasSelectedBackground = backgroundImage !== null;
@@ -222,7 +244,7 @@ export function PreviewStage({
             width: stageRef.current.width,
             height: stageRef.current.height,
             video,
-            cameraVideo: camera,
+            cameraVideo: cameraForFrame,
             sourceAspect,
             background: backgroundImage,
             look,
@@ -422,7 +444,8 @@ export function PreviewStage({
       next.cursorSettings !== prev.cursorSettings ||
       next.segments !== prev.segments ||
       next.duration !== prev.duration ||
-      next.faceCam !== prev.faceCam;
+      next.faceCam !== prev.faceCam ||
+      next.cameraOffsetMs !== prev.cameraOffsetMs;
 
     const unsubscribe = useEditorStore.subscribe((state, prev) => {
       if (state.exporting !== prev.exporting) {
@@ -492,11 +515,18 @@ export function PreviewStage({
 
     /** Align to timeline and wake WKWebView's decoder (same as screen track). */
     const wakeDecoder = () => {
-      const { currentTime, isPlaying: playing } = useEditorStore.getState();
-      if (Number.isFinite(camera.duration) && camera.duration > 0) {
-        const target = presentableVideoTime(currentTime, camera.duration);
-        if (Math.abs(camera.currentTime - target) > 0.04) {
-          camera.currentTime = target;
+      const { currentTime, isPlaying: playing, cameraOffsetMs } =
+        useEditorStore.getState();
+      // Through the offset, like `paint` — a raw timeline seek here would land
+      // on a different frame and the two would seek against each other.
+      const frame = faceCamFrameAt(
+        currentTime,
+        cameraOffsetMs,
+        mediaDuration(camera),
+      );
+      if (frame.state !== "before") {
+        if (Math.abs(camera.currentTime - frame.mediaTime) > 0.04) {
+          camera.currentTime = frame.mediaTime;
         }
       }
       if (playing) {
@@ -556,11 +586,18 @@ export function PreviewStage({
         );
       }
       const camera = cameraRef.current;
-      if (camera && Math.abs(camera.currentTime - state.currentTime) > 0.04) {
-        camera.currentTime = presentableVideoTime(
+      if (camera) {
+        const frame = faceCamFrameAt(
           state.currentTime,
-          camera.duration,
+          state.cameraOffsetMs,
+          mediaDuration(camera),
         );
+        if (
+          frame.state !== "before" &&
+          Math.abs(camera.currentTime - frame.mediaTime) > 0.04
+        ) {
+          camera.currentTime = frame.mediaTime;
+        }
       }
     });
   }, []);
@@ -635,15 +672,18 @@ export function PreviewStage({
                 preload="auto"
                 onLoadedMetadata={(e) => {
                   const cam = e.currentTarget;
-                  const { currentTime, isPlaying: playing } =
+                  const { currentTime, isPlaying: playing, cameraOffsetMs } =
                     useEditorStore.getState();
-                  if (Number.isFinite(cam.duration) && cam.duration > 0) {
-                    cam.currentTime = presentableVideoTime(
-                      currentTime,
-                      cam.duration,
-                    );
+                  const frame = faceCamFrameAt(
+                    currentTime,
+                    cameraOffsetMs,
+                    mediaDuration(cam),
+                  );
+                  if (frame.state === "before") return;
+                  cam.currentTime = frame.mediaTime;
+                  if (playing && frame.state === "active") {
+                    void cam.play().catch(() => undefined);
                   }
-                  if (playing) void cam.play().catch(() => undefined);
                 }}
                 onLoadedData={(e) => {
                   if (useEditorStore.getState().isPlaying) return;

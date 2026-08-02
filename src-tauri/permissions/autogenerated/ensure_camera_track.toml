@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-ensure-camera-track"
+description = "Enables the ensure_camera_track command without any pre-configured scope."
+commands.allow = ["ensure_camera_track"]
+
+[[permission]]
+identifier = "deny-ensure-camera-track"
+description = "Denies the ensure_camera_track command without any pre-configured scope."
+commands.deny = ["ensure_camera_track"]

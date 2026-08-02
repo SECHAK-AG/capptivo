@@ -44,17 +44,16 @@ const ANNOTATION_FOLLOW_INTERVAL: Duration = Duration::from_millis(300);
 pub const CAMERA_DEVICE_EVENT: &str = "camera://device";
 /// Bubble closed (X) — recorder store clears the camera toggle.
 pub const CAMERA_CLOSED_EVENT: &str = "camera://closed";
+/// Build the face-cam MediaRecorder ahead of the take, without starting it.
+/// Everything expensive (device acquisition, encoder construction) happens here
+/// so `CAMERA_CAPTURE_START` is a bare `start()` — see `cameraCapture.ts`.
+pub const CAMERA_CAPTURE_ARM: &str = "camera://capture-arm";
 /// Start separate-track capture in the camera WebView; payload = project id.
 pub const CAMERA_CAPTURE_START: &str = "camera://capture-start";
 /// Flush MediaRecorder → disk before screen finalize.
 pub const CAMERA_CAPTURE_FLUSH: &str = "camera://capture-flush";
 #[allow(dead_code)] // mirrored in JS as `camera://capture-flushed`
 pub const CAMERA_CAPTURE_FLUSHED: &str = "camera://capture-flushed";
-
-pub const MIC_CAPTURE_START: &str = "mic://capture-start";
-pub const MIC_CAPTURE_FLUSH: &str = "mic://capture-flush";
-#[allow(dead_code)] // mirrored in JS as `mic://capture-flushed`
-pub const MIC_CAPTURE_FLUSHED: &str = "mic://capture-flushed";
 
 /// Last device id emitted to the camera WebView — avoid re-emitting on Record
 /// (that used to reopen getUserMedia and black the preview).
@@ -1321,6 +1320,18 @@ pub fn set_camera_preview_visible(app: AppHandle, visible: bool) -> tauri::Resul
     Ok(())
 }
 
+/// Ask the camera WebView to build (but not start) its MediaRecorder.
+///
+/// Called while the countdown runs. Device acquisition and encoder construction
+/// are hundreds of milliseconds the face-cam would otherwise spend *after* the
+/// screen is already recording, and every one of them is a frame the face-cam
+/// is missing from the head of the take.
+#[tauri::command]
+pub fn arm_camera_capture(app: AppHandle) -> tauri::Result<()> {
+    let _ = app.emit(CAMERA_CAPTURE_ARM, ());
+    Ok(())
+}
+
 /// Ask the camera WebView to flush its MediaRecorder before project finalize.
 #[tauri::command]
 pub fn flush_camera_capture(app: AppHandle) -> tauri::Result<()> {
@@ -1331,16 +1342,6 @@ pub fn flush_camera_capture(app: AppHandle) -> tauri::Result<()> {
 /// Notify the camera WebView to start capturing (preview stays visible; SCK excludes it).
 pub fn emit_camera_capture_start(app: &AppHandle, project_id: &str) {
     let _ = app.emit(CAMERA_CAPTURE_START, project_id);
-}
-
-#[tauri::command]
-pub fn flush_mic_capture(app: AppHandle) -> tauri::Result<()> {
-    let _ = app.emit(MIC_CAPTURE_FLUSH, ());
-    Ok(())
-}
-
-pub fn emit_mic_capture_start(app: &AppHandle, project_id: &str) {
-    let _ = app.emit(MIC_CAPTURE_START, project_id);
 }
 
 /// Move + resize the ink overlay to cover one whole display.

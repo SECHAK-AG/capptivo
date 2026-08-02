@@ -1,6 +1,7 @@
 import { snapTimeToKeptRange } from "@/engine";
 
 import { useEditorStore } from "../store";
+import { mediaDuration } from "./mediaDuration";
 import {
   FIRST_PRESENTABLE_TIME,
   presentableVideoTime,
@@ -113,7 +114,9 @@ export function primePausedVideoFrame(video: HTMLVideoElement): Promise<void> {
 
   if (video.readyState < HTMLMediaElement.HAVE_METADATA)
     return Promise.resolve();
-  const duration = Number.isFinite(video.duration) ? video.duration : 0;
+  // A live-muxed source reports `duration === Infinity`; taking that as "no
+  // duration" left the face-cam's decoder asleep and its texture black.
+  const duration = mediaDuration(video);
   if (duration <= 0) return Promise.resolve();
 
   const origin = video.currentTime;

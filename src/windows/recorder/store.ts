@@ -6,7 +6,7 @@
  */
 
 import { create } from "zustand";
-import { emit, listen } from "@tauri-apps/api/event";
+import { listen } from "@tauri-apps/api/event";
 import { translateNow } from "@/lib/i18n";
 import { commands } from "../../ipc/bindings";
 import { onElapsed, onError, onInterrupted, onStateChanged } from "../../ipc/events";
@@ -20,15 +20,6 @@ import type {
   RecorderConfig,
   RecorderState,
 } from "../../ipc/types";
-import {
-  ensureMicCaptureListeners,
-  flushMicCaptureWithTimeout,
-  micTrackLive,
-  prepareMic,
-  probeMicPermission,
-  releaseMic,
-  setMicTrackEnabled,
-} from "./micCapture";
 import { probeCameraPermission } from "./cameraAccess";
 import { flushCameraCaptureWithTimeout } from "./flushCamera";
 
@@ -91,9 +82,17 @@ interface RecorderStore {
   refreshDevices: () => Promise<void>;
   selectDevice: (id: string) => void;
   refreshMediaDevices: () => Promise<void>;
-  /** Enumerate; if empty, prompt TCC then enumerate again. */
-  ensureMicrophoneDevices: () => Promise<void>;
+  /**
+   * Enumerate cameras; if labels are missing, one-shot video getUserMedia once
+   * per session then re-enumerate. Called when camera is enabled or its menu opens.
+   */
   ensureCameraDevices: () => Promise<void>;
+  /**
+   * Native mic list (Rust). Never WebView getUserMedia(audio) — that blacks
+   * the face-cam bubble on macOS.
+   */
+  ensureMicrophoneDevices: () => Promise<void>;
+  requestCameraAccess: () => Promise<void>;
   setCaptureMode: (mode: CaptureMode) => void;
   pickArea: () => Promise<void>;
   selectSource: (id: string) => void;
@@ -109,11 +108,8 @@ interface RecorderStore {
   setCameraDeviceId: (id: string | null) => void;
   setMicDeviceId: (id: string | null) => void;
   /**
-   * Bring up mic / face-cam ahead of `startRecording`. Called when the countdown
-   * *starts*, so both `getUserMedia` calls happen during the 3 seconds we are
-   * already spending instead of after it — they are not part of screen capture
-   * and nothing about them needs the countdown to have finished.
-   * Safe to skip: `startRecording` runs the same work if this never ran.
+   * Arm face-cam (and window prep) during countdown. Mic is native — no
+   * WebView getUserMedia here. Safe to skip: `startRecording` awaits the same work.
    */
   prewarmCapture: () => Promise<void>;
   startRecording: () => Promise<void>;
@@ -136,28 +132,28 @@ let subscribed = false;
  */
 let prewarmInFlight: Promise<void> | null = null;
 
-/** Nudge face-cam after recorder-side mic GUM tore down its AVCapture session. */
-function reviveCameraPreview(cameraEnabled: boolean): Promise<void> {
-  if (!cameraEnabled) return Promise.resolve();
-  return emit("camera://revive", null).catch(() => undefined);
+/** Unlock camera labels at most once per WebView session. */
+let hasRequestedCameraLabels = false;
+
+function rawCameras(devices: MediaDeviceInfo[]): MediaDeviceInfo[] {
+  return devices.filter(
+    (d) => d.kind === "videoinput" && !!d.deviceId && isRecorderCamera(d),
+  );
 }
 
-function normalizeMicrophones(devices: MediaDeviceInfo[]): MediaDeviceOption[] {
-  const inputs = devices.filter((d) => d.kind === "audioinput" && d.deviceId);
-  const byGroup = new Map<string, MediaDeviceInfo>();
-  for (const d of inputs) {
-    const key = d.groupId || d.deviceId;
-    const prev = byGroup.get(key);
-    if (!prev || (!prev.label && d.label)) {
-      byGroup.set(key, d);
-    }
+/** Empty list (WKWebView) or devices with no labels → need a one-shot gUM. */
+function needsLabelUnlock(devices: MediaDeviceInfo[]): boolean {
+  if (devices.length === 0) return true;
+  return devices.every((d) => !d.label.trim());
+}
+
+async function reviveCameraPreviewIfOn(
+  cameraEnabled: boolean,
+  cameraDeviceId: string | null,
+): Promise<void> {
+  if (cameraEnabled && cameraDeviceId) {
+    await commands.showCameraPreview(cameraDeviceId).catch(() => undefined);
   }
-  return [...byGroup.values()]
-    .map((d, i) => ({
-      deviceId: d.deviceId,
-      label: d.label?.trim() || `Microphone ${i + 1}`,
-    }))
-    .sort((a, b) => a.label.localeCompare(b.label));
 }
 
 /** macOS "Desk View" / continuity desk cameras — not useful for face-cam overlay. */
@@ -181,16 +177,6 @@ function pickDefaultSource(
 export const useRecorderStore = create<RecorderStore>((set, get) => {
   const reportError = (message: string) => {
     set({ lastError: message });
-  };
-
-  const openMicOrReport = async (deviceId: string): Promise<boolean> => {
-    try {
-      return await prepareMic(deviceId);
-    } catch (e) {
-      console.warn("mic open failed", e);
-      reportError(describeError(e));
-      return false;
-    }
   };
 
   return {
@@ -222,7 +208,6 @@ export const useRecorderStore = create<RecorderStore>((set, get) => {
   async init() {
     if (!subscribed) {
       subscribed = true;
-      ensureMicCaptureListeners();
       await onStateChanged((state) => {
         set((prev) => {
           const nextLive =
@@ -356,45 +341,91 @@ export const useRecorderStore = create<RecorderStore>((set, get) => {
   },
 
   async refreshMediaDevices() {
-    if (!navigator.mediaDevices?.enumerateDevices) return;
-    try {
-      const devices = await navigator.mediaDevices.enumerateDevices();
-      const cameras = devices
-        .filter((d) => d.kind === "videoinput" && !!d.deviceId && isRecorderCamera(d))
-        .map((d, i) => ({
+    // Cameras: WebView enumerate (face-cam lives in the camera WebView).
+    // Mics: native list only — never touch audio getUserMedia here.
+    if (navigator.mediaDevices?.enumerateDevices) {
+      try {
+        const devices = await navigator.mediaDevices.enumerateDevices();
+        const cameras = rawCameras(devices).map((d, i) => ({
           deviceId: d.deviceId,
           label: d.label || `Camera ${i + 1}`,
         }));
-      const microphones = normalizeMicrophones(devices);
+        set((s) => ({
+          cameras,
+          cameraDeviceId:
+            s.cameraDeviceId && cameras.some((c) => c.deviceId === s.cameraDeviceId)
+              ? s.cameraDeviceId
+              : (cameras[0]?.deviceId ?? null),
+        }));
+      } catch {
+        /* enumeration may fail before permission */
+      }
+    }
+    await get().ensureMicrophoneDevices();
+  },
+
+  async ensureCameraDevices() {
+    if (!navigator.mediaDevices?.enumerateDevices) return;
+    try {
+      const devices = await navigator.mediaDevices.enumerateDevices();
+      // Don't steal the bubble's AVFoundation session — only probe when the
+      // face-cam preview is off.
+      if (
+        !get().cameraEnabled &&
+        !hasRequestedCameraLabels &&
+        needsLabelUnlock(rawCameras(devices))
+      ) {
+        hasRequestedCameraLabels = true;
+        await probeCameraPermission();
+      }
+    } catch {
+      /* fall through */
+    }
+    if (navigator.mediaDevices?.enumerateDevices) {
+      try {
+        const devices = await navigator.mediaDevices.enumerateDevices();
+        const cameras = rawCameras(devices).map((d, i) => ({
+          deviceId: d.deviceId,
+          label: d.label || `Camera ${i + 1}`,
+        }));
+        set((s) => ({
+          cameras,
+          cameraDeviceId:
+            s.cameraDeviceId && cameras.some((c) => c.deviceId === s.cameraDeviceId)
+              ? s.cameraDeviceId
+              : (cameras[0]?.deviceId ?? null),
+        }));
+      } catch {
+        /* ignore */
+      }
+    }
+  },
+
+  async ensureMicrophoneDevices() {
+    try {
+      const list = await commands.listMicrophones();
+      const microphones = list.map((m) => ({
+        deviceId: m.deviceId,
+        label: m.label,
+      }));
       set((s) => ({
-        cameras,
         microphones,
-        cameraDeviceId:
-          s.cameraDeviceId && cameras.some((c) => c.deviceId === s.cameraDeviceId)
-            ? s.cameraDeviceId
-            : (cameras[0]?.deviceId ?? null),
         micDeviceId:
           s.micDeviceId && microphones.some((m) => m.deviceId === s.micDeviceId)
             ? s.micDeviceId
             : (microphones[0]?.deviceId ?? null),
       }));
     } catch {
-      /* enumeration may fail before permission */
+      set({ microphones: [] });
     }
   },
 
-  async ensureMicrophoneDevices() {
-    await get().refreshMediaDevices();
-    if (get().microphones.length > 0) return;
-    await probeMicPermission();
-    await get().refreshMediaDevices();
-  },
-
-  async ensureCameraDevices() {
-    await get().refreshMediaDevices();
-    if (get().cameras.length > 0) return;
+  async requestCameraAccess() {
+    hasRequestedCameraLabels = true;
+    const { cameraEnabled, cameraDeviceId } = get();
     await probeCameraPermission();
-    await get().refreshMediaDevices();
+    await get().ensureCameraDevices();
+    await reviveCameraPreviewIfOn(cameraEnabled, cameraDeviceId);
   },
 
   setCaptureMode(mode) {
@@ -453,7 +484,7 @@ export const useRecorderStore = create<RecorderStore>((set, get) => {
       // Camera WebView owns getUserMedia — don't open a throwaway stream here
       // (that steals the device and blacks out the preview).
       void (async () => {
-        await get().refreshMediaDevices();
+        await get().ensureCameraDevices();
         const id = get().cameraDeviceId;
         if (id) await commands.showCameraPreview(id).catch(() => undefined);
       })();
@@ -463,30 +494,25 @@ export const useRecorderStore = create<RecorderStore>((set, get) => {
   },
 
   setMicEnabled(enabled) {
+    // Selection only for capture — label unlock may one-shot gUM (then revive cam).
     set({ micEnabled: enabled, micSessionMuted: enabled ? false : get().micSessionMuted });
     if (enabled) {
-      // prepareMic owns getUserMedia — no throwaway probe (that blacks face-cam).
-      void (async () => {
-        await get().refreshMediaDevices();
-        const { micDeviceId, cameraEnabled } = get();
-        if (!micDeviceId) return;
-        const opened = await openMicOrReport(micDeviceId);
-        await get().refreshMediaDevices();
-        if (!opened) {
-          set({ micEnabled: false, micDeviceId: null });
-          return;
-        }
-        await reviveCameraPreview(cameraEnabled);
-      })();
-    } else {
-      releaseMic();
+      void get().ensureMicrophoneDevices();
     }
   },
 
   toggleMicMute() {
-    if (!micTrackLive()) return;
     const next = !get().micSessionMuted;
-    if (!setMicTrackEnabled(!next)) return;
+    const live =
+      get().state.status === "recording" || get().state.status === "paused";
+    if (live) {
+      void commands.setRecordingMicMuted(next).then(
+        () => set({ micSessionMuted: next }),
+        () => undefined,
+      );
+      return;
+    }
+    if (!get().micEnabled) return;
     set({ micSessionMuted: next });
   },
 
@@ -520,27 +546,12 @@ export const useRecorderStore = create<RecorderStore>((set, get) => {
   },
 
   setMicDeviceId(id) {
+    // Selection only — native capture uses this id at record start.
     set({ micDeviceId: id, micEnabled: id !== null });
-    if (id) {
-      void (async () => {
-        const { cameraEnabled } = get();
-        const opened = await openMicOrReport(id);
-        await get().refreshMediaDevices();
-        if (!opened) {
-          set({ micEnabled: false, micDeviceId: null });
-          return;
-        }
-        await reviveCameraPreview(cameraEnabled);
-      })();
-    } else {
-      releaseMic();
-    }
   },
 
   prewarmCapture() {
     const {
-      micEnabled,
-      micDeviceId,
       cameraEnabled,
       cameraDeviceId,
       captureMode,
@@ -550,12 +561,10 @@ export const useRecorderStore = create<RecorderStore>((set, get) => {
       if (captureMode === "window" && selectedSourceId) {
         await commands.prepareWindowCapture(selectedSourceId).catch(() => undefined);
       }
-      if (micEnabled && micDeviceId) {
-        await prepareMic(micDeviceId).catch(() => undefined);
-      }
-      // Keep the floating bubble where it is — capture re-acquires inside that window.
+      // Keep the floating bubble where it is — arm MediaRecorder during countdown.
       if (cameraEnabled && cameraDeviceId) {
         await commands.showCameraPreview(cameraDeviceId).catch(() => undefined);
+        await commands.armCameraCapture().catch(() => undefined);
       }
     })();
     return prewarmInFlight;
@@ -572,6 +581,7 @@ export const useRecorderStore = create<RecorderStore>((set, get) => {
       cameraDeviceId,
       micEnabled,
       micDeviceId,
+      microphones,
     } = get();
     // Device capture goes through CoreMediaIO, not ScreenCaptureKit — it needs
     // camera permission, not screen recording, so it must skip the screen gate
@@ -597,6 +607,8 @@ export const useRecorderStore = create<RecorderStore>((set, get) => {
       return;
     }
     const captureMicrophone = micEnabled && !!micDeviceId;
+    const micLabel =
+      microphones.find((m) => m.deviceId === micDeviceId)?.label ?? null;
     let config: RecorderConfig;
     if (captureMode === "device") {
       // No crop and no cursor exist for a phone's screen; `captureSystemAudio`
@@ -607,6 +619,8 @@ export const useRecorderStore = create<RecorderStore>((set, get) => {
         crop: null,
         showCursor: false,
         captureMicrophone,
+        microphoneDeviceId: micDeviceId,
+        microphoneLabel: micLabel,
       };
     } else if (captureMode === "area" && areaSelection) {
       config = {
@@ -614,9 +628,17 @@ export const useRecorderStore = create<RecorderStore>((set, get) => {
         crop: areaSelection.crop,
         ...options,
         captureMicrophone,
+        microphoneDeviceId: micDeviceId,
+        microphoneLabel: micLabel,
       };
     } else {
-      config = { sourceId: selectedSourceId!, ...options, captureMicrophone };
+      config = {
+        sourceId: selectedSourceId!,
+        ...options,
+        captureMicrophone,
+        microphoneDeviceId: micDeviceId,
+        microphoneLabel: micLabel,
+      };
     }
     try {
       set({ lastError: null, elapsed: 0 });
@@ -642,11 +664,8 @@ export const useRecorderStore = create<RecorderStore>((set, get) => {
   },
 
   async stopRecording() {
-    const { cameraEnabled, micEnabled } = get();
+    const { cameraEnabled } = get();
     try {
-      if (micEnabled) {
-        await flushMicCaptureWithTimeout();
-      }
       if (cameraEnabled) {
         await flushCameraCaptureWithTimeout();
       }
@@ -656,10 +675,6 @@ export const useRecorderStore = create<RecorderStore>((set, get) => {
       void commands.hideAreaFrameGuide().catch(() => undefined);
       void commands.hideCameraPreview().catch(() => undefined);
       set({ annotationVisible: false, micSessionMuted: false });
-      if (micEnabled && get().micDeviceId) {
-        await prepareMic(get().micDeviceId!).catch(() => undefined);
-        setMicTrackEnabled(true);
-      }
     } catch (e) {
       reportError(describeError(e));
       set({ annotationVisible: false, micSessionMuted: false });

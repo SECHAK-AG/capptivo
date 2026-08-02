@@ -25,6 +25,7 @@ import {
 } from "../render/createFrameCompositor";
 import { waitForPreviewGpuRelease } from "../render/previewGpuGate";
 import { toBlobMediaUrl } from "../lib/mediaBlobUrl";
+import { faceCamFrameAt, type FaceCamTrack } from "../lib/faceCamSync";
 import { useEditorStore } from "../store";
 
 export type ExportCompositor = {
@@ -58,6 +59,13 @@ export type CompositorMedia = {
   camera: HTMLVideoElement | null;
   /** Screen duration in seconds (drives full-segment + cursor-loop math). */
   duration: number;
+  /**
+   * The face-cam's own span on the screen timeline. Travels with `camera` so
+   * `drawAt` resolves coverage the same way the preview does instead of
+   * assuming the two tracks start and end together.
+   */
+  cameraOffsetMs: number | null;
+  cameraDuration: number;
   dispose: () => void;
 };
 
@@ -99,11 +107,11 @@ async function loadVideo(src: string): Promise<HTMLVideoElement> {
  * decode path, still used by the seek-based fallback and MediaRecorder. */
 export async function loadElementMedia(
   screenUrl: string,
-  cameraUrl: string | null,
+  faceCam: FaceCamTrack,
 ): Promise<CompositorMedia> {
   const screenBlob = await toBlobMediaUrl(screenUrl);
-  const cameraBlob = cameraUrl
-    ? await toBlobMediaUrl(cameraUrl).catch(() => null)
+  const cameraBlob = faceCam.url
+    ? await toBlobMediaUrl(faceCam.url).catch(() => null)
     : null;
 
   const video = await loadVideo(screenBlob.src);
@@ -125,6 +133,8 @@ export async function loadElementMedia(
     video,
     camera,
     duration: video.duration || 0,
+    cameraOffsetMs: faceCam.offsetMs,
+    cameraDuration: camera?.duration || 0,
     dispose: () => {
       video.pause();
       video.removeAttribute("src");
@@ -142,13 +152,13 @@ export async function loadElementMedia(
 
 export async function createExportCompositor(
   screenUrl: string,
-  cameraUrl: string | null,
+  faceCam: FaceCamTrack,
   width: number,
   height: number,
   options: CompositorOptions = {},
 ): Promise<ExportCompositor> {
   return createExportCompositorFromMedia(
-    await loadElementMedia(screenUrl, cameraUrl),
+    await loadElementMedia(screenUrl, faceCam),
     width,
     height,
     options,
@@ -224,6 +234,7 @@ export async function createExportCompositorFromMedia(
   }
 
   const { video, camera } = media;
+  const { cameraOffsetMs, cameraDuration } = media;
 
   /**
    * The export renders from the editor state as it was when the user pressed
@@ -315,7 +326,14 @@ export async function createExportCompositorFromMedia(
         width: renderWidth,
         height: renderHeight,
         video,
-        cameraVideo: camera,
+        // Withheld outside the face-cam's recorded span — the same rule the
+        // preview applies, so the exported file matches what was scrubbed.
+        cameraVideo:
+          camera &&
+          faceCamFrameAt(sourceTime, cameraOffsetMs, cameraDuration).state !==
+            "before"
+            ? camera
+            : null,
         sourceAspect,
         background: backgroundImage,
         look,

@@ -35,8 +35,16 @@ pub struct Encoder {
     pcm_path: Option<PathBuf>,
     pcm_rate: u32,
     pcm_channels: u16,
+    /// Bytes written to system PCM (including silence pads).
+    pcm_bytes: u64,
     /// After the first non-empty PCM chunk, rate/channels are fixed for mux.
     pcm_format_locked: bool,
+    mic_pcm: Option<File>,
+    mic_pcm_path: Option<PathBuf>,
+    mic_rate: u32,
+    mic_channels: u16,
+    mic_pcm_bytes: u64,
+    mic_format_locked: bool,
     stderr_text: Arc<Mutex<String>>,
     stderr_reader: Option<JoinHandle<()>>,
     width: u32,
@@ -53,6 +61,7 @@ impl Encoder {
         fps: u32,
         quality: QualityPreset,
         system_audio: bool,
+        microphone: bool,
     ) -> AppResult<Self> {
         let bitrate = quality.target_bitrate(width, height);
         let ffmpeg = ffmpeg_path();
@@ -125,6 +134,16 @@ impl Encoder {
             (None, None)
         };
 
+        let (mic_pcm, mic_pcm_path) = if microphone {
+            let path = output.with_file_name("mic.pcm");
+            let file = File::create(&path).map_err(|e| {
+                AppError::Encoder(format!("could not create mic.pcm: {e}"))
+            })?;
+            (Some(file), Some(path))
+        } else {
+            (None, None)
+        };
+
         Ok(Self {
             child,
             video_stdin,
@@ -132,7 +151,14 @@ impl Encoder {
             pcm_path,
             pcm_rate: SYSTEM_AUDIO_RATE,
             pcm_channels: SYSTEM_AUDIO_CHANNELS,
+            pcm_bytes: 0,
             pcm_format_locked: false,
+            mic_pcm,
+            mic_pcm_path,
+            mic_rate: SYSTEM_AUDIO_RATE,
+            mic_channels: SYSTEM_AUDIO_CHANNELS,
+            mic_pcm_bytes: 0,
+            mic_format_locked: false,
             stderr_text,
             stderr_reader: Some(stderr_reader),
             width,
@@ -188,10 +214,30 @@ impl Encoder {
             .map_err(|e| AppError::Encoder(format!("write to ffmpeg failed: {e}")))
     }
 
+    /// Write system PCM at `timeline_secs` (encoded t=0). Pads leading silence
+    /// when the capture PTS is after the bytes already on disk.
+    pub fn write_audio_at(
+        &mut self,
+        timeline_secs: f64,
+        data: &[u8],
+        sample_rate: u32,
+        channels: u16,
+    ) -> AppResult<()> {
+        self.lock_system_format(sample_rate, channels);
+        self.pad_system_to(timeline_secs)?;
+        self.write_audio_bytes(data)
+    }
+
+    #[allow(dead_code)] // tests / callers that don't need timeline pad
     pub fn write_audio(&mut self, data: &[u8], sample_rate: u32, channels: u16) -> AppResult<()> {
-        let Some(pcm) = self.pcm.as_mut() else {
-            return Ok(());
-        };
+        self.lock_system_format(sample_rate, channels);
+        self.write_audio_bytes(data)
+    }
+
+    fn lock_system_format(&mut self, sample_rate: u32, channels: u16) {
+        if self.pcm.is_none() {
+            return;
+        }
         if self.pcm_format_locked {
             if sample_rate > 0 && sample_rate != self.pcm_rate {
                 tracing::warn!(
@@ -215,10 +261,118 @@ impl Encoder {
                 self.pcm_channels = channels;
             }
         }
+    }
+
+    fn pad_system_to(&mut self, timeline_secs: f64) -> AppResult<()> {
+        let gap = pcm_pad_bytes(
+            timeline_secs,
+            self.pcm_bytes,
+            self.pcm_rate,
+            self.pcm_channels,
+        );
+        if gap == 0 {
+            return Ok(());
+        }
+        let Some(pcm) = self.pcm.as_mut() else {
+            return Ok(());
+        };
+        let silence = vec![0u8; gap];
+        pcm.write_all(&silence)
+            .map_err(|e| AppError::Encoder(format!("pad system audio failed: {e}")))?;
+        self.pcm_bytes += gap as u64;
+        Ok(())
+    }
+
+    fn write_audio_bytes(&mut self, data: &[u8]) -> AppResult<()> {
+        let Some(pcm) = self.pcm.as_mut() else {
+            return Ok(());
+        };
         pcm.write_all(data)
             .map_err(|e| AppError::Encoder(format!("write system audio failed: {e}")))?;
+        self.pcm_bytes += data.len() as u64;
         if !data.is_empty() {
             self.pcm_format_locked = true;
+        }
+        Ok(())
+    }
+
+    /// Write mic PCM at `timeline_secs` (encoded t=0), with silence pad as needed.
+    pub fn write_mic_at(
+        &mut self,
+        timeline_secs: f64,
+        data: &[u8],
+        sample_rate: u32,
+        channels: u16,
+    ) -> AppResult<()> {
+        self.lock_mic_format(sample_rate, channels);
+        self.pad_mic_to(timeline_secs)?;
+        self.write_mic_bytes(data)
+    }
+
+    #[allow(dead_code)] // tests / callers that don't need timeline pad
+    pub fn write_mic(&mut self, data: &[u8], sample_rate: u32, channels: u16) -> AppResult<()> {
+        self.lock_mic_format(sample_rate, channels);
+        self.write_mic_bytes(data)
+    }
+
+    fn lock_mic_format(&mut self, sample_rate: u32, channels: u16) {
+        if self.mic_pcm.is_none() {
+            return;
+        }
+        if self.mic_format_locked {
+            if sample_rate > 0 && sample_rate != self.mic_rate {
+                tracing::warn!(
+                    rate = sample_rate,
+                    locked = self.mic_rate,
+                    "ignoring mic sample-rate change after first PCM chunk"
+                );
+            }
+            if channels > 0 && channels != self.mic_channels {
+                tracing::warn!(
+                    channels,
+                    locked = self.mic_channels,
+                    "ignoring mic channel change after first PCM chunk"
+                );
+            }
+        } else {
+            if sample_rate > 0 {
+                self.mic_rate = sample_rate;
+            }
+            if channels > 0 {
+                self.mic_channels = channels;
+            }
+        }
+    }
+
+    fn pad_mic_to(&mut self, timeline_secs: f64) -> AppResult<()> {
+        let gap = pcm_pad_bytes(
+            timeline_secs,
+            self.mic_pcm_bytes,
+            self.mic_rate,
+            self.mic_channels,
+        );
+        if gap == 0 {
+            return Ok(());
+        }
+        let Some(pcm) = self.mic_pcm.as_mut() else {
+            return Ok(());
+        };
+        let silence = vec![0u8; gap];
+        pcm.write_all(&silence)
+            .map_err(|e| AppError::Encoder(format!("pad mic audio failed: {e}")))?;
+        self.mic_pcm_bytes += gap as u64;
+        Ok(())
+    }
+
+    fn write_mic_bytes(&mut self, data: &[u8]) -> AppResult<()> {
+        let Some(pcm) = self.mic_pcm.as_mut() else {
+            return Ok(());
+        };
+        pcm.write_all(data)
+            .map_err(|e| AppError::Encoder(format!("write mic audio failed: {e}")))?;
+        self.mic_pcm_bytes += data.len() as u64;
+        if !data.is_empty() {
+            self.mic_format_locked = true;
         }
         Ok(())
     }
@@ -252,14 +406,33 @@ impl Encoder {
             }
             let bytes = fs::metadata(&pcm_path).map(|m| m.len()).unwrap_or(0);
             if bytes > 0 {
-                mux_system_audio(
+                mux_pcm_audio(
                     &self.output,
                     &pcm_path,
                     self.pcm_rate,
                     self.pcm_channels,
+                    false,
                 )?;
             }
             let _ = fs::remove_file(&pcm_path);
+        }
+
+        if let Some(mic_path) = self.mic_pcm_path.take() {
+            if let Some(mut pcm) = self.mic_pcm.take() {
+                let _ = pcm.flush();
+            }
+            let bytes = fs::metadata(&mic_path).map(|m| m.len()).unwrap_or(0);
+            if bytes > 0 {
+                let mix = mp4_has_audio_stream(&self.output);
+                mux_pcm_audio(
+                    &self.output,
+                    &mic_path,
+                    self.mic_rate,
+                    self.mic_channels,
+                    mix,
+                )?;
+            }
+            let _ = fs::remove_file(&mic_path);
         }
 
         Ok(self.output)
@@ -315,13 +488,14 @@ fn wait_child(child: &mut Child, timeout: Duration) -> AppResult<std::process::E
     }
 }
 
-/// Mux narration from the recorder WebView into `screen.mp4` (mic-only or mixed with system audio).
+/// Mux an external audio file into `screen.mp4` (replace or amix with existing).
+#[allow(dead_code)] // kept for recovery / offline tools; live path uses `mux_pcm_audio`
 pub fn attach_mic_audio(
     video_mp4: &Path,
-    mic_webm: &Path,
+    mic_file: &Path,
     mix_with_system_audio: bool,
 ) -> AppResult<()> {
-    if !video_mp4.is_file() || !mic_webm.is_file() {
+    if !video_mp4.is_file() || !mic_file.is_file() {
         return Err(AppError::Encoder("mic mux: missing input file".into()));
     }
     let ffmpeg = ffmpeg_path();
@@ -338,7 +512,7 @@ pub fn attach_mic_audio(
             ])
             .arg(video_mp4)
             .args(["-i"])
-            .arg(mic_webm)
+            .arg(mic_file)
             .args([
                 "-filter_complex",
                 "[0:a][1:a]amix=inputs=2:duration=first:dropout_transition=0[aout]",
@@ -369,7 +543,7 @@ pub fn attach_mic_audio(
             ])
             .arg(video_mp4)
             .args(["-i"])
-            .arg(mic_webm)
+            .arg(mic_file)
             .args([
                 "-map",
                 "0:v:0",
@@ -833,58 +1007,111 @@ fn mp4_has_audio_stream(path: &Path) -> bool {
     }
 }
 
-fn mux_system_audio(
+/// Silence bytes needed so PCM length reaches `timeline_secs`.
+/// Caps at 5s of stereo 48kHz so a bad PTS can't blow the disk.
+pub(crate) fn pcm_pad_bytes(
+    timeline_secs: f64,
+    already_bytes: u64,
+    sample_rate: u32,
+    channels: u16,
+) -> usize {
+    if !(timeline_secs > 0.0) || sample_rate == 0 || channels == 0 {
+        return 0;
+    }
+    let frame = channels as u64 * 4;
+    let target_samples = (timeline_secs * f64::from(sample_rate)).round().max(0.0) as u64;
+    let have_samples = already_bytes / frame;
+    if target_samples <= have_samples {
+        return 0;
+    }
+    let gap = (target_samples - have_samples).saturating_mul(frame);
+    const MAX_PAD: u64 = 48_000 * 2 * 4 * 5;
+    gap.min(MAX_PAD) as usize
+}
+
+fn mux_pcm_audio(
     video_mp4: &Path,
     pcm_path: &Path,
     sample_rate: u32,
     channels: u16,
+    mix_with_existing: bool,
 ) -> AppResult<()> {
     let ffmpeg = ffmpeg_path();
     let tmp = video_mp4.with_extension("mux.mp4");
-    let status = proc::command(&ffmpeg)
-        .args([
-            "-hide_banner",
-            "-loglevel",
-            "error",
-            "-y",
-            "-i",
-        ])
-        .arg(video_mp4)
-        .args([
-            "-f",
-            "f32le",
-            "-ar",
-            &sample_rate.to_string(),
-            "-ac",
-            &channels.to_string(),
-            "-i",
-        ])
-        .arg(pcm_path)
-        .args([
-            "-c:v",
-            "copy",
-            "-c:a",
-            "aac",
-            "-b:a",
-            "192k",
-            "-shortest",
-            "-movflags",
-            "+frag_keyframe+empty_moov+default_base_moof",
-        ])
-        .arg(&tmp)
-        .status()
-        .map_err(|e| AppError::Encoder(format!("system-audio mux spawn failed: {e}")))?;
+    let mix = mix_with_existing && mp4_has_audio_stream(video_mp4);
+    let status = if mix {
+        proc::command(&ffmpeg)
+            .args(["-hide_banner", "-loglevel", "error", "-y", "-i"])
+            .arg(video_mp4)
+            .args([
+                "-f",
+                "f32le",
+                "-ar",
+                &sample_rate.to_string(),
+                "-ac",
+                &channels.to_string(),
+                "-i",
+            ])
+            .arg(pcm_path)
+            .args([
+                "-filter_complex",
+                "[0:a][1:a]amix=inputs=2:duration=first:dropout_transition=0[aout]",
+                "-map",
+                "0:v:0",
+                "-map",
+                "[aout]",
+                "-c:v",
+                "copy",
+                "-c:a",
+                "aac",
+                "-b:a",
+                "192k",
+                "-shortest",
+                "-movflags",
+                "+frag_keyframe+empty_moov+default_base_moof",
+            ])
+            .arg(&tmp)
+            .status()
+    } else {
+        proc::command(&ffmpeg)
+            .args(["-hide_banner", "-loglevel", "error", "-y", "-i"])
+            .arg(video_mp4)
+            .args([
+                "-f",
+                "f32le",
+                "-ar",
+                &sample_rate.to_string(),
+                "-ac",
+                &channels.to_string(),
+                "-i",
+            ])
+            .arg(pcm_path)
+            .args([
+                "-c:v",
+                "copy",
+                "-c:a",
+                "aac",
+                "-b:a",
+                "192k",
+                "-shortest",
+                "-movflags",
+                "+frag_keyframe+empty_moov+default_base_moof",
+            ])
+            .arg(&tmp)
+            .status()
+    }
+    .map_err(|e| AppError::Encoder(format!("pcm-audio mux spawn failed: {e}")))?;
 
     if !status.success() {
         let _ = fs::remove_file(&tmp);
         return Err(AppError::Encoder(format!(
-            "system-audio mux failed with {status}"
+            "pcm-audio mux failed with {status}"
         )));
     }
 
     fs::rename(&tmp, video_mp4).map_err(|e| {
         let _ = fs::remove_file(&tmp);
-        AppError::Encoder(format!("system-audio mux rename failed: {e}"))
+        AppError::Encoder(format!("pcm-audio mux rename failed: {e}"))
     })
 }
 
@@ -899,6 +1126,18 @@ pub(crate) fn ffprobe_path() -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn pcm_pad_covers_late_audio_start() {
+        // 200ms late at 48kHz stereo f32 → 200ms of silence.
+        let gap = pcm_pad_bytes(0.2, 0, 48_000, 2);
+        assert_eq!(gap, 48_000 / 5 * 2 * 4);
+    }
+
+    #[test]
+    fn pcm_pad_noop_when_already_ahead() {
+        assert_eq!(pcm_pad_bytes(0.1, 100_000, 48_000, 2), 0);
+    }
 
     #[test]
     fn enhance_chain_off_is_none() {
@@ -956,7 +1195,7 @@ mod tests {
         let missing = dir.join("nope.mp4");
         let pcm = dir.join("a.pcm");
         fs::write(&pcm, [0u8; 8]).unwrap();
-        let err = mux_system_audio(&missing, &pcm, 48_000, 2).unwrap_err();
+        let err = mux_pcm_audio(&missing, &pcm, 48_000, 2, false).unwrap_err();
         assert!(err.to_string().contains("mux") || err.to_string().contains("ffmpeg"));
         let _ = fs::remove_dir_all(&dir);
     }
@@ -969,7 +1208,8 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("capptivo-short-{}", uuid::Uuid::new_v4()));
         fs::create_dir_all(&dir).unwrap();
         let out = dir.join("screen.mp4");
-        let mut enc = Encoder::spawn(&out, 64, 64, 30, QualityPreset::Balanced, false).unwrap();
+        let mut enc =
+            Encoder::spawn(&out, 64, 64, 30, QualityPreset::Balanced, false, false).unwrap();
         let short = vec![0u8; 16];
         let err = enc.write_frame(&short, 64 * 4).unwrap_err();
         assert!(err.to_string().contains("short") || err.to_string().contains("truncated"));
@@ -984,7 +1224,8 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("capptivo-pcm-{}", uuid::Uuid::new_v4()));
         fs::create_dir_all(&dir).unwrap();
         let out = dir.join("screen.mp4");
-        let mut enc = Encoder::spawn(&out, 64, 64, 30, QualityPreset::Balanced, true).unwrap();
+        let mut enc =
+            Encoder::spawn(&out, 64, 64, 30, QualityPreset::Balanced, true, false).unwrap();
         enc.write_audio(&[0u8; 8], 48_000, 2).unwrap();
         enc.write_audio(&[0u8; 8], 24_000, 1).unwrap();
         assert_eq!(enc.pcm_rate, 48_000);
@@ -1015,7 +1256,7 @@ mod tests {
             let out = dir.join("screen.mp4");
 
             let mut enc =
-                Encoder::spawn(&out, W, EVEN_H, 30, QualityPreset::Balanced, false).unwrap();
+                Encoder::spawn(&out, W, EVEN_H, 30, QualityPreset::Balanced, false, false).unwrap();
             let frame = vec![120u8; (stride * ODD_H) as usize];
             for _ in 0..10 {
                 enc.write_frame(&frame, stride).unwrap();

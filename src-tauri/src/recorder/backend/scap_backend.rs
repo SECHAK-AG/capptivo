@@ -11,7 +11,7 @@
 //! rendezvous channel before returning the [`CaptureHandle`].
 
 use super::sck_window;
-use super::system_audio::SystemAudioTap;
+use super::system_audio::{CompanionAudioOpts, SystemAudioTap};
 use super::picker_sources;
 use super::source_preview;
 use super::{CaptureBackend, CaptureHandle, RawFrame, CAPTURE_CHANNEL_CAP};
@@ -133,7 +133,7 @@ impl CaptureBackend for ScapBackend {
 
         let (tx, rx) = crossbeam_channel::bounded::<RawFrame>(CAPTURE_CHANNEL_CAP);
         let (meta_tx, meta_rx) =
-            crossbeam_channel::bounded::<AppResult<([u32; 2], Instant)>>(1);
+            crossbeam_channel::bounded::<AppResult<([u32; 2], Instant, u64)>>(1);
         let stop_flag = Arc::new(AtomicBool::new(false));
         let dropped = Arc::new(AtomicU64::new(0));
 
@@ -203,7 +203,7 @@ impl CaptureBackend for ScapBackend {
                         return;
                     }
                 };
-                if meta_tx.send(Ok(([w, h], epoch))).is_err() {
+                if meta_tx.send(Ok(([w, h], epoch, epoch_host_ns))).is_err() {
                     capturer.stop_capture();
                     return;
                 }
@@ -231,7 +231,7 @@ impl CaptureBackend for ScapBackend {
             })
             .map_err(|e| AppError::Other(format!("failed to spawn capture thread: {e}")))?;
 
-        let ([width, height], epoch) = if is_window {
+        let ([width, height], epoch, epoch_host_ns) = if is_window {
             match meta_rx.recv_timeout(sck_window::FIRST_FRAME_TIMEOUT) {
                 Ok(Ok(meta)) => meta,
                 Ok(Err(e)) => return Err(e),
@@ -248,19 +248,6 @@ impl CaptureBackend for ScapBackend {
                 .map_err(|_| AppError::Other("capture thread exited before start".into()))??
         };
 
-        // Optional system-audio companion stream (same source id).
-        let audio_tap = if config.capture_system_audio {
-            match SystemAudioTap::start(&config.source_id) {
-                Ok(tap) => Some(tap),
-                Err(e) => {
-                    tracing::warn!(%e, "system audio unavailable; continuing video-only");
-                    None
-                }
-            }
-        } else {
-            None
-        };
-
         let stop = {
             let stop_flag = stop_flag.clone();
             move || stop_flag.store(true, Ordering::Relaxed)
@@ -268,9 +255,36 @@ impl CaptureBackend for ScapBackend {
         let mut handle = CaptureHandle::new(width, height, fps, rx, dropped, stop);
         handle.epoch = epoch;
 
-        if let Some(tap) = audio_tap {
-            let rx = tap.rx.clone();
-            handle.attach_audio(rx, move || drop(tap));
+        // Optional companion stream: system audio and/or SCK captureMicrophone.
+        let audio_opts = CompanionAudioOpts {
+            system: config.capture_system_audio,
+            microphone: config.capture_microphone,
+            microphone_device_id: config.microphone_device_id.clone(),
+            microphone_label: config.microphone_label.clone(),
+        };
+        if audio_opts.any() {
+            match SystemAudioTap::start(&config.source_id, audio_opts, epoch_host_ns) {
+                Ok(tap) => {
+                    let system_rx = tap.system_rx.clone();
+                    let mic_rx = tap.mic_rx.clone();
+                    match (system_rx, mic_rx) {
+                        (Some(sys), Some(mic)) => {
+                            handle.attach_audio(sys, || {});
+                            handle.attach_mic(mic, move || drop(tap));
+                        }
+                        (Some(sys), None) => {
+                            handle.attach_audio(sys, move || drop(tap));
+                        }
+                        (None, Some(mic)) => {
+                            handle.attach_mic(mic, move || drop(tap));
+                        }
+                        (None, None) => drop(tap),
+                    }
+                }
+                Err(e) => {
+                    tracing::warn!(%e, "companion audio unavailable; continuing without it");
+                }
+            }
         }
 
         // Cursor samples are normalized against this rect (global points, the

@@ -22,7 +22,7 @@
 //!   sampler. Fall back to `Embedded` when Metadata isn't advertised (no track;
 //!   `tracks_cursor` stays false).
 
-use super::pulse_audio::PulseMonitorTap;
+use super::pulse_audio::{PulseMicTap, PulseMonitorTap};
 use super::{CaptureBackend, CaptureHandle, RawFrame, CAPTURE_CHANNEL_CAP};
 use crate::error::{AppError, AppResult};
 use crate::recorder::types::{CaptureSource, CaptureSourceKind, RecorderConfig};
@@ -136,13 +136,29 @@ impl CaptureBackend for PortalBackend {
         handle.tracks_cursor = meta.tracks_cursor;
 
         if config.capture_system_audio {
-            match PulseMonitorTap::start() {
+            match PulseMonitorTap::start(epoch) {
                 Ok(tap) => {
                     let rx = tap.rx.clone();
                     handle.attach_audio(rx, move || drop(tap));
                 }
                 Err(e) => {
                     tracing::warn!(%e, "system audio unavailable; continuing video-only");
+                }
+            }
+        }
+
+        if config.capture_microphone {
+            let name = config
+                .microphone_label
+                .as_deref()
+                .or(config.microphone_device_id.as_deref());
+            match PulseMicTap::start(name, epoch) {
+                Ok(tap) => {
+                    let rx = tap.rx.clone();
+                    handle.attach_mic(rx, move || drop(tap));
+                }
+                Err(e) => {
+                    tracing::warn!(%e, "microphone unavailable; continuing without mic");
                 }
             }
         }

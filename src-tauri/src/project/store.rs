@@ -124,6 +124,7 @@ impl ProjectStore {
             frames_encoded: artifacts.stats.frames_encoded,
             frames_dropped: artifacts.stats.frames_dropped,
             scale_factor: artifacts.cursor.scale_factor,
+            camera_offset_ms: artifacts.camera_offset_ms,
         };
         write_json_atomic(&dir.join("meta.json"), &meta)?;
 
@@ -132,11 +133,9 @@ impl ProjectStore {
             files.thumbnail = Some(super::thumbnail::THUMBNAIL_FILE.to_string());
         }
         // Ignore empty stubs — MediaRecorder must have written real bytes.
-        if camera_file_usable(&dir.join("camera.webm")) {
-            files.camera = Some("camera.webm".into());
-        } else if camera_file_usable(&dir.join("camera.mp4")) {
-            files.camera = Some("camera.mp4".into());
-        }
+        // Prefers the normalized H.264 track when one is already there; the
+        // editor's `ensure_camera_track` produces it and repins this field.
+        files.camera = super::camera_track::resolve(&dir).map(str::to_string);
 
         // `files` / `capture` / `schema_version` are ours to own — they describe
         // the finished capture. `editor_state`, `title` and `created_at` belong
@@ -221,6 +220,13 @@ impl ProjectStore {
 
     pub fn rename(&self, id: &str, title: Option<String>) -> AppResult<()> {
         self.update_project(id, move |project| project.title = title)
+    }
+
+    /// Repoint the manifest at a face-cam file — used once per project after
+    /// [`super::camera_track::ensure`] normalizes the recorded WebM.
+    pub fn set_camera_file(&self, id: &str, camera: &str) -> AppResult<()> {
+        let camera = camera.to_string();
+        self.update_project(id, move |project| project.files.camera = Some(camera))
     }
 
     pub fn delete(&self, id: &str) -> AppResult<()> {
@@ -309,6 +315,13 @@ impl ProjectStore {
         Ok((meta.width, meta.height))
     }
 
+    /// Face-cam start offset in milliseconds relative to the screen's first
+    /// frame. `None` for takes with no face-cam, and for takes recorded before
+    /// the offset was measured.
+    pub fn camera_offset_ms(&self, id: &str) -> Option<i64> {
+        self.read_meta(id).ok().and_then(|m| m.camera_offset_ms)
+    }
+
     /// Read a project's `cursor.json`, if present. (Consumed by the
     /// `DesktopEditorHost` metadata load in Phase 4.)
     #[allow(dead_code)]
@@ -387,12 +400,6 @@ fn write_json_atomic<T: serde::Serialize>(path: &Path, value: &T) -> AppResult<(
     Ok(())
 }
 
-fn camera_file_usable(path: &Path) -> bool {
-    fs::metadata(path)
-        .map(|m| m.is_file() && m.len() > 2048)
-        .unwrap_or(false)
-}
-
 /// Apply in-place migrations to a raw project value based on its `schemaVersion`.
 /// v1 is current, so this is a no-op today — but the seam exists from day one.
 fn migrate(value: &mut serde_json::Value) {
@@ -438,6 +445,8 @@ mod tests {
             fps: 30,
             error: None,
             interrupted: false,
+            camera_offset_ms: None,
+            media_lead_in_ms: 0,
         }
     }
 
@@ -450,6 +459,8 @@ mod tests {
             show_cursor: true,
             capture_system_audio: false,
             capture_microphone: false,
+            microphone_device_id: None,
+            microphone_label: None,
             quality: QualityPreset::default(),
         }
     }

@@ -6,6 +6,7 @@
 import { ALL_FORMATS, CustomSource, Input, VideoSampleSink, type VideoSample } from "mediabunny";
 
 import type { CompositorMedia } from "./exportCompositor";
+import { faceCamMediaTime, type FaceCamTrack } from "../lib/faceCamSync";
 import { createFrameSurface, type FrameSurface, type FrameSurfaceMode } from "./frameSurface";
 
 /** Bounded Range reads for `media://` — avoids materializing multi-GB responses. */
@@ -69,7 +70,7 @@ const PREFETCH_DEPTH = 2;
 /** Open screen (+ camera) for sequential decode; `null` → seek fallback for all tracks. */
 export async function openSequentialMedia(
   screenUrl: string,
-  cameraUrl: string | null,
+  faceCam: FaceCamTrack,
 ): Promise<SequentialMedia | null> {
   if (typeof VideoDecoder === "undefined") return null;
 
@@ -77,8 +78,8 @@ export async function openSequentialMedia(
   if (!screen) return null;
 
   let camera: Awaited<ReturnType<typeof openTrack>> = null;
-  if (cameraUrl) {
-    camera = await openTrack(cameraUrl).catch(() => null);
+  if (faceCam.url) {
+    camera = await openTrack(faceCam.url).catch(() => null);
     if (!camera) {
       screen.track.dispose();
       return null;
@@ -89,11 +90,25 @@ export async function openSequentialMedia(
     screen.track,
     ...(camera ? [camera.track] : []),
   ];
+  /**
+   * Timeline times are screen times. The face-cam decodes its own file, so its
+   * plan is the same instants mapped through the recorded start offset — the
+   * mapping the preview uses, so the export matches what the user scrubbed.
+   */
+  const planFor = (track: SequentialTrack, frameTimes: number[]): number[] => {
+    if (!camera || track !== camera.track) return frameTimes;
+    const camDuration = camera.duration;
+    return frameTimes.map(
+      (t) => faceCamMediaTime(t, faceCam.offsetMs, camDuration) ?? 0,
+    );
+  };
 
   const media: CompositorMedia = {
     video: screen.track.surface.element,
     camera: camera?.track.surface.element ?? null,
     duration: screen.duration,
+    cameraOffsetMs: faceCam.offsetMs,
+    cameraDuration: camera?.duration ?? 0,
     dispose: () => {
       for (const t of tracks) t.dispose();
     },
@@ -105,7 +120,7 @@ export async function openSequentialMedia(
       const mode = options?.mode ?? "video-frame";
       const readers = tracks.map((track) => {
         track.surface.setMode(mode);
-        const iterator = track.begin(frameTimes);
+        const iterator = track.begin(planFor(track, frameTimes));
         const pending: Promise<IteratorResult<VideoSample | null, void>>[] = [];
         const enqueue = () => {
           const next = iterator.next();

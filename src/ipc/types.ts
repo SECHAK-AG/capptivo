@@ -46,6 +46,10 @@ export interface RecorderConfig {
   showCursor: boolean;
   captureSystemAudio: boolean;
   captureMicrophone?: boolean;
+  /** Passed to native SCK/WASAPI mic — prefer with `microphoneLabel`. */
+  microphoneDeviceId?: string | null;
+  /** Label match when WebView deviceId is an opaque hash. */
+  microphoneLabel?: string | null;
   quality: QualityPreset;
 }
 

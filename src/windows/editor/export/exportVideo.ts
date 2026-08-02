@@ -58,6 +58,7 @@ import {
   type ResolvedExportParams,
 } from "./exportSettings";
 import { resolveStageSize } from "../lib/composition";
+import { faceCamMediaTime, type FaceCamTrack } from "../lib/faceCamSync";
 
 export { cancelActiveExport } from "./exportCancel";
 
@@ -125,6 +126,13 @@ export async function exportProject(
   const store = useEditorStore.getState();
   const { project, screenUrl, sourceVideoSize } = store;
   if (!project || !screenUrl || !sourceVideoSize) return;
+
+  // Carried as one value so no export path can read the face-cam without the
+  // offset that puts it on the screen timeline.
+  const faceCam: FaceCamTrack = {
+    url: store.cameraUrl,
+    offsetMs: store.cameraOffsetMs,
+  };
 
   // Same stage resolution the preview composites at — the ratio picker is the
   // single source of output size.
@@ -236,7 +244,7 @@ export async function exportProject(
     throwIfAborted(signal);
 
     if (resolved.format === "gif") {
-      await renderGifToSink(sink, screenUrl, store.cameraUrl, resolved, signal);
+      await renderGifToSink(sink, screenUrl, faceCam, resolved, signal);
     } else {
       const prepared = audioPrep ? await audioPrep : null;
       throwIfAborted(signal);
@@ -244,7 +252,7 @@ export async function exportProject(
       const audioMuxed = await renderVideoToSink(
         sink,
         screenUrl,
-        store.cameraUrl,
+        faceCam,
         resolved,
         prepared?.mediaUrl ?? null,
         signal,
@@ -465,7 +473,7 @@ async function pickVideoEncodeTuning(
 async function renderVideoToSink(
   sink: ExportSink,
   screenUrl: string,
-  cameraUrl: string | null,
+  faceCam: FaceCamTrack,
   params: ResolvedExportParams,
   audioMediaUrl: string | null,
   signal: AbortSignal,
@@ -489,7 +497,7 @@ async function renderVideoToSink(
     await renderVideoViaMediaRecorder(
       sink,
       screenUrl,
-      cameraUrl,
+      faceCam,
       pickMime(container).mime,
       params,
       signal,
@@ -498,12 +506,12 @@ async function renderVideoToSink(
   }
 
   throwIfAborted(signal);
-  const sequential = await openSequentialMedia(screenUrl, cameraUrl).catch(
+  const sequential = await openSequentialMedia(screenUrl, faceCam).catch(
     () => null,
   );
   const session = sequential
     ? await createExportCompositorFromMedia(sequential.media, width, height)
-    : await createExportCompositor(screenUrl, cameraUrl, width, height);
+    : await createExportCompositor(screenUrl, faceCam, width, height);
   const {
     canvas,
     video,
@@ -594,7 +602,10 @@ async function renderVideoToSink(
         await reader.nextFrame();
       } else {
         await seekTo(video, t);
-        if (camera) await seekTo(camera, t).catch(() => undefined);
+        if (camera) {
+          const camT = faceCamMediaTime(t, faceCam.offsetMs, camera.duration);
+          if (camT != null) await seekTo(camera, camT).catch(() => undefined);
+        }
         // Cheap freeze detector: a seek that lands far from the target means the
         // element stopped honoring seeks (the fragmented-MP4 clamp signature).
         if (Math.abs(video.currentTime - t) > 0.1 && driftLogs < 10) {
@@ -683,7 +694,7 @@ async function renderVideoToSink(
 async function renderVideoViaMediaRecorder(
   sink: ExportSink,
   screenUrl: string,
-  cameraUrl: string | null,
+  faceCam: FaceCamTrack,
   mime: string,
   params: ResolvedExportParams,
   signal: AbortSignal,
@@ -694,7 +705,7 @@ async function renderVideoViaMediaRecorder(
   // offscreen surface the WebCodecs loop uses.
   const session = await createExportCompositor(
     screenUrl,
-    cameraUrl,
+    faceCam,
     width,
     height,
     {
@@ -740,12 +751,13 @@ async function renderVideoViaMediaRecorder(
     let raf = 0;
     const draw = () => {
       const t = video.currentTime;
-      if (camera && Number.isFinite(camera.duration) && camera.duration > 0) {
-        const target = Math.min(t, Math.max(0, camera.duration - 0.001));
+      if (camera) {
+        const target = faceCamMediaTime(t, faceCam.offsetMs, camera.duration);
         // Only hard-seek on large drift — re-seeking a playing element every
         // frame stutters the face-cam. Small drift resolves as it plays.
-        if (Math.abs(camera.currentTime - target) > 0.25)
+        if (target != null && Math.abs(camera.currentTime - target) > 0.25) {
           camera.currentTime = target;
+        }
       }
       drawAt(t);
       if (t - lastCaptureAt >= frameInterval - 1e-4) {
@@ -771,7 +783,14 @@ async function renderVideoViaMediaRecorder(
       throwIfAborted(signal);
       activeSeg = seg;
       await seekTo(video, seg.start);
-      if (camera) await seekTo(camera, seg.start).catch(() => undefined);
+      if (camera) {
+        const camT = faceCamMediaTime(
+          seg.start,
+          faceCam.offsetMs,
+          camera.duration,
+        );
+        if (camT != null) await seekTo(camera, camT).catch(() => undefined);
+      }
       await video.play();
       if (camera) void camera.play().catch(() => undefined);
       await waitUntil(

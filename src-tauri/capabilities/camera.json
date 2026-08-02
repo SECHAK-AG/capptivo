@@ -5,6 +5,7 @@
   "windows": ["camera"],
   "permissions": [
     "core:window:allow-start-dragging",
+    "allow-mark-camera-started",
     "allow-begin-camera-file",
     "allow-write-camera-chunk",
     "allow-finish-camera-file"

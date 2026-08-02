@@ -701,6 +701,17 @@ unsafe fn handle_audio(ctx: &DelegateCtx, sample: CMSampleBufferRef) {
             data,
             sample_rate: SYSTEM_AUDIO_RATE,
             channels: SYSTEM_AUDIO_CHANNELS,
+            timestamp: {
+                let pts = CMSampleBufferGetPresentationTimeStamp(sample).seconds();
+                match pts {
+                    Some(pts) => {
+                        let mut epoch = ctx.epoch.lock();
+                        let start = *epoch.get_or_insert(pts);
+                        Duration::from_secs_f64((pts - start).max(0.0))
+                    }
+                    None => Duration::ZERO,
+                }
+            },
         });
     }
 
@@ -1071,7 +1082,49 @@ impl CaptureBackend for AvfDeviceBackend {
         if want_audio {
             handle.audio = Some(audio_rx);
         }
+
+        // Mac mic during iPhone capture: SCK companion on the main display
+        // (filter only — 2×2 unused video). Phone muxed audio stays on `audio`.
+        #[cfg(feature = "scap-capture")]
+        if config.capture_microphone {
+            attach_sck_mic(&mut handle, config);
+        }
+
         Ok(handle)
+    }
+}
+
+#[cfg(feature = "scap-capture")]
+fn host_clock_ns_macos() -> u64 {
+    extern "C" {
+        fn clock_gettime_nsec_np(clock_id: u32) -> u64;
+    }
+    const CLOCK_UPTIME_RAW: u32 = 8;
+    unsafe { clock_gettime_nsec_np(CLOCK_UPTIME_RAW) }
+}
+
+#[cfg(feature = "scap-capture")]
+fn attach_sck_mic(handle: &mut CaptureHandle, config: &RecorderConfig) {
+    use super::system_audio::{CompanionAudioOpts, SystemAudioTap};
+    use core_graphics::display::CGDisplay;
+
+    let main_id = CGDisplay::main().id;
+    let source_id = format!("display:{main_id}");
+    let opts = CompanionAudioOpts {
+        system: false,
+        microphone: true,
+        microphone_device_id: config.microphone_device_id.clone(),
+        microphone_label: config.microphone_label.clone(),
+    };
+    match SystemAudioTap::start(&source_id, opts, host_clock_ns_macos()) {
+        Ok(tap) => {
+            if let Some(rx) = tap.mic_rx.clone() {
+                handle.attach_mic(rx, move || drop(tap));
+            }
+        }
+        Err(e) => {
+            tracing::warn!(%e, "microphone unavailable during device capture");
+        }
     }
 }
 

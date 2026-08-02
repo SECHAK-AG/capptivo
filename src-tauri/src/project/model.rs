@@ -79,6 +79,12 @@ pub struct Meta {
     pub frames_dropped: u64,
     /// Display backing scale factor at capture time (points → pixels).
     pub scale_factor: f64,
+    /// Milliseconds from the screen's first frame to the face-cam's first frame.
+    /// Signed: negative means the bubble was already rolling. `None` for a take
+    /// with no face-cam, and for takes recorded before this was measured — those
+    /// keep the old implicit "assume zero" behaviour.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub camera_offset_ms: Option<i64>,
 }
 
 /// Lightweight summary for the recorder popover's "recent recordings" list.

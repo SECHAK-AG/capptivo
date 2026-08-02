@@ -491,6 +491,7 @@ function CameraMenu({
   const setCameraEnabled = useRecorderStore((s) => s.setCameraEnabled);
   const setCameraDeviceId = useRecorderStore((s) => s.setCameraDeviceId);
   const ensureCameraDevices = useRecorderStore((s) => s.ensureCameraDevices);
+  const requestCameraAccess = useRecorderStore((s) => s.requestCameraAccess);
   const [devicesReady, setDevicesReady] = useState(false);
 
   useEffect(() => {
@@ -550,7 +551,7 @@ function CameraMenu({
         <button
           type="button"
           className="w-full px-2 py-2 text-left text-xs text-primary hover:underline"
-          onClick={() => void ensureCameraDevices()}
+          onClick={() => void requestCameraAccess()}
         >
           {t("recorder.camera.grant")}
         </button>
@@ -636,13 +637,9 @@ function MicMenu({
         <p className="px-2 py-2 text-xs text-muted-foreground">{t("app.loading")}</p>
       ) : null}
       {devicesReady && microphones.length === 0 ? (
-        <button
-          type="button"
-          className="w-full px-2 py-2 text-left text-xs text-primary hover:underline"
-          onClick={() => void ensureMicrophoneDevices()}
-        >
-          {t("recorder.mic.grant")}
-        </button>
+        <p className="px-2 py-2 text-xs text-muted-foreground">
+          {t("recorder.mic.off")}
+        </p>
       ) : null}
     </RecorderMenu>
   );

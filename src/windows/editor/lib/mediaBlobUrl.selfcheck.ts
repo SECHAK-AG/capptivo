@@ -20,10 +20,22 @@ function assert(cond: boolean, msg: string): void {
   if (!cond) throw new Error(msg);
 }
 
-assert(isSameOriginMediaUrl("blob:http://localhost/abc"), "blob: is same-origin");
-assert(isSameOriginMediaUrl("data:video/mp4;base64,xx"), "data: is same-origin");
-assert(!isSameOriginMediaUrl("media://localhost/p/screen.mp4"), "media:// is cross-origin");
-assert(!isSameOriginMediaUrl("http://media.localhost/p/screen.mp4"), "media host is cross-origin");
+assert(
+  isSameOriginMediaUrl("blob:http://localhost/abc"),
+  "blob: is same-origin",
+);
+assert(
+  isSameOriginMediaUrl("data:video/mp4;base64,xx"),
+  "data: is same-origin",
+);
+assert(
+  !isSameOriginMediaUrl("media://localhost/p/screen.mp4"),
+  "media:// is cross-origin",
+);
+assert(
+  !isSameOriginMediaUrl("http://media.localhost/p/screen.mp4"),
+  "media host is cross-origin",
+);
 
 {
   const pass = await toBlobMediaUrl("blob:already-same");
@@ -64,7 +76,10 @@ function abortError(): DOMException {
   return new DOMException("The operation was aborted.", "AbortError");
 }
 
-function parseRange(init: RequestInit | undefined): { start: number; end: number } {
+function parseRange(init: RequestInit | undefined): {
+  start: number;
+  end: number;
+} {
   const raw = new Headers(init?.headers).get("Range") ?? "";
   const [start, end] = raw.replace("bytes=", "").split("-");
   return { start: Number(start), end: Number(end) };
@@ -158,11 +173,16 @@ async function assertBlobBytes(
   expected: Uint8Array,
   label: string,
 ): Promise<void> {
-  assert(blob.size === expected.length, `${label}: size ${blob.size} != ${expected.length}`);
+  assert(
+    blob.size === expected.length,
+    `${label}: size ${blob.size} != ${expected.length}`,
+  );
   const actual = new Uint8Array(await blob.arrayBuffer());
   for (let i = 0; i < expected.length; i += 1) {
     if (actual[i] !== expected[i]) {
-      throw new Error(`${label}: byte ${i} is ${actual[i]}, expected ${expected[i]}`);
+      throw new Error(
+        `${label}: byte ${i} is ${actual[i]}, expected ${expected[i]}`,
+      );
     }
   }
 }
@@ -212,7 +232,8 @@ await withServer({ total: TOTAL }, async (blobs) => {
   await withServer(
     {
       total: TOTAL,
-      delayFor: (start) => (windows - Math.floor(start / MEDIA_FETCH_WINDOW)) * 10,
+      delayFor: (start) =>
+        (windows - Math.floor(start / MEDIA_FETCH_WINDOW)) * 10,
     },
     async (blobs) => {
       const media = await toBlobMediaUrl(SCREEN);
@@ -278,8 +299,13 @@ await withServer(
 
 // A file with no bytes is reported as empty, not as a zero-length blob.
 await withServer({ total: 0 }, async (blobs) => {
-  const message = await messageOf(() => toBlobMediaUrl("media://localhost/p/empty.mp4"));
-  assert(message === "media is empty", `empty media is reported, got "${message}"`);
+  const message = await messageOf(() =>
+    toBlobMediaUrl("media://localhost/p/empty.mp4"),
+  );
+  assert(
+    message === "media is empty",
+    `empty media is reported, got "${message}"`,
+  );
   assert(blobs.length === 0, "empty read creates no blob");
 });
 
@@ -287,7 +313,10 @@ await withServer({ total: 0 }, async (blobs) => {
 // against the original, so it must cost one request and never assemble a blob.
 await withServer({ total: TOTAL }, async (blobs) => {
   let requests = 0;
-  const counted = installServer({ total: TOTAL, onRequest: () => (requests += 1) });
+  const counted = installServer({
+    total: TOTAL,
+    onRequest: () => (requests += 1),
+  });
   const size = await probeMediaSize(SCREEN);
   counted();
   assert(size === TOTAL, `probe reports the total, got ${size}`);
@@ -298,7 +327,10 @@ await withServer({ total: TOTAL }, async (blobs) => {
 // A server with no Content-Range gives no size — the caller must not read that
 // as "empty" and skip the file.
 await withServer({ total: TOTAL, omitContentRange: true }, async () => {
-  assert((await probeMediaSize(SCREEN)) === null, "missing Content-Range → null");
+  assert(
+    (await probeMediaSize(SCREEN)) === null,
+    "missing Content-Range → null",
+  );
 });
 
 // A whole-body 200 still yields a usable size.
@@ -318,7 +350,10 @@ await withServer({ total: TOTAL, delayFor: () => 10 }, async () => {
   } catch (e) {
     name = e instanceof Error ? e.name : String(e);
   }
-  assert(name === "AbortError", `probe abort surfaces AbortError, got "${name}"`);
+  assert(
+    name === "AbortError",
+    `probe abort surfaces AbortError, got "${name}"`,
+  );
 });
 
 console.log("mediaBlobUrl.selfcheck: ok");

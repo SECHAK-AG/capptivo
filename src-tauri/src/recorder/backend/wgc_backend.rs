@@ -14,7 +14,7 @@
 //! input is [`RecorderConfig::crop`] (display-local points from the area
 //! picker), converted here using the monitor's effective DPI.
 
-use super::wasapi_audio::WasapiLoopback;
+use super::wasapi_audio::{WasapiLoopback, WasapiMic};
 use super::win_preview;
 use super::{CaptureBackend, CaptureHandle, RawFrame, CAPTURE_CHANNEL_CAP};
 use crate::error::{AppError, AppResult};
@@ -212,13 +212,30 @@ impl CaptureBackend for WgcBackend {
 
         // Optional system-audio companion (WASAPI loopback on the output mix).
         if config.capture_system_audio {
-            match WasapiLoopback::start() {
+            match WasapiLoopback::start(epoch) {
                 Ok(tap) => {
                     let rx = tap.rx.clone();
                     handle.attach_audio(rx, move || drop(tap));
                 }
                 Err(e) => {
                     tracing::warn!(%e, "system audio unavailable; continuing video-only");
+                }
+            }
+        }
+
+        // Mic on a capture endpoint — never double-open with loopback.
+        if config.capture_microphone {
+            match WasapiMic::start(
+                config.microphone_device_id.as_deref(),
+                config.microphone_label.as_deref(),
+                epoch,
+            ) {
+                Ok(tap) => {
+                    let rx = tap.rx.clone();
+                    handle.attach_mic(rx, move || drop(tap));
+                }
+                Err(e) => {
+                    tracing::warn!(%e, "microphone unavailable; continuing without mic");
                 }
             }
         }

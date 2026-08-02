@@ -85,13 +85,17 @@ pub struct RawFrame {
     pub timestamp: Duration,
 }
 
-/// One system-audio packet (interleaved f32le PCM) from the platform tap
+/// One system-audio / mic packet (interleaved f32le PCM) from the platform tap
 /// (ScreenCaptureKit / WASAPI loopback / PulseAudio monitor).
 pub struct RawAudio {
     /// Interleaved little-endian `f32` samples.
     pub data: Vec<u8>,
     pub sample_rate: u32,
     pub channels: u16,
+    /// Capture time on the same axis as [`RawFrame::timestamp`]
+    /// ([`CaptureHandle::epoch`]). Used to pad leading silence so A/V share one
+    /// timeline instead of appending PCM in arrival order.
+    pub timestamp: Duration,
 }
 
 /// A live capture session: a bounded frame channel plus a stop switch.
@@ -106,6 +110,8 @@ pub struct CaptureHandle {
     pub frames: Receiver<RawFrame>,
     /// System-audio packets when `RecorderConfig::capture_system_audio` is on.
     pub audio: Option<Receiver<RawAudio>>,
+    /// Native mic packets when `RecorderConfig::capture_microphone` is on.
+    pub mic: Option<Receiver<RawAudio>>,
     /// Frames the producer had to drop because the channel was full.
     pub dropped: std::sync::Arc<std::sync::atomic::AtomicU64>,
     /// Captured source rect in global points, for cursor-sample normalization.
@@ -141,6 +147,7 @@ impl CaptureHandle {
             fps,
             frames,
             audio: None,
+            mic: None,
             dropped,
             capture_rect: crate::cursor::CaptureRect {
                 x: 0.0,
@@ -166,6 +173,21 @@ impl CaptureHandle {
         on_stop: impl FnOnce() + Send + 'static,
     ) {
         self.audio = Some(rx);
+        self.chain_stop(on_stop);
+    }
+
+    /// Attach a native microphone receiver (SCK `captureMicrophone` / WASAPI /
+    /// Pulse). Same stop-hook rules as [`Self::attach_audio`].
+    pub fn attach_mic(
+        &mut self,
+        rx: Receiver<RawAudio>,
+        on_stop: impl FnOnce() + Send + 'static,
+    ) {
+        self.mic = Some(rx);
+        self.chain_stop(on_stop);
+    }
+
+    fn chain_stop(&mut self, on_stop: impl FnOnce() + Send + 'static) {
         let prev = self.stop.take();
         self.stop = Some(Box::new(move || {
             if let Some(stop) = prev {

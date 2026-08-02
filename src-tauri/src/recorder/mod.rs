@@ -6,6 +6,7 @@
 pub mod backend;
 pub mod encoder;
 pub mod hw_encoder;
+pub mod mic_devices;
 pub mod types;
 
 use crate::cursor::{CursorTrack, CursorTracker};
@@ -14,7 +15,7 @@ use backend::{CaptureBackend, CaptureHandle, RawAudio};
 use encoder::Encoder;
 use parking_lot::Mutex;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI64, Ordering};
 use std::sync::Arc;
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
@@ -40,15 +41,31 @@ pub struct RecordingArtifacts {
     pub error: Option<AppError>,
     /// Capture ended because the producer disconnected before the user stopped.
     pub interrupted: bool,
+    /// Milliseconds from **encoded** timeline t=0 to the face-cam's first sample.
+    /// `None` when no face-cam was recorded.
+    pub camera_offset_ms: Option<i64>,
+    /// Capture-epoch seconds trimmed as warm-up before encoded t=0.
+    pub media_lead_in_ms: i64,
 }
 
 struct ActiveRecording {
     stop_flag: Arc<AtomicBool>,
     pause_flag: Arc<AtomicBool>,
+    /// When true, native mic PCM is discarded (session mute).
+    mic_mute: Arc<AtomicBool>,
     join: JoinHandle<AppResult<RecordingArtifacts>>,
     #[allow(dead_code)]
     project_dir: PathBuf,
+    /// Capture clock (`CaptureHandle::epoch`).
+    epoch: Instant,
+    /// Milliseconds from `epoch` to the face-cam recorder's first sample, or
+    /// [`CAMERA_OFFSET_UNSET`] until the bubble reports in.
+    camera_offset_ms: Arc<AtomicI64>,
 }
+
+/// Sentinel for "the face-cam never started". Real offsets are ≥ 0 when the
+/// cam starts after the screen, but 0 is a valid tiny gap.
+const CAMERA_OFFSET_UNSET: i64 = i64::MIN;
 
 pub struct RecorderController {
     backend: Box<dyn CaptureBackend>,
@@ -115,6 +132,7 @@ impl RecorderController {
         let (width, height) = encodable_dimensions(capture.width, capture.height)?;
         let fps = capture.fps;
         let system_audio = capture.audio.is_some();
+        let microphone = capture.mic.is_some();
 
         let screen_path = project_dir.join("screen.mp4");
         let encoder = Encoder::spawn(
@@ -124,6 +142,7 @@ impl RecorderController {
             fps,
             config.quality,
             system_audio,
+            microphone,
         )?;
 
         // One clock for everything: frame timestamps are measured from the
@@ -144,6 +163,9 @@ impl RecorderController {
 
         let stop_flag = Arc::new(AtomicBool::new(false));
         let pause_flag = Arc::new(AtomicBool::new(false));
+        let mic_mute = Arc::new(AtomicBool::new(false));
+        let camera_offset_ms = Arc::new(AtomicI64::new(CAMERA_OFFSET_UNSET));
+        let media_lead_in_ms = Arc::new(AtomicI64::new(0));
         let emit = self.emit.clone();
 
         let join = spawn_encode_loop(
@@ -153,6 +175,8 @@ impl RecorderController {
             t0,
             stop_flag.clone(),
             pause_flag.clone(),
+            mic_mute.clone(),
+            media_lead_in_ms.clone(),
             emit,
             (width, height, fps),
             screen_path.clone(),
@@ -161,8 +185,11 @@ impl RecorderController {
         *self.active.lock() = Some(ActiveRecording {
             stop_flag,
             pause_flag,
+            mic_mute,
             join,
             project_dir: project_dir.to_path_buf(),
+            epoch: t0,
+            camera_offset_ms,
         });
         self.set_state(RecorderState::Recording);
         (self.emit)(RecorderEvent::Elapsed { seconds: 0.0 });
@@ -187,6 +214,31 @@ impl RecorderController {
         Ok(())
     }
 
+    /// Mute/unmute native mic PCM without tearing down the capture session.
+    pub fn set_mic_muted(&self, muted: bool) -> AppResult<()> {
+        let guard = self.active.lock();
+        let active = guard.as_ref().ok_or(AppError::NotRecording)?;
+        active.mic_mute.store(muted, Ordering::Relaxed);
+        Ok(())
+    }
+
+    /// Offset = cameraStart − captureEpoch.
+    /// Call only after [`Self::start`] — face-cam begins once the screen is live.
+    /// At stop, warm-up blacks trimmed from the MP4 are subtracted so the editor
+    /// offset is relative to encoded t=0.
+    pub fn mark_camera_started(&self) -> AppResult<i64> {
+        let guard = self.active.lock();
+        let active = guard.as_ref().ok_or(AppError::NotRecording)?;
+        let offset_ms = instant_offset_ms(active.epoch, Instant::now());
+        let _ = active.camera_offset_ms.compare_exchange(
+            CAMERA_OFFSET_UNSET,
+            offset_ms,
+            Ordering::Relaxed,
+            Ordering::Relaxed,
+        );
+        Ok(active.camera_offset_ms.load(Ordering::Relaxed))
+    }
+
     /// Stop recording, finalize the MP4, and return the artifacts. The caller
     /// persists them into the project. On success the controller returns to Idle.
     pub fn stop(&self) -> AppResult<RecordingArtifacts> {
@@ -194,13 +246,20 @@ impl RecorderController {
         self.set_state(RecorderState::Finalizing);
 
         active.stop_flag.store(true, Ordering::Relaxed);
+        let raw_camera_offset = match active.camera_offset_ms.load(Ordering::Relaxed) {
+            CAMERA_OFFSET_UNSET => None,
+            ms => Some(ms),
+        };
         let result = active
             .join
             .join()
             .map_err(|_| AppError::Encoder("recording thread panicked".into()))?;
 
         match result {
-            Ok(artifacts) => {
+            Ok(mut artifacts) => {
+                // Encoded t=0 skips capture warm-up blacks — rebase the wall offset.
+                artifacts.camera_offset_ms = raw_camera_offset
+                    .map(|ms| ms.saturating_sub(artifacts.media_lead_in_ms));
                 if let Some(ref e) = artifacts.error {
                     let message = e.to_string();
                     self.set_state(RecorderState::Error {
@@ -212,9 +271,6 @@ impl RecorderController {
                         fatal: true,
                     });
                 } else if artifacts.interrupted {
-                    // `Interrupted` + `StateChanged(Idle)` were emitted from the
-                    // encode thread at detection time; re-assert idle here in
-                    // case the frontend missed the event.
                     self.set_state(RecorderState::Idle);
                 } else {
                     self.set_state(RecorderState::Idle);
@@ -233,6 +289,14 @@ impl RecorderController {
                 Err(e)
             }
         }
+    }
+}
+
+fn instant_offset_ms(epoch: Instant, at: Instant) -> i64 {
+    if at >= epoch {
+        at.duration_since(epoch).as_millis() as i64
+    } else {
+        -(epoch.duration_since(at).as_millis() as i64)
     }
 }
 
@@ -257,6 +321,8 @@ fn spawn_encode_loop(
     t0: Instant,
     stop_flag: Arc<AtomicBool>,
     pause_flag: Arc<AtomicBool>,
+    mic_mute: Arc<AtomicBool>,
+    media_lead_in_ms: Arc<AtomicI64>,
     emit: EmitFn,
     dims: (u32, u32, u32),
     screen_path: PathBuf,
@@ -304,7 +370,19 @@ fn spawn_encode_loop(
                         &capture.audio,
                         &pause_flag,
                         &mut encoder,
-                        media_epoch.is_some(),
+                        media_epoch,
+                        paused_accum,
+                    ) {
+                        encode_error = Some(e);
+                        break;
+                    }
+                    if let Err(e) = drain_mic(
+                        &capture.mic,
+                        &pause_flag,
+                        &mic_mute,
+                        &mut encoder,
+                        media_epoch,
+                        paused_accum,
                     ) {
                         encode_error = Some(e);
                         break;
@@ -336,6 +414,10 @@ fn spawn_encode_loop(
                                     ))
                             {
                                 media_epoch = Some(active_ts);
+                                media_lead_in_ms.store(
+                                    (active_ts.max(0.0) * 1000.0).round() as i64,
+                                    Ordering::Relaxed,
+                                );
                             }
 
                             if let Some(epoch) = media_epoch {
@@ -421,7 +503,20 @@ fn spawn_encode_loop(
                     &capture.audio,
                     &pause_flag,
                     &mut encoder,
-                    media_epoch.is_some(),
+                    media_epoch,
+                    paused_accum,
+                ) {
+                    encode_error = Some(e);
+                }
+            }
+            if encode_error.is_none() {
+                if let Err(e) = drain_mic(
+                    &capture.mic,
+                    &pause_flag,
+                    &mic_mute,
+                    &mut encoder,
+                    media_epoch,
+                    paused_accum,
                 ) {
                     encode_error = Some(e);
                 }
@@ -448,6 +543,10 @@ fn spawn_encode_loop(
                                 continue;
                             }
                             media_epoch = Some(active_ts);
+                            media_lead_in_ms.store(
+                                (active_ts.max(0.0) * 1000.0).round() as i64,
+                                Ordering::Relaxed,
+                            );
                         }
                         let timeline_ts = (active_ts - media_epoch.unwrap()).max(0.0);
                         match pacer.push(&mut encoder, frame.data, bytes_per_row, timeline_ts)
@@ -516,6 +615,10 @@ fn spawn_encode_loop(
                 fps,
                 error: encode_error,
                 interrupted,
+                // Owned by the controller — the bubble reports in over IPC while
+                // this thread is busy encoding. `stop` fills it before returning.
+                camera_offset_ms: None,
+                media_lead_in_ms: media_lead_in_ms.load(Ordering::Relaxed),
             })
         })
         .unwrap_or_else(|_| {
@@ -530,20 +633,70 @@ fn spawn_encode_loop(
         })
 }
 
-/// Drain pending PCM. When `accept` is false, discard chunks so the queue
-/// does not stall during capture warm-up before the first kept video frame.
+/// Drain pending PCM onto the encoded timeline.
+///
+/// Chunks before `media_epoch` are dropped. Later chunks are placed at
+/// `timestamp − media_epoch − paused_accum`, with silence padded so A/V share
+/// one clock (capture PTS, not arrival order).
 fn drain_audio(
     audio: &Option<crossbeam_channel::Receiver<RawAudio>>,
     pause_flag: &AtomicBool,
     encoder: &mut Encoder,
-    accept: bool,
+    media_epoch: Option<f64>,
+    paused_accum: f64,
 ) -> AppResult<()> {
     let Some(audio_rx) = audio else {
         return Ok(());
     };
+    let Some(epoch) = media_epoch else {
+        while audio_rx.try_recv().is_ok() {}
+        return Ok(());
+    };
     while let Ok(chunk) = audio_rx.try_recv() {
-        if accept && !pause_flag.load(Ordering::Relaxed) {
-            encoder.write_audio(&chunk.data, chunk.sample_rate, chunk.channels)?;
+        if pause_flag.load(Ordering::Relaxed) {
+            continue;
+        }
+        let ts = chunk.timestamp.as_secs_f64();
+        if ts + 1e-4 < epoch {
+            continue;
+        }
+        let timeline = (ts - epoch - paused_accum).max(0.0);
+        encoder.write_audio_at(timeline, &chunk.data, chunk.sample_rate, chunk.channels)?;
+    }
+    Ok(())
+}
+
+/// Same as [`drain_audio`] for the mic sidecar; muted sessions write silence so
+/// the mic timeline stays aligned with video.
+fn drain_mic(
+    mic: &Option<crossbeam_channel::Receiver<RawAudio>>,
+    pause_flag: &AtomicBool,
+    mic_mute: &AtomicBool,
+    encoder: &mut Encoder,
+    media_epoch: Option<f64>,
+    paused_accum: f64,
+) -> AppResult<()> {
+    let Some(mic_rx) = mic else {
+        return Ok(());
+    };
+    let Some(epoch) = media_epoch else {
+        while mic_rx.try_recv().is_ok() {}
+        return Ok(());
+    };
+    while let Ok(chunk) = mic_rx.try_recv() {
+        if pause_flag.load(Ordering::Relaxed) {
+            continue;
+        }
+        let ts = chunk.timestamp.as_secs_f64();
+        if ts + 1e-4 < epoch {
+            continue;
+        }
+        let timeline = (ts - epoch - paused_accum).max(0.0);
+        if mic_mute.load(Ordering::Relaxed) {
+            let silence = vec![0u8; chunk.data.len()];
+            encoder.write_mic_at(timeline, &silence, chunk.sample_rate, chunk.channels)?;
+        } else {
+            encoder.write_mic_at(timeline, &chunk.data, chunk.sample_rate, chunk.channels)?;
         }
     }
     Ok(())
@@ -754,6 +907,107 @@ mod tests {
     }
 
     #[test]
+    fn camera_offset_needs_an_active_recording() {
+        let controller =
+            RecorderController::new(Box::new(TestPatternBackend::default()), silent_emit());
+        assert!(matches!(
+            controller.mark_camera_started(),
+            Err(AppError::NotRecording)
+        ));
+    }
+
+    /// Offset = cameraStart − epoch; only the first stamp counts.
+    #[test]
+    fn camera_offset_is_measured_once_against_the_capture_epoch() {
+        if std::process::Command::new("ffmpeg")
+            .arg("-version")
+            .output()
+            .is_err()
+        {
+            eprintln!("ffmpeg not found — skipping camera offset test");
+            return;
+        }
+
+        let dir = std::env::temp_dir().join(format!("capptivo-offset-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+
+        let backend = Box::new(TestPatternBackend {
+            max_frames: Some(30),
+        });
+        let controller = RecorderController::new(backend, silent_emit());
+        let config = RecorderConfig {
+            source_id: "display:test".into(),
+            crop: None,
+            fps: 30,
+            show_cursor: true,
+            capture_system_audio: false,
+            capture_microphone: false,
+            microphone_device_id: None,
+            microphone_label: None,
+            quality: QualityPreset::Balanced,
+        };
+        controller.start(&config, &dir).unwrap();
+
+        std::thread::sleep(Duration::from_millis(120));
+        let first = controller.mark_camera_started().unwrap();
+        assert!(
+            (100..2_000).contains(&first),
+            "offset should track the delay since the epoch, got {first}ms"
+        );
+
+        std::thread::sleep(Duration::from_millis(60));
+        let second = controller.mark_camera_started().unwrap();
+        assert_eq!(second, first, "the first report wins");
+
+        let artifacts = controller.stop().unwrap();
+        let expected = first.saturating_sub(artifacts.media_lead_in_ms);
+        assert_eq!(artifacts.camera_offset_ms, Some(expected));
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A take with no face-cam must not claim an offset — the editor reads
+    /// `None` as "aligned", and a stray zero would be indistinguishable.
+    #[test]
+    fn no_face_cam_reports_no_offset() {
+        if std::process::Command::new("ffmpeg")
+            .arg("-version")
+            .output()
+            .is_err()
+        {
+            eprintln!("ffmpeg not found — skipping camera offset test");
+            return;
+        }
+
+        let dir = std::env::temp_dir().join(format!("capptivo-nooffset-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+
+        let controller = RecorderController::new(
+            Box::new(TestPatternBackend {
+                max_frames: Some(30),
+            }),
+            silent_emit(),
+        );
+        let config = RecorderConfig {
+            source_id: "display:test".into(),
+            crop: None,
+            fps: 30,
+            show_cursor: true,
+            capture_system_audio: false,
+            capture_microphone: false,
+            microphone_device_id: None,
+            microphone_label: None,
+            quality: QualityPreset::Balanced,
+        };
+        controller.start(&config, &dir).unwrap();
+        std::thread::sleep(Duration::from_millis(80));
+        let artifacts = controller.stop().unwrap();
+        assert_eq!(artifacts.camera_offset_ms, None);
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
     fn pacing_writes_first_frame_without_repeats() {
         let p = plan_frame(0.0, 30, 0, 150);
         assert_eq!((p.repeats, p.write_current, p.next_index), (0, true, 1));
@@ -924,6 +1178,8 @@ mod tests {
             show_cursor: true,
             capture_system_audio: false,
             capture_microphone: false,
+            microphone_device_id: None,
+            microphone_label: None,
             quality: QualityPreset::Balanced,
         };
 
@@ -969,6 +1225,8 @@ mod tests {
             show_cursor: true,
             capture_system_audio: false,
             capture_microphone: false,
+            microphone_device_id: None,
+            microphone_label: None,
             quality: QualityPreset::Balanced,
         };
 

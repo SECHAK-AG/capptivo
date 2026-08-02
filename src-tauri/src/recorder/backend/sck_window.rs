@@ -42,16 +42,22 @@ impl UnsafeSCStreamError for QuietErrors {
 
 /// Fires once with the pixel size of the first complete frame (encoder contract).
 struct ReadyGate {
-    tx: Mutex<Option<Sender<AppResult<([u32; 2], Instant)>>>>,
+    tx: Mutex<Option<Sender<AppResult<([u32; 2], Instant, u64)>>>>,
     epoch: Instant,
+    epoch_host_ns: u64,
     done: AtomicBool,
 }
 
 impl ReadyGate {
-    fn new(tx: Sender<AppResult<([u32; 2], Instant)>>, epoch: Instant) -> Self {
+    fn new(
+        tx: Sender<AppResult<([u32; 2], Instant, u64)>>,
+        epoch: Instant,
+        epoch_host_ns: u64,
+    ) -> Self {
         Self {
             tx: Mutex::new(Some(tx)),
             epoch,
+            epoch_host_ns,
             done: AtomicBool::new(false),
         }
     }
@@ -63,7 +69,7 @@ impl ReadyGate {
         let Some(tx) = self.tx.lock().unwrap().take() else {
             return;
         };
-        let _ = tx.send(Ok(([width, height], self.epoch)));
+        let _ = tx.send(Ok(([width, height], self.epoch, self.epoch_host_ns)));
     }
 
     fn fail(&self, err: AppError) {
@@ -123,7 +129,7 @@ pub fn run_window_capture(
     stop: Arc<AtomicBool>,
     dropped: Arc<AtomicU64>,
     tx: Sender<RawFrame>,
-    ready: Sender<AppResult<([u32; 2], Instant)>>,
+    ready: Sender<AppResult<([u32; 2], Instant, u64)>>,
 ) {
     if let Err(e) = run_window_capture_inner(window_id, fps, stop, dropped, tx, ready.clone()) {
         let _ = ready.send(Err(e));
@@ -136,7 +142,7 @@ fn run_window_capture_inner(
     stop: Arc<AtomicBool>,
     dropped: Arc<AtomicU64>,
     tx: Sender<RawFrame>,
-    ready: Sender<AppResult<([u32; 2], Instant)>>,
+    ready: Sender<AppResult<([u32; 2], Instant, u64)>>,
 ) -> AppResult<()> {
     let content = picker_sources::shareable_content_on_screen()
         .map_err(|e| AppError::Other(format!("SCShareableContent: {e}")))?;
@@ -175,7 +181,7 @@ fn run_window_capture_inner(
 
     let epoch = Instant::now();
     let epoch_host_ns = host_clock_ns();
-    let ready_gate = Arc::new(ReadyGate::new(ready, epoch));
+    let ready_gate = Arc::new(ReadyGate::new(ready, epoch, epoch_host_ns));
     let stream = UnsafeSCStream::init(filter, config_ref, QuietErrors);
     stream.add_stream_output(
         VideoOut {
@@ -320,11 +326,12 @@ mod tests {
     fn ready_gate_signals_once() {
         let (tx, rx) = crossbeam_channel::bounded(1);
         let epoch = Instant::now();
-        let gate = ReadyGate::new(tx, epoch);
+        let gate = ReadyGate::new(tx, epoch, 0);
         gate.signal(640, 480);
         gate.signal(800, 600);
-        let (size, got_epoch) = rx.recv().unwrap().unwrap();
+        let (size, got_epoch, host_ns) = rx.recv().unwrap().unwrap();
         assert_eq!(size, [640, 480]);
         assert_eq!(got_epoch, epoch);
+        assert_eq!(host_ns, 0);
     }
 }

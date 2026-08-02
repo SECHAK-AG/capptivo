@@ -119,6 +119,8 @@ mod tests {
             show_cursor: true,
             capture_system_audio: false,
             capture_microphone: false,
+            microphone_device_id: None,
+            microphone_label: None,
             quality: Default::default(),
         }
     }
