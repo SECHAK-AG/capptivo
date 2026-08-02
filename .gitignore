@@ -27,4 +27,6 @@ plans
 docs
 # FFmpeg sidecar binaries (fetched by scripts/fetch-ffmpeg.mjs)
 src-tauri/binaries/
+# Updater signing private key (pubkey lives in tauri.conf.json)
+src-tauri/.updater-keys/
 .pnpm-store

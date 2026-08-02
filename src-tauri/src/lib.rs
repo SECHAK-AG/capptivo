@@ -63,6 +63,7 @@ mod project;
 mod recorder;
 mod state;
 mod tray;
+mod updater;
 mod windows;
 
 use state::AppState;
@@ -86,6 +87,7 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
+        .plugin(tauri_plugin_updater::Builder::new().build())
         // media:// — Range-capable local media (§10). Project files under
         // `projects/<id>/…`; custom backgrounds under `_backgrounds/<file>`.
         .register_uri_scheme_protocol("media", |ctx, request| {
@@ -137,6 +139,7 @@ pub fn run() {
                 if let Err(e) = windows::show_recorder_popover(app) {
                     tracing::warn!(%e, "failed to open recorder on launch");
                 }
+                updater::schedule_startup_check(app);
             }
             // Dock / Finder reopen (macOS): show the recorder rather than
             // silently sitting in the menubar.

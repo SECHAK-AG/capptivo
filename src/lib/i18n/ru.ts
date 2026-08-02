@@ -308,6 +308,7 @@ export const ru: Record<TranslationKey, string> = {
   "recorder.sources.windows": "Окна",
   "recorder.sources.empty": "Источники не найдены.",
   "recorder.settings.open": "Настройки",
+  "recorder.settings.checkUpdates": "Проверить обновления…",
   "recorder.language": "Язык",
   "recorder.hud.pause": "Пауза",
   "recorder.hud.resume": "Продолжить",

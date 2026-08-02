@@ -318,6 +318,7 @@ export const fr: Record<TranslationKey, string> = {
   "recorder.sources.windows": "Fenêtres",
   "recorder.sources.empty": "Aucune source trouvée.",
   "recorder.settings.open": "Réglages",
+  "recorder.settings.checkUpdates": "Rechercher des mises à jour…",
   "recorder.language": "Langue",
   "recorder.hud.pause": "Pause",
   "recorder.hud.resume": "Reprendre",

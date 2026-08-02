@@ -305,6 +305,7 @@ export const ko: Record<TranslationKey, string> = {
   "recorder.sources.windows": "창",
   "recorder.sources.empty": "소스를 찾을 수 없습니다.",
   "recorder.settings.open": "설정",
+  "recorder.settings.checkUpdates": "업데이트 확인…",
   "recorder.language": "언어",
   "recorder.hud.pause": "일시 정지",
   "recorder.hud.resume": "다시 시작",

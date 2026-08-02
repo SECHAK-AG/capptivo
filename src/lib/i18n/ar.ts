@@ -308,6 +308,7 @@ export const ar: Record<TranslationKey, string> = {
   "recorder.sources.windows": "النوافذ",
   "recorder.sources.empty": "لم يتم العثور على مصادر.",
   "recorder.settings.open": "الإعدادات",
+  "recorder.settings.checkUpdates": "التحقق من التحديثات…",
   "recorder.language": "اللغة",
   "recorder.hud.pause": "إيقاف مؤقت",
   "recorder.hud.resume": "متابعة",

@@ -80,6 +80,8 @@ fn main() {
         "prepare_export_audio",
         "attach_export_audio",
         "remove_temp_file",
+        // updater
+        "check_for_updates",
     ];
 
     tauri_build::try_build(

@@ -87,6 +87,8 @@ fn idle_menu(app: &AppHandle) -> tauri::Result<Menu<tauri::Wry>> {
         MenuItem::with_id(app, "annotate", "Annotate Screen…", true, None::<&str>)?;
     let open_library = MenuItem::with_id(app, "open_library", "Recordings…", true, None::<&str>)?;
     let settings = MenuItem::with_id(app, "settings", "Settings…", true, None::<&str>)?;
+    let check_updates =
+        MenuItem::with_id(app, "check_updates", "Check for Updates…", true, None::<&str>)?;
     let separator = PredefinedMenuItem::separator(app)?;
     let quit = MenuItem::with_id(app, "quit", "Quit Capptivo", true, None::<&str>)?;
     Menu::with_items(
@@ -96,6 +98,7 @@ fn idle_menu(app: &AppHandle) -> tauri::Result<Menu<tauri::Wry>> {
             &annotate,
             &open_library,
             &settings,
+            &check_updates,
             &separator,
             &quit,
         ],
@@ -187,6 +190,9 @@ fn on_menu_event(app: &AppHandle, event: tauri::menu::MenuEvent) {
         "settings" => {
             // Settings window is a Phase 5 item; open the popover for now.
             let _ = windows::show_recorder_popover(app);
+        }
+        "check_updates" => {
+            crate::updater::spawn_check(app.clone(), crate::updater::Prompt::Interactive);
         }
         "pause" => {
             if let Some(state) = app.try_state::<AppState>() {

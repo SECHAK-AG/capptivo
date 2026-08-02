@@ -42,6 +42,7 @@
     "allow-hide-annotation-overlay",
     "allow-open-library",
     "allow-open-editor",
+    "allow-check-for-updates",
     "notification:allow-is-permission-granted"
   ]
 }

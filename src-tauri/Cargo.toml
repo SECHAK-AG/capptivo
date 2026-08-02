@@ -102,6 +102,10 @@ libpulse-simple-binding = { version = "2", optional = true }
 # Global cursor sampling on X11 sessions (pure-Rust XCB connection).
 x11rb = { version = "0.13", optional = true }
 
+[target.'cfg(not(any(target_os = "android", target_os = "ios")))'.dependencies]
+# Desktop-only — signed GitHub Releases updates (see `src/updater.rs`).
+tauri-plugin-updater = "2"
+
 [features]
 default = ["scap-capture", "wgc-capture", "portal-capture"]
 # When disabled (e.g. CI without a display / non-macOS), only the synthetic

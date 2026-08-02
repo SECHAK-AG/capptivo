@@ -28,7 +28,7 @@ import {
 } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
-import { DropdownMenuItem } from "@/components/ui/dropdown-menu";
+import { DropdownMenuItem, DropdownMenuSeparator } from "@/components/ui/dropdown-menu";
 import { LANGUAGES } from "@/lib/i18n";
 import { useI18n } from "@/lib/settings";
 import { cn } from "@/lib/utils";
@@ -722,6 +722,15 @@ function SettingsMenu({
         </Button>
       }
     >
+      <DropdownMenuItem
+        className="rounded-md"
+        onSelect={() => {
+          void commands.checkForUpdates();
+        }}
+      >
+        {t("recorder.settings.checkUpdates")}
+      </DropdownMenuItem>
+      <DropdownMenuSeparator />
       <p className="mb-1 px-2 pt-0.5 text-[10px] font-medium tracking-wider text-muted-foreground uppercase">
         {t("recorder.language")}
       </p>

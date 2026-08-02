@@ -296,6 +296,7 @@ export const zh: Record<TranslationKey, string> = {
   "recorder.sources.windows": "窗口",
   "recorder.sources.empty": "未找到来源。",
   "recorder.settings.open": "设置",
+  "recorder.settings.checkUpdates": "检查更新…",
   "recorder.language": "语言",
   "recorder.hud.pause": "暂停",
   "recorder.hud.resume": "继续",

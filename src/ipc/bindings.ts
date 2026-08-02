@@ -33,6 +33,8 @@ export const commands = {
   openScreenRecordingSettings: () =>
     invoke<void>("open_screen_recording_settings"),
   relaunch: () => invoke<void>("relaunch"),
+  /** Opens the native update dialog flow (same as tray → Check for Updates). */
+  checkForUpdates: () => invoke<void>("check_for_updates"),
   recorderState: () => invoke<RecorderState>("recorder_state"),
   /** macOS: unminimize / raise a window source during the countdown. */
   prepareWindowCapture: (sourceId: string) =>

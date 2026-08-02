@@ -301,6 +301,7 @@ export const en = {
   "recorder.sources.windows": "Windows",
   "recorder.sources.empty": "No sources found.",
   "recorder.settings.open": "Settings",
+  "recorder.settings.checkUpdates": "Check for Updates…",
   "recorder.language": "Language",
   "recorder.hud.pause": "Pause",
   "recorder.hud.resume": "Resume",

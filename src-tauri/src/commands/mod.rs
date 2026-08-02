@@ -89,6 +89,8 @@ macro_rules! command_handlers {
             $crate::commands::export::prepare_export_audio,
             $crate::commands::export::attach_export_audio,
             $crate::commands::export::remove_temp_file,
+            // updater
+            $crate::updater::check_for_updates,
         ]
     };
 }

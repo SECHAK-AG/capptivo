@@ -308,6 +308,7 @@ export const pt: Record<TranslationKey, string> = {
   "recorder.sources.windows": "Janelas",
   "recorder.sources.empty": "Nenhuma fonte encontrada.",
   "recorder.settings.open": "Definições",
+  "recorder.settings.checkUpdates": "Procurar atualizações…",
   "recorder.language": "Idioma",
   "recorder.hud.pause": "Pausar",
   "recorder.hud.resume": "Retomar",
