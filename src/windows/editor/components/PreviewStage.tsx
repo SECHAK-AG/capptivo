@@ -17,6 +17,10 @@ import {
   type FrameCompositor,
   type FrameCompositorSurface,
 } from "../render/createFrameCompositor";
+import {
+  markPreviewGpuHeld,
+  releasePreviewGpu,
+} from "../render/previewGpuGate";
 import { trackVideoFrames } from "../render/videoFrameTrack";
 import { useStageDimensions } from "../lib/useStageDimensions";
 import { resolveZoomCompositionLayout } from "../lib/composition";
@@ -125,6 +129,8 @@ export function PreviewStage({
     let compositor: FrameCompositor | null = null;
     let remounting = false;
     let recoverAttempts = 0;
+    /** Bumped to cancel in-flight Pixi init when export takes the GPU. */
+    let generation = 0;
 
     const mountCanvas = (canvas: FrameCompositorSurface) => {
       if (!(canvas instanceof HTMLCanvasElement)) {
@@ -151,34 +157,6 @@ export function PreviewStage({
       gpuPreference: ["webgl", "webgpu"] as const,
     });
 
-    const recoverCompositor = () => {
-      if (disposed || remounting || recoverAttempts >= 3) return;
-      remounting = true;
-      recoverAttempts += 1;
-      const dead = compositor;
-      compositor = null;
-      compositorRef.current = null;
-      dead?.dispose();
-      void createFrameCompositor(compositorOptions())
-        .then((comp) => {
-          remounting = false;
-          if (disposed) {
-            comp.dispose();
-            return;
-          }
-          attachCompositor(comp);
-          if (paintRaf) cancelAnimationFrame(paintRaf);
-          paintRaf = requestAnimationFrame(() => {
-            paintRaf = 0;
-            paint();
-          });
-        })
-        .catch((err) => {
-          remounting = false;
-          console.error("[preview] compositor recover failed", err);
-        });
-    };
-
     const paint = () => {
       const comp = compositor;
       if (!comp) return;
@@ -204,11 +182,10 @@ export function PreviewStage({
       const t = video?.currentTime ?? currentTime;
 
       if (camera && Number.isFinite(camera.duration) && camera.duration > 0) {
-        if (Math.abs(camera.currentTime - t) > 0.12) {
-          camera.currentTime = Math.min(
-            t,
-            Math.max(0, camera.duration - 0.001),
-          );
+        // Same presentable park as screen — exact t=0 uploads blank in WKWebView.
+        const camT = presentableVideoTime(t, camera.duration);
+        if (Math.abs(camera.currentTime - camT) > 0.12) {
+          camera.currentTime = camT;
         }
         if (nowPlaying && camera.paused)
           void camera.play().catch(() => undefined);
@@ -332,6 +309,8 @@ export function PreviewStage({
 
     const requestPaint = () => {
       if (loopRaf || paintRaf) return;
+      // Skip paints while export owns the GPU (host is empty).
+      if (!compositor || useEditorStore.getState().exporting) return;
       paintRaf = requestAnimationFrame(() => {
         paintRaf = 0;
         paint();
@@ -339,21 +318,85 @@ export function PreviewStage({
     };
     requestPaintRef.current = requestPaint;
 
-    void createFrameCompositor(compositorOptions())
-      .then((comp) => {
-        if (disposed) {
-          comp.dispose();
-          return;
-        }
-        attachCompositor(comp);
-        const v = videoRef.current;
-        if (!playing && v && !v.paused) v.pause();
-        if (playing) startLoop();
-        else requestPaint();
-      })
-      .catch((e) => {
-        console.error("[preview] Pixi compositor init failed", e);
-      });
+    const dropCompositor = () => {
+      generation += 1;
+      stopLoop();
+      if (paintRaf) {
+        cancelAnimationFrame(paintRaf);
+        paintRaf = 0;
+      }
+      const dead = compositor;
+      compositor = null;
+      compositorRef.current = null;
+      dead?.dispose();
+      host.replaceChildren();
+      // In-flight init still holds the gate until its then/catch runs.
+      if (!remounting) releasePreviewGpu();
+    };
+
+    const startCompositor = () => {
+      if (
+        disposed ||
+        remounting ||
+        compositor ||
+        useEditorStore.getState().exporting
+      ) {
+        return;
+      }
+      remounting = true;
+      const gen = generation;
+      markPreviewGpuHeld();
+      void createFrameCompositor(compositorOptions())
+        .then((comp) => {
+          remounting = false;
+          if (
+            disposed ||
+            gen !== generation ||
+            useEditorStore.getState().exporting
+          ) {
+            comp.dispose();
+            // dropCompositor skips release while remounting — free the gate here.
+            releasePreviewGpu();
+            return;
+          }
+          attachCompositor(comp);
+          const v = videoRef.current;
+          if (!playing && v && !v.paused) v.pause();
+          if (playing) startLoop();
+          else requestPaint();
+        })
+        .catch((err) => {
+          remounting = false;
+          releasePreviewGpu();
+          console.error("[preview] compositor init failed", err);
+        });
+    };
+
+    const recoverCompositor = () => {
+      if (
+        disposed ||
+        remounting ||
+        recoverAttempts >= 3 ||
+        useEditorStore.getState().exporting
+      ) {
+        return;
+      }
+      recoverAttempts += 1;
+      dropCompositor();
+      startCompositor();
+    };
+
+    const suspendForExport = () => {
+      useEditorStore.getState().setPlaying(false);
+      dropCompositor();
+      console.info("[preview] GPU released for export");
+    };
+
+    if (useEditorStore.getState().exporting) {
+      releasePreviewGpu();
+    } else {
+      startCompositor();
+    }
 
     /**
      * Fields `paint()` reads — skip repaints for unrelated store mutations.
@@ -382,6 +425,12 @@ export function PreviewStage({
       next.faceCam !== prev.faceCam;
 
     const unsubscribe = useEditorStore.subscribe((state, prev) => {
+      if (state.exporting !== prev.exporting) {
+        if (state.exporting) suspendForExport();
+        else startCompositor();
+        return;
+      }
+      if (state.exporting) return;
       if (state.isPlaying !== playing) {
         playing = state.isPlaying;
         if (playing) startLoop();
@@ -398,6 +447,7 @@ export function PreviewStage({
 
     return () => {
       disposed = true;
+      generation += 1;
       stopLoop();
       if (paintRaf) cancelAnimationFrame(paintRaf);
       unsubscribe();
@@ -406,6 +456,7 @@ export function PreviewStage({
       compositor = null;
       compositorRef.current = null;
       host.replaceChildren();
+      releasePreviewGpu();
     };
   }, []);
 
@@ -438,12 +489,32 @@ export function PreviewStage({
     if (!camera) return;
     const stopTrack = trackVideoFrames(camera, () => requestPaintRef.current());
     const onFrameReady = () => requestPaintRef.current();
+
+    /** Align to timeline and wake WKWebView's decoder (same as screen track). */
+    const wakeDecoder = () => {
+      const { currentTime, isPlaying: playing } = useEditorStore.getState();
+      if (Number.isFinite(camera.duration) && camera.duration > 0) {
+        const target = presentableVideoTime(currentTime, camera.duration);
+        if (Math.abs(camera.currentTime - target) > 0.04) {
+          camera.currentTime = target;
+        }
+      }
+      if (playing) {
+        onFrameReady();
+        return;
+      }
+      void primePausedVideoFrame(camera).then(onFrameReady);
+    };
+
     camera.addEventListener("seeked", onFrameReady);
-    camera.addEventListener("loadeddata", onFrameReady);
+    camera.addEventListener("loadeddata", wakeDecoder);
+    if (camera.readyState >= HTMLMediaElement.HAVE_METADATA) {
+      wakeDecoder();
+    }
     return () => {
       stopTrack();
       camera.removeEventListener("seeked", onFrameReady);
-      camera.removeEventListener("loadeddata", onFrameReady);
+      camera.removeEventListener("loadeddata", wakeDecoder);
     };
   }, [playbackCameraUrl]);
 
@@ -562,6 +633,31 @@ export function PreviewStage({
                 muted
                 playsInline
                 preload="auto"
+                onLoadedMetadata={(e) => {
+                  const cam = e.currentTarget;
+                  const { currentTime, isPlaying: playing } =
+                    useEditorStore.getState();
+                  if (Number.isFinite(cam.duration) && cam.duration > 0) {
+                    cam.currentTime = presentableVideoTime(
+                      currentTime,
+                      cam.duration,
+                    );
+                  }
+                  if (playing) void cam.play().catch(() => undefined);
+                }}
+                onLoadedData={(e) => {
+                  if (useEditorStore.getState().isPlaying) return;
+                  void primePausedVideoFrame(e.currentTarget).then(() =>
+                    requestPaintRef.current(),
+                  );
+                }}
+                onError={(e) =>
+                  console.error(
+                    "[preview] camera media failed to load",
+                    e.currentTarget.error?.code,
+                    e.currentTarget.error?.message,
+                  )
+                }
               />
             ) : null}
           </div>

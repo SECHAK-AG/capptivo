@@ -526,6 +526,10 @@ async function createRenderer(
     preserveDrawingBuffer:
       options.preserveDrawingBuffer === true || options.cpuReadback === true,
     hello: false,
+    // Prefer a context even when the driver looks "slow" — export would
+    // otherwise fail with a misleading "browser does not support WebGL".
+    failIfMajorPerformanceCaveat: false,
+    powerPreference: "high-performance" as const,
   };
 
   const tryPreferences = async (

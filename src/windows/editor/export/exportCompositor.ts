@@ -23,6 +23,7 @@ import {
   type FrameCompositor,
   type FrameCompositorSurface,
 } from "../render/createFrameCompositor";
+import { waitForPreviewGpuRelease } from "../render/previewGpuGate";
 import { toBlobMediaUrl } from "../lib/mediaBlobUrl";
 import { useEditorStore } from "../store";
 
@@ -172,26 +173,51 @@ export async function createExportCompositorFromMedia(
   const renderWidth = Math.max(2, Math.round(width * superscale));
   const renderHeight = Math.max(2, Math.round(height * superscale));
 
+  // Preview must release its WebGL context first — dual GPU contexts break
+  // OffscreenCanvas init on some Windows WebView2 GPUs (and can white-out the UI).
+  await waitForPreviewGpuRelease();
+
+  const wantOffscreen = options.offscreen !== false;
+  const baseOptions = {
+    width: renderWidth,
+    height: renderHeight,
+    outputWidth: width,
+    outputHeight: height,
+    cpuReadback: options.cpuReadback,
+    // The encoder captures the canvas after `compose()` returns.
+    preserveDrawingBuffer: true,
+    // Fixed output size: MSAA + per-upload mipmap regen are pure cost.
+    antialias: false,
+    mipmaps: false,
+    gpuPreference: ["webgl", "webgpu"] as const,
+    profile: true,
+  } as const;
+
   let frame: FrameCompositor;
   try {
-    frame = await createFrameCompositor({
-      width: renderWidth,
-      height: renderHeight,
-      outputWidth: width,
-      outputHeight: height,
-      cpuReadback: options.cpuReadback,
-      // The encoder captures the canvas after `compose()` returns.
-      preserveDrawingBuffer: true,
-      // Export runs flat out; it must not be paced by the display refresh.
-      offscreen: options.offscreen !== false,
-      // Silent DOM fallback would cap export at ~display refresh — fail loud.
-      requireOffscreen: options.offscreen !== false,
-      // Fixed output size: MSAA + per-upload mipmap regen are pure cost.
-      antialias: false,
-      mipmaps: false,
-      gpuPreference: ["webgl", "webgpu"] as const,
-      profile: true,
-    });
+    try {
+      frame = await createFrameCompositor({
+        ...baseOptions,
+        // Export runs flat out; it must not be paced by the display refresh.
+        offscreen: wantOffscreen,
+        // Silent DOM fallback would cap export at ~display refresh — fail first.
+        requireOffscreen: wantOffscreen,
+      });
+    } catch (e) {
+      if (!wantOffscreen) throw e;
+      // Last resort after exclusive GPU: still faster than a hard fail. DOM
+      // canvas may pace to display refresh — user gets a file either way.
+      console.warn(
+        "[export] OffscreenCanvas GPU init failed after preview release; " +
+          "retrying on a DOM canvas (may be paced by display refresh)",
+        e,
+      );
+      frame = await createFrameCompositor({
+        ...baseOptions,
+        offscreen: false,
+        requireOffscreen: false,
+      });
+    }
   } catch (e) {
     media.dispose();
     throw e;
@@ -203,9 +229,8 @@ export async function createExportCompositorFromMedia(
    * The export renders from the editor state as it was when the user pressed
    * Export — captured once, here — not from live store reads per frame.
    *
-   * The progress overlay is a `pointer-events-none` corner card, and no
-   * inspector panel or the timeline is gated on `exporting`, so the editor stays
-   * fully interactive while a file renders. Reading the store per frame meant a
+   * Preview releases its GPU for the duration of export (see previewGpuGate),
+   * but inspector/timeline stay interactive. Reading the store per frame meant a
    * look tweak made halfway through an export landed halfway through the
    * *file*: a video whose background, corner radius or caption style changes
    * mid-playback. An export has to be a pure function of the state that started
