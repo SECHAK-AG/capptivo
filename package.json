@@ -1,7 +1,7 @@
 {
   "name": "@capptivo/desktop",
   "private": true,
-  "version": "1.0.0",
+  "version": "1.0.1",
   "license": "MIT",
   "packageManager": "pnpm@11.1.2",
   "type": "module",

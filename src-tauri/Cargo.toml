@@ -1,6 +1,6 @@
 [package]
 name = "desktop"
-version = "1.0.0"
+version = "1.0.1"
 description = "Capptivo Desktop — native screen recorder + editor"
 authors = ["idboussadel"]
 license = "MIT"
