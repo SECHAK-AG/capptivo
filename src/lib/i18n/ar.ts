@@ -72,6 +72,9 @@ export const ar: Record<TranslationKey, string> = {
   "export.status.saving": "جارٍ الحفظ…",
   "export.status.addingAudio": "جارٍ إضافة الصوت…",
   "export.cancel": "إلغاء",
+  "export.error.gpuContextLost": "توقف التصدير: أعاد برنامج الرسوميات التعيين أثناء العرض. حاول التصدير مرة أخرى.",
+  "editor.previewGpuLost": "توقفت المعاينة: أعاد برنامج الرسوميات التعيين. أعد فتح المحرر إن لم تتعافَ.",
+  "editor.gpuReloaded": "أُعيد تحميل المحرر بعد إعادة تعيين الرسوميات. يمكنك التصدير مرة أخرى.",
   "export.dialog.title": "تصدير",
   "export.dialog.description":
     "اختر التنسيق والترميز ومعدل الإطارات ونوع الملف.",

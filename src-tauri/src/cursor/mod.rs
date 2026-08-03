@@ -157,6 +157,21 @@ impl CursorTracker {
             samples,
         }
     }
+
+    #[cfg(test)]
+    fn stop_flag(&self) -> Arc<AtomicBool> {
+        self.stop.clone()
+    }
+}
+
+impl Drop for CursorTracker {
+    /// `stop()` is the normal path and consumes the tracker; this only fires
+    /// when an early return or a panic drops it instead. Without it the 60 Hz
+    /// sampler thread survives for the rest of the process lifetime, still
+    /// growing its sample `Vec`.
+    fn drop(&mut self) {
+        self.stop.store(true, Ordering::Relaxed);
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -819,6 +834,29 @@ mod x11_probe {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::atomic::Ordering;
+    use std::time::Instant;
+
+    #[test]
+    fn dropping_the_tracker_stops_the_sampler() {
+        let tracker = CursorTracker::start(
+            CaptureRect {
+                x: 0.0,
+                y: 0.0,
+                width: 100.0,
+                height: 100.0,
+            },
+            1.0,
+            Instant::now(),
+        );
+        let flag = tracker.stop_flag();
+        assert!(!flag.load(Ordering::Relaxed));
+        drop(tracker);
+        assert!(
+            flag.load(Ordering::Relaxed),
+            "Drop must set the sampler stop flag"
+        );
+    }
 
     #[test]
     fn shape_debouncer_suppresses_single_probe_blips() {

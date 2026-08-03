@@ -107,22 +107,24 @@ fn open_area_picker_window(app: &AppHandle) -> AppResult<()> {
         return Ok(());
     }
 
-    let win = WebviewWindowBuilder::new(
-        app,
-        AREA_PICKER_LABEL,
-        WebviewUrl::App("area.html".into()),
+    let win = crate::webview_gpu::apply_gpu_args(
+        WebviewWindowBuilder::new(
+            app,
+            AREA_PICKER_LABEL,
+            WebviewUrl::App("area.html".into()),
+        )
+        .title("Select area")
+        .inner_size(vd.width, vd.height)
+        .position(vd.x, vd.y)
+        .resizable(false)
+        .decorations(false)
+        .transparent(true)
+        .shadow(false)
+        .always_on_top(true)
+        .accept_first_mouse(true)
+        .skip_taskbar(true)
+        .visible(true),
     )
-    .title("Select area")
-    .inner_size(vd.width, vd.height)
-    .position(vd.x, vd.y)
-    .resizable(false)
-    .decorations(false)
-    .transparent(true)
-    .shadow(false)
-    .always_on_top(true)
-    .accept_first_mouse(true)
-    .skip_taskbar(true)
-    .visible(true)
     .build()
     .map_err(|e| AppError::Other(format!("failed to open area picker: {e}")))?;
 
@@ -377,21 +379,23 @@ fn open_area_frame_window(app: &AppHandle, vd: &VirtualDesktop) -> AppResult<()>
         return Ok(());
     }
 
-    let win = WebviewWindowBuilder::new(
-        app,
-        AREA_FRAME_LABEL,
-        WebviewUrl::App("frame.html".into()),
+    let win = crate::webview_gpu::apply_gpu_args(
+        WebviewWindowBuilder::new(
+            app,
+            AREA_FRAME_LABEL,
+            WebviewUrl::App("frame.html".into()),
+        )
+        .title("Area guide")
+        .inner_size(vd.width, vd.height)
+        .position(vd.x, vd.y)
+        .resizable(false)
+        .decorations(false)
+        .transparent(true)
+        .shadow(false)
+        .always_on_top(true)
+        .skip_taskbar(true)
+        .visible(false),
     )
-    .title("Area guide")
-    .inner_size(vd.width, vd.height)
-    .position(vd.x, vd.y)
-    .resizable(false)
-    .decorations(false)
-    .transparent(true)
-    .shadow(false)
-    .always_on_top(true)
-    .skip_taskbar(true)
-    .visible(false)
     .build()
     .map_err(|e| AppError::Other(format!("failed to open area frame: {e}")))?;
 

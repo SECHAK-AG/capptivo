@@ -74,6 +74,9 @@ export const it: Record<TranslationKey, string> = {
   "export.status.saving": "Salvataggio…",
   "export.status.addingAudio": "Aggiunta dell'audio…",
   "export.cancel": "Annulla",
+  "export.error.gpuContextLost": "Esportazione interrotta: il driver grafico si è resettato durante il rendering. Prova di nuovo.",
+  "editor.previewGpuLost": "Anteprima interrotta: il driver grafico si è resettato. Riapri l’editor se non si ripristina.",
+  "editor.gpuReloaded": "L’editor si è ricaricato dopo un reset grafico. Puoi esportare di nuovo.",
   "export.dialog.title": "Esporta",
   "export.dialog.description":
     "Scegli formato, codifica, fotogrammi al secondo e tipo di file.",

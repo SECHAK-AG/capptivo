@@ -30,6 +30,8 @@ import { exportProject } from "./export/exportVideo";
 import { useStageDimensions } from "./lib/useStageDimensions";
 import { presentableVideoTime } from "./lib/presentableVideoTime";
 import { dismissEditorSplash } from "./splash";
+import { showError } from "@/lib/toast";
+import { consumeGpuReloadedBanner } from "./render/gpuLifecycle";
 
 const SHOW_LIBRARY_EVENT = "shell://show-library";
 
@@ -75,6 +77,13 @@ export function EditorApp() {
     if (id) void init(id);
     else useEditorStore.setState({ ready: true, error: "No project id in URL." });
   }, [init]);
+
+  // One-shot banner after a dead-GPU reload (export reclaim failed).
+  useEffect(() => {
+    if (consumeGpuReloadedBanner()) {
+      showError(t("editor.gpuReloaded"));
+    }
+  }, [t]);
 
   // Drop the HTML splash once the shell can paint (library chrome, or editor
   // after `loadProject`). Idempotent — in-window library switches stay splash-free.

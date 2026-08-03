@@ -1189,28 +1189,30 @@ fn create_recorder_popover(app: &AppHandle) -> tauri::Result<()> {
     // builder needs *some* size before the window exists.
     let size = RecorderLayout::Setup.size();
     let (x, y) = recorder_bottom_center(app, size.width, size.height);
-    let win = WebviewWindowBuilder::new(app, RECORDER_LABEL, WebviewUrl::App("recorder.html".into()))
-        .title("Capptivo")
-        .inner_size(size.width, size.height)
-        .resizable(false)
-        .decorations(false)
-        .transparent(true)
-        .shadow(false)
-        .always_on_top(true)
-        .skip_taskbar(true)
-        // First click must always act: once the annotation overlay (or any
-        // other window) takes key status, macOS otherwise swallows the next
-        // HUD click just to refocus — the "click twice to toggle" feel.
-        .accept_first_mouse(true)
-        // Built hidden, shown only after the Spaces pin: macOS bakes a
-        // window's Space eligibility at its *first* orderFront, so a
-        // `.visible(true)` build (default collection behavior) left the bar
-        // glued to one Space no matter what was set afterwards. The
-        // annotation overlay always used this hidden→pin→show sequence and
-        // is the one overlay that followed Spaces correctly.
-        .visible(false)
-        .position(x, y)
-        .build()?;
+    let win = crate::webview_gpu::apply_gpu_args(
+        WebviewWindowBuilder::new(app, RECORDER_LABEL, WebviewUrl::App("recorder.html".into()))
+            .title("Capptivo")
+            .inner_size(size.width, size.height)
+            .resizable(false)
+            .decorations(false)
+            .transparent(true)
+            .shadow(false)
+            .always_on_top(true)
+            .skip_taskbar(true)
+            // First click must always act: once the annotation overlay (or any
+            // other window) takes key status, macOS otherwise swallows the next
+            // HUD click just to refocus — the "click twice to toggle" feel.
+            .accept_first_mouse(true)
+            // Built hidden, shown only after the Spaces pin: macOS bakes a
+            // window's Space eligibility at its *first* orderFront, so a
+            // `.visible(true)` build (default collection behavior) left the bar
+            // glued to one Space no matter what was set afterwards. The
+            // annotation overlay always used this hidden→pin→show sequence and
+            // is the one overlay that followed Spaces correctly.
+            .visible(false)
+            .position(x, y),
+    )
+    .build()?;
     apply_setup_overlay(app, &win)?;
     set_follows_spaces(&win, true);
     win.show()?;
@@ -1285,23 +1287,25 @@ fn create_camera_preview_window(app: &AppHandle, device_id: &str) -> tauri::Resu
         urlencoding_minimal(device_id)
     );
     let (x, y) = camera_default_position(app);
-    let win = WebviewWindowBuilder::new(app, CAMERA_LABEL, WebviewUrl::App(url.into()))
-        .title("Capptivo Camera")
-        .inner_size(CAMERA_W, CAMERA_H)
-        .resizable(false)
-        .decorations(false)
-        .transparent(true)
-        .shadow(false)
-        .always_on_top(true)
-        .skip_taskbar(true)
-        // Exclude via ScreenCaptureKit `excluded_targets` — content_protected
-        // blacks the bubble on some macOS versions once capture starts.
-        .content_protected(false)
-        // Hidden→pin→show, same as the recorder bar: the first orderFront
-        // bakes Space eligibility (see create_recorder_popover).
-        .visible(false)
-        .position(x, y)
-        .build()?;
+    let win = crate::webview_gpu::apply_gpu_args(
+        WebviewWindowBuilder::new(app, CAMERA_LABEL, WebviewUrl::App(url.into()))
+            .title("Capptivo Camera")
+            .inner_size(CAMERA_W, CAMERA_H)
+            .resizable(false)
+            .decorations(false)
+            .transparent(true)
+            .shadow(false)
+            .always_on_top(true)
+            .skip_taskbar(true)
+            // Exclude via ScreenCaptureKit `excluded_targets` — content_protected
+            // blacks the bubble on some macOS versions once capture starts.
+            .content_protected(false)
+            // Hidden→pin→show, same as the recorder bar: the first orderFront
+            // bakes Space eligibility (see create_recorder_popover).
+            .visible(false)
+            .position(x, y),
+    )
+    .build()?;
     let _ = win.set_content_protected(false);
     set_follows_spaces(&win, true);
     win.show()?;
@@ -1552,23 +1556,25 @@ fn show_annotation_overlay_inner(app: &AppHandle) -> tauri::Result<()> {
         return Ok(());
     }
 
-    let win = WebviewWindowBuilder::new(
-        app,
-        ANNOTATION_LABEL,
-        WebviewUrl::App("annotation.html".into()),
+    let win = crate::webview_gpu::apply_gpu_args(
+        WebviewWindowBuilder::new(
+            app,
+            ANNOTATION_LABEL,
+            WebviewUrl::App("annotation.html".into()),
+        )
+        .title("Capptivo Annotation")
+        .resizable(false)
+        .decorations(false)
+        .transparent(true)
+        .shadow(false)
+        .always_on_top(true)
+        .skip_taskbar(true)
+        // Same first-click rule as the recorder bar: the overlay is click-through
+        // most of the time, so it's almost never the key window when the user
+        // clicks its toolbar — without this the first click only refocuses.
+        .accept_first_mouse(true)
+        .visible(false),
     )
-    .title("Capptivo Annotation")
-    .resizable(false)
-    .decorations(false)
-    .transparent(true)
-    .shadow(false)
-    .always_on_top(true)
-    .skip_taskbar(true)
-    // Same first-click rule as the recorder bar: the overlay is click-through
-    // most of the time, so it's almost never the key window when the user
-    // clicks its toolbar — without this the first click only refocuses.
-    .accept_first_mouse(true)
-    .visible(false)
     .build()?;
 
     position_annotation_on_active_display(app, &win)?;
@@ -1853,7 +1859,7 @@ fn editor_window_builder<'a>(
         builder = builder.decorations(false);
     }
 
-    builder
+    crate::webview_gpu::apply_gpu_args(builder)
 }
 
 fn build_editor_window(

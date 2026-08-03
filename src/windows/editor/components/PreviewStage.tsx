@@ -21,6 +21,13 @@ import {
   markPreviewGpuHeld,
   releasePreviewGpu,
 } from "../render/previewGpuGate";
+import {
+  attachContextLossHandlers,
+  decideRecovery,
+  reclaimGpuAfterLoss,
+} from "../render/gpuLifecycle";
+import { showError } from "@/lib/toast";
+import { translateNow } from "@/lib/i18n";
 import { trackVideoFrames } from "../render/videoFrameTrack";
 import { useStageDimensions } from "../lib/useStageDimensions";
 import { resolveZoomCompositionLayout } from "../lib/composition";
@@ -133,8 +140,18 @@ export function PreviewStage({
     let compositor: FrameCompositor | null = null;
     let remounting = false;
     let recoverAttempts = 0;
+    let lastRecoverAtMs: number | null = null;
+    let notifiedGpuFailure = false;
+    let initReclaimTried = false;
+    let detachContextLoss: (() => void) | null = null;
     /** Bumped to cancel in-flight Pixi init when export takes the GPU. */
     let generation = 0;
+
+    const notifyGpuFailureOnce = () => {
+      if (notifiedGpuFailure) return;
+      notifiedGpuFailure = true;
+      showError(translateNow("editor.previewGpuLost"));
+    };
 
     const mountCanvas = (canvas: FrameCompositorSurface) => {
       if (!(canvas instanceof HTMLCanvasElement)) {
@@ -150,6 +167,11 @@ export function PreviewStage({
       compositor = comp;
       compositorRef.current = comp;
       mountCanvas(comp.canvas);
+      detachContextLoss?.();
+      detachContextLoss = attachContextLossHandlers(comp.canvas, () => {
+        console.warn("[preview] webglcontextlost — remounting compositor");
+        recoverCompositor();
+      });
       console.info(`[preview] compositor backend=${comp.backend}`);
     };
 
@@ -347,6 +369,8 @@ export function PreviewStage({
         cancelAnimationFrame(paintRaf);
         paintRaf = 0;
       }
+      detachContextLoss?.();
+      detachContextLoss = null;
       const dead = compositor;
       compositor = null;
       compositorRef.current = null;
@@ -387,23 +411,50 @@ export function PreviewStage({
           if (playing) startLoop();
           else requestPaint();
         })
-        .catch((err) => {
+        .catch(async (err) => {
           remounting = false;
           releasePreviewGpu();
           console.error("[preview] compositor init failed", err);
+          // One reclaim+retry before telling the user — covers post-export TDR.
+          if (
+            !initReclaimTried &&
+            !disposed &&
+            gen === generation &&
+            !useEditorStore.getState().exporting
+          ) {
+            initReclaimTried = true;
+            const { ok } = await reclaimGpuAfterLoss();
+            if (
+              ok &&
+              !disposed &&
+              gen === generation &&
+              !useEditorStore.getState().exporting &&
+              !compositor
+            ) {
+              startCompositor();
+              return;
+            }
+          }
+          notifyGpuFailureOnce();
         });
     };
 
     const recoverCompositor = () => {
-      if (
-        disposed ||
-        remounting ||
-        recoverAttempts >= 3 ||
-        useEditorStore.getState().exporting
-      ) {
+      if (disposed || remounting || useEditorStore.getState().exporting) {
         return;
       }
-      recoverAttempts += 1;
+      const now = performance.now();
+      const { decision, nextAttempts } = decideRecovery({
+        attempts: recoverAttempts,
+        lastAttemptAtMs: lastRecoverAtMs,
+        nowMs: now,
+      });
+      recoverAttempts = nextAttempts;
+      lastRecoverAtMs = now;
+      if (decision === "giveUp") {
+        notifyGpuFailureOnce();
+        return;
+      }
       dropCompositor();
       startCompositor();
     };
@@ -475,6 +526,8 @@ export function PreviewStage({
       if (paintRaf) cancelAnimationFrame(paintRaf);
       unsubscribe();
       requestPaintRef.current = () => {};
+      detachContextLoss?.();
+      detachContextLoss = null;
       compositor?.dispose();
       compositor = null;
       compositorRef.current = null;

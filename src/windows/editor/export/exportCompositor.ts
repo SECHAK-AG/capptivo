@@ -24,6 +24,11 @@ import {
   type FrameCompositorSurface,
 } from "../render/createFrameCompositor";
 import { waitForPreviewGpuRelease } from "../render/previewGpuGate";
+import {
+  attachContextLossHandlers,
+  markPreferDomCanvasForExport,
+  shouldPreferDomCanvasForExport,
+} from "../render/gpuLifecycle";
 import { toBlobMediaUrl } from "../lib/mediaBlobUrl";
 import { faceCamFrameAt, type FaceCamTrack } from "../lib/faceCamSync";
 import { useEditorStore } from "../store";
@@ -46,6 +51,8 @@ export type ExportCompositor = {
   stats: () => string | null;
   /** GPU upload elision counts when the Pixi backend is active. */
   uploadStats: () => { uploads: number; skipped: number } | null;
+  /** True after webglcontextlost on the export canvas. */
+  isGpuLost: () => boolean;
   dispose: () => void;
 };
 
@@ -187,7 +194,10 @@ export async function createExportCompositorFromMedia(
   // OffscreenCanvas init on some Windows WebView2 GPUs (and can white-out the UI).
   await waitForPreviewGpuRelease();
 
-  const wantOffscreen = options.offscreen !== false;
+  // After a prior Offscreen failure or context loss this session, skip straight
+  // to DOM canvas. Offscreen stays default for speed until then.
+  const wantOffscreen =
+    options.offscreen !== false && !shouldPreferDomCanvasForExport();
   const baseOptions = {
     width: renderWidth,
     height: renderHeight,
@@ -215,6 +225,7 @@ export async function createExportCompositorFromMedia(
       });
     } catch (e) {
       if (!wantOffscreen) throw e;
+      markPreferDomCanvasForExport("OffscreenCanvas GPU init failed");
       // Last resort after exclusive GPU: still faster than a hard fail. DOM
       // canvas may pace to display refresh — user gets a file either way.
       console.warn(
@@ -232,6 +243,13 @@ export async function createExportCompositorFromMedia(
     media.dispose();
     throw e;
   }
+
+  let gpuLost = false;
+  const detachLoss = attachContextLossHandlers(frame.canvas, () => {
+    gpuLost = true;
+    markPreferDomCanvasForExport("webglcontextlost during export");
+    console.error("[export] WebGL context lost");
+  });
 
   const { video, camera } = media;
   const { cameraOffsetMs, cameraDuration } = media;
@@ -279,6 +297,7 @@ export async function createExportCompositorFromMedia(
       : createFullSegment(media.duration);
   const kept = totalKeptDuration(segments);
   if (kept <= 0) {
+    detachLoss();
     frame.dispose();
     media.dispose();
     throw new Error("nothing to export — all content is trimmed");
@@ -373,7 +392,9 @@ export async function createExportCompositorFromMedia(
     width,
     height,
     drawAt,
+    isGpuLost: () => gpuLost,
     dispose: () => {
+      detachLoss();
       frame.dispose();
       media.dispose();
     },

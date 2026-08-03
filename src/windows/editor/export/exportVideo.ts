@@ -59,8 +59,19 @@ import {
 } from "./exportSettings";
 import { resolveStageSize } from "../lib/composition";
 import { faceCamMediaTime, type FaceCamTrack } from "../lib/faceCamSync";
+import {
+  GpuContextLostError,
+  isGpuContextLostError,
+  markPreferDomCanvasForExport,
+  reclaimGpuAfterLoss,
+  reloadEditorForDeadGpu,
+} from "../render/gpuLifecycle";
 
 export { cancelActiveExport } from "./exportCancel";
+
+function throwIfGpuLost(isLost: () => boolean): void {
+  if (isLost()) throw new GpuContextLostError();
+}
 
 type CanvasCaptureTrack = MediaStreamTrack & { requestFrame?: () => void };
 
@@ -195,6 +206,7 @@ export async function exportProject(
   // and the post-export FFmpeg attach is skipped.
   let audioPrep: Promise<PreparedExportAudio | null> | null = null;
   let audioAbsPath: string | null = null;
+  let gpuWasLost = false;
   try {
     // Kick audio prepare before ensureSeekable so FFmpeg overlaps that work.
     if (resolved.format !== "gif") {
@@ -293,7 +305,15 @@ export async function exportProject(
     await sink?.abort(e);
     // Cancel is intentional — don't surface it as an export failure toast.
     if (!isExportCancelled(e)) {
-      useEditorStore.getState().setExportError(describeError(e));
+      if (isGpuContextLostError(e)) {
+        gpuWasLost = true;
+        markPreferDomCanvasForExport("export GpuContextLostError");
+        useEditorStore
+          .getState()
+          .setExportError(translateNow("export.error.gpuContextLost"));
+      } else {
+        useEditorStore.getState().setExportError(describeError(e));
+      }
     }
   } finally {
     endExportAbort();
@@ -308,10 +328,23 @@ export async function exportProject(
         .removeTempFile({ path: audioAbsPath })
         .catch(() => undefined);
     }
+    // Reclaim BEFORE clearing exporting — otherwise preview remounts into a
+    // dead WebView2 GPU and the next export fails with a fake "no WebGL".
+    let reloadForDeadGpu = false;
+    if (gpuWasLost) {
+      const { ok } = await reclaimGpuAfterLoss();
+      if (!ok) {
+        await useEditorStore.getState().flushEditorPersist();
+        reloadForDeadGpu = true;
+      }
+    }
     const s = useEditorStore.getState();
     s.setExporting(false);
     s.setExportProgress(0);
     s.setExportStatus(null);
+    if (reloadForDeadGpu) {
+      reloadEditorForDeadGpu();
+    }
   }
 }
 
@@ -522,6 +555,7 @@ async function renderVideoToSink(
     backend,
     stats,
     uploadStats,
+    isGpuLost,
   } = session;
 
   const output = new Output({
@@ -617,7 +651,9 @@ async function renderVideoToSink(
         }
       }
       const composeStart = performance.now();
+      throwIfGpuLost(isGpuLost);
       drawAt(t);
+      throwIfGpuLost(isGpuLost);
       const captureStart = performance.now();
       const frameComposeMs = captureStart - composeStart;
       decodeMs += composeStart - decodeStart;
@@ -712,7 +748,8 @@ async function renderVideoViaMediaRecorder(
       offscreen: false,
     },
   );
-  const { canvas, video, camera, segments, kept, drawAt, dispose } = session;
+  const { canvas, video, camera, segments, kept, drawAt, dispose, isGpuLost } =
+    session;
   if (!(canvas instanceof HTMLCanvasElement)) {
     dispose();
     throw new Error("MediaRecorder export needs a DOM canvas");
@@ -750,6 +787,11 @@ async function renderVideoViaMediaRecorder(
 
     let raf = 0;
     const draw = () => {
+      if (isGpuLost()) {
+        cancelAnimationFrame(raf);
+        raf = 0;
+        return;
+      }
       const t = video.currentTime;
       if (camera) {
         const target = faceCamMediaTime(t, faceCam.offsetMs, camera.duration);
@@ -774,6 +816,7 @@ async function renderVideoViaMediaRecorder(
     };
 
     // Prime one painted frame before the recorder starts.
+    throwIfGpuLost(isGpuLost);
     drawAt(segments[0]?.start ?? 0);
     track?.requestFrame?.();
     recorder.start(TIMESLICE_MS);
@@ -797,16 +840,19 @@ async function renderVideoViaMediaRecorder(
         video,
         () =>
           signal.aborted ||
+          isGpuLost() ||
           video.currentTime >= seg.end - 1 / fps ||
           video.ended,
       );
       throwIfAborted(signal);
+      throwIfGpuLost(isGpuLost);
       video.pause();
       camera?.pause();
       playedBefore += Math.max(0, seg.end - seg.start);
     }
 
     cancelAnimationFrame(raf);
+    throwIfGpuLost(isGpuLost);
     drawAt(segments[segments.length - 1]?.end ?? video.currentTime);
     track?.requestFrame?.();
     if (recorder.state === "recording") recorder.requestData();
