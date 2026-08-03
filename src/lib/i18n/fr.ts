@@ -75,6 +75,9 @@ export const fr: Record<TranslationKey, string> = {
   "export.status.saving": "Sauvegarde…",
   "export.status.addingAudio": "Ajout de l'audio…",
   "export.cancel": "Annuler",
+  "export.error.gpuContextLost": "Export interrompu : le pilote graphique s’est réinitialisé pendant le rendu. Réessayez l’export.",
+  "editor.previewGpuLost": "Aperçu arrêté : le pilote graphique s’est réinitialisé. Rouvrez l’éditeur s’il ne revient pas.",
+  "editor.gpuReloaded": "L’éditeur a été rechargé après une réinitialisation graphique. Vous pouvez exporter à nouveau.",
   "export.dialog.title": "Exporter",
   "export.dialog.description":
     "Choisissez le format, l'encodage, la fréquence d'images et le type de fichier.",
@@ -247,6 +250,8 @@ export const fr: Record<TranslationKey, string> = {
   "config.theme.system": "Système",
   "config.language.title": "Langue",
   "config.language.desc": "Choisissez votre langue.",
+  "config.about.title": "À propos",
+  "config.about.version": "Version {version}",
 
   "captions.desc":
     "Transcrit l'audio de l'enregistrement d'écran (là où le micro est mixé). Affiché en aperçu et incrusté à l'export si activé.",

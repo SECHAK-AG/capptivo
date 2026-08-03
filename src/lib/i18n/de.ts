@@ -73,6 +73,9 @@ export const de: Record<TranslationKey, string> = {
   "export.status.saving": "Wird gespeichert…",
   "export.status.addingAudio": "Audio wird hinzugefügt…",
   "export.cancel": "Abbrechen",
+  "export.error.gpuContextLost": "Export gestoppt: Der Grafiktreiber wurde während des Renderns zurückgesetzt. Bitte erneut exportieren.",
+  "editor.previewGpuLost": "Vorschau gestoppt: Der Grafiktreiber wurde zurückgesetzt. Editor erneut öffnen, falls sie nicht wiederkehrt.",
+  "editor.gpuReloaded": "Der Editor wurde nach einem Grafik-Reset neu geladen. Sie können erneut exportieren.",
   "export.dialog.title": "Exportieren",
   "export.dialog.description": "Format, Kodierung, Bildrate und Dateityp wählen.",
   "export.format": "Format",
@@ -238,6 +241,8 @@ export const de: Record<TranslationKey, string> = {
   "config.theme.system": "System",
   "config.language.title": "Sprache",
   "config.language.desc": "Wähle deine Sprache.",
+  "config.about.title": "Info",
+  "config.about.version": "Version {version}",
 
   "captions.desc":
     "Transkribiert Audio aus der Bildschirmaufnahme (wo das Mikrofon gemischt ist). In der Vorschau sichtbar und bei Export eingebrannt, wenn aktiviert.",

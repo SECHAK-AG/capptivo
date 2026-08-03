@@ -1,7 +1,9 @@
 //! Full-screen region picker for partial-display capture.
 //!
-//! ponytail: one transparent overlay spanning the virtual desktop; crop coords are
-//! display-local in the same space scap passes to SCK `sourceRect`.
+//! ponytail: picker is one transparent overlay spanning the virtual desktop;
+//! the post-pick guide is a small click-through border window sized to the crop
+//! (fullscreen dim WebViews freeze Windows). Crop coords are display-local in
+//! the same space scap/WGC use for source rects.
 
 use crate::error::{AppError, AppResult};
 use crate::recorder::types::{CaptureAreaSelection, CaptureCrop};
@@ -15,16 +17,17 @@ use std::sync::mpsc;
 pub const AREA_PICKER_LABEL: &str = "area-picker";
 pub const AREA_FRAME_LABEL: &str = "area-frame";
 
-#[derive(Clone, Copy, serde::Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct AreaFrameRect {
-    pub x: f64,
-    pub y: f64,
-    pub width: f64,
-    pub height: f64,
-}
+/// Outset so the CSS border isn’t clipped by the HWND.
+const FRAME_OUTSET: f64 = 3.0;
 
 struct VirtualDesktop {
+    x: f64,
+    y: f64,
+    width: f64,
+    height: f64,
+}
+
+struct FrameBounds {
     x: f64,
     y: f64,
     width: f64,
@@ -100,29 +103,33 @@ fn open_area_picker_window(app: &AppHandle) -> AppResult<()> {
 
     if let Some(win) = app.get_webview_window(AREA_PICKER_LABEL) {
         apply_picker_geometry(&win, &vd)?;
+        // Clear the previous drag chrome *before* show — otherwise the reused
+        // WebView paints the last rect for a frame (flash of the old zone).
+        let _ = win.emit("area-picker://reset", ());
         let _ = win.show();
         let _ = win.set_focus();
         let _ = win.set_always_on_top(true);
-        let _ = win.emit("area-picker://reset", ());
         return Ok(());
     }
 
-    let win = WebviewWindowBuilder::new(
-        app,
-        AREA_PICKER_LABEL,
-        WebviewUrl::App("area.html".into()),
+    let win = crate::webview_gpu::apply_gpu_args(
+        WebviewWindowBuilder::new(
+            app,
+            AREA_PICKER_LABEL,
+            WebviewUrl::App("area.html".into()),
+        )
+        .title("Select area")
+        .inner_size(vd.width, vd.height)
+        .position(vd.x, vd.y)
+        .resizable(false)
+        .decorations(false)
+        .transparent(true)
+        .shadow(false)
+        .always_on_top(true)
+        .accept_first_mouse(true)
+        .skip_taskbar(true)
+        .visible(true),
     )
-    .title("Select area")
-    .inner_size(vd.width, vd.height)
-    .position(vd.x, vd.y)
-    .resizable(false)
-    .decorations(false)
-    .transparent(true)
-    .shadow(false)
-    .always_on_top(true)
-    .accept_first_mouse(true)
-    .skip_taskbar(true)
-    .visible(true)
     .build()
     .map_err(|e| AppError::Other(format!("failed to open area picker: {e}")))?;
 
@@ -156,6 +163,8 @@ fn apply_picker_geometry(
 /// Hide picker and bring back the recorder bar — only when pick ends.
 fn finish_area_pick(app: &AppHandle) {
     if let Some(win) = app.get_webview_window(AREA_PICKER_LABEL) {
+        // Drop React drag state while hidden so the next open cannot flash it.
+        let _ = win.emit("area-picker://reset", ());
         let _ = win.hide();
     }
     crate::windows::reveal_recorder_bar(app);
@@ -343,76 +352,112 @@ fn rect_overlap(ax: f64, ay: f64, aw: f64, ah: f64, bx: f64, by: f64, bw: f64, b
     w * h
 }
 
-/// Click-through dim + border so the user sees the crop bounds (not in the encode).
+/// Click-through border around the crop. Sized to the selection only — a
+/// fullscreen dim WebView was freezing Windows (GPU + input sink).
 pub fn show_area_frame_guide(app: &AppHandle, selection: &CaptureAreaSelection) -> AppResult<()> {
-    let vd = virtual_desktop(app)?;
-    let rect = selection_to_window_rect(app, selection, &vd)?;
-    open_area_frame_window(app, &vd)?;
-    if let Some(win) = app.get_webview_window(AREA_FRAME_LABEL) {
-        let _ = win.set_ignore_cursor_events(true);
-        let _ = win.set_always_on_top(true);
-        let _ = win.show();
-        let _ = win.emit("area-frame://rect", &rect);
-        // Re-emit once the frame WebView has mounted (first open race).
-        let app2 = app.clone();
-        std::thread::spawn(move || {
-            std::thread::sleep(std::time::Duration::from_millis(250));
-            if let Some(win) = app2.get_webview_window(AREA_FRAME_LABEL) {
-                let _ = win.emit("area-frame://rect", &rect);
-            }
-        });
+    let bounds = selection_frame_bounds(app, selection)?;
+    open_area_frame_window(app, &bounds)?;
+    let Some(win) = app.get_webview_window(AREA_FRAME_LABEL) else {
+        return Ok(());
+    };
+    // Fail closed: an interactive always-on-top frame eats the desktop.
+    if let Err(e) = win.set_ignore_cursor_events(true) {
+        tracing::warn!(%e, "area frame click-through failed; hiding guide");
+        hide_area_frame_guide(app);
+        return Ok(());
     }
+    let _ = win.set_always_on_top(true);
+    crate::windows::exclude_overlay_from_capture(&win);
+    let _ = win.show();
     Ok(())
 }
 
 pub fn hide_area_frame_guide(app: &AppHandle) {
     if let Some(win) = app.get_webview_window(AREA_FRAME_LABEL) {
         let _ = win.hide();
+        // Park off-screen so a transient show/reuse cannot flash the old crop.
+        let _ = win.set_position(tauri::Position::Physical(PhysicalPosition::new(-10_000, -10_000)));
+        let _ = win.set_size(tauri::Size::Physical(PhysicalSize::new(1, 1)));
     }
 }
 
-fn open_area_frame_window(app: &AppHandle, vd: &VirtualDesktop) -> AppResult<()> {
+fn open_area_frame_window(app: &AppHandle, bounds: &FrameBounds) -> AppResult<()> {
     if let Some(win) = app.get_webview_window(AREA_FRAME_LABEL) {
-        apply_picker_geometry(&win, vd)?;
+        apply_frame_geometry(&win, bounds)?;
         return Ok(());
     }
 
-    let win = WebviewWindowBuilder::new(
-        app,
-        AREA_FRAME_LABEL,
-        WebviewUrl::App("frame.html".into()),
+    let win = crate::webview_gpu::apply_gpu_args(
+        WebviewWindowBuilder::new(
+            app,
+            AREA_FRAME_LABEL,
+            WebviewUrl::App("frame.html".into()),
+        )
+        .title("Area guide")
+        .inner_size(bounds.width, bounds.height)
+        .position(bounds.x, bounds.y)
+        .resizable(false)
+        .decorations(false)
+        .transparent(true)
+        .shadow(false)
+        .always_on_top(true)
+        .skip_taskbar(true)
+        .focused(false)
+        .visible(false),
     )
-    .title("Area guide")
-    .inner_size(vd.width, vd.height)
-    .position(vd.x, vd.y)
-    .resizable(false)
-    .decorations(false)
-    .transparent(true)
-    .shadow(false)
-    .always_on_top(true)
-    .skip_taskbar(true)
-    .visible(false)
     .build()
     .map_err(|e| AppError::Other(format!("failed to open area frame: {e}")))?;
 
-    apply_picker_geometry(&win, &vd)?;
-    let _ = win.set_ignore_cursor_events(true);
+    apply_frame_geometry(&win, bounds)?;
     Ok(())
 }
 
-fn selection_to_window_rect(
+fn apply_frame_geometry(win: &tauri::WebviewWindow, bounds: &FrameBounds) -> AppResult<()> {
+    let scale = win
+        .scale_factor()
+        .map_err(|e| AppError::Other(format!("scale factor: {e}")))?;
+    let _ = win.set_size(tauri::Size::Physical(PhysicalSize::new(
+        (bounds.width * scale).round().max(1.0) as u32,
+        (bounds.height * scale).round().max(1.0) as u32,
+    )));
+    let _ = win.set_position(tauri::Position::Physical(PhysicalPosition::new(
+        (bounds.x * scale).round() as i32,
+        (bounds.y * scale).round() as i32,
+    )));
+    Ok(())
+}
+
+fn selection_frame_bounds(
     app: &AppHandle,
     sel: &CaptureAreaSelection,
-    vd: &VirtualDesktop,
-) -> AppResult<AreaFrameRect> {
+) -> AppResult<FrameBounds> {
     let (mx, my) = monitor_origin_for_source(app, &sel.source_id)?;
     let c = sel.crop;
-    Ok(AreaFrameRect {
-        x: mx + c.x - vd.x,
-        y: my + c.y - vd.y,
-        width: c.width,
-        height: c.height,
-    })
+    Ok(frame_guide_bounds(mx + c.x, my + c.y, c.width, c.height))
+}
+
+/// Expand the crop rect so the on-screen border sits just outside the capture.
+fn frame_guide_bounds(x: f64, y: f64, width: f64, height: f64) -> FrameBounds {
+    FrameBounds {
+        x: x - FRAME_OUTSET,
+        y: y - FRAME_OUTSET,
+        width: (width + FRAME_OUTSET * 2.0).max(1.0),
+        height: (height + FRAME_OUTSET * 2.0).max(1.0),
+    }
+}
+
+#[cfg(test)]
+mod frame_guide_tests {
+    use super::{frame_guide_bounds, FRAME_OUTSET};
+
+    #[test]
+    fn frame_guide_outsets_the_crop() {
+        let b = frame_guide_bounds(100.0, 200.0, 640.0, 360.0);
+        assert!((b.x - (100.0 - FRAME_OUTSET)).abs() < f64::EPSILON);
+        assert!((b.y - (200.0 - FRAME_OUTSET)).abs() < f64::EPSILON);
+        assert!((b.width - (640.0 + FRAME_OUTSET * 2.0)).abs() < f64::EPSILON);
+        assert!((b.height - (360.0 + FRAME_OUTSET * 2.0)).abs() < f64::EPSILON);
+    }
 }
 
 #[cfg(target_os = "windows")]

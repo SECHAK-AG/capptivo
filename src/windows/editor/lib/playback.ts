@@ -114,6 +114,8 @@ export function primePausedVideoFrame(video: HTMLVideoElement): Promise<void> {
 
   if (video.readyState < HTMLMediaElement.HAVE_METADATA)
     return Promise.resolve();
+  // A playing element decodes on its own — and priming it would rewind it.
+  if (!video.paused) return Promise.resolve();
   // A live-muxed source reports `duration === Infinity`; taking that as "no
   // duration" left the face-cam's decoder asleep and its texture black.
   const duration = mediaDuration(video);
@@ -161,7 +163,9 @@ export function primePausedVideoFrame(video: HTMLVideoElement): Promise<void> {
     void (async () => {
       try {
         await seekOnce(atStart ? nudge : settle);
-        if (atStart) await seekOnce(settle);
+        // Playback can start while the nudge is in flight; the settle seek
+        // would then rewind an element that is already rolling.
+        if (atStart && video.paused) await seekOnce(settle);
       } finally {
         finish();
       }

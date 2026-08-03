@@ -30,6 +30,8 @@ import { exportProject } from "./export/exportVideo";
 import { useStageDimensions } from "./lib/useStageDimensions";
 import { presentableVideoTime } from "./lib/presentableVideoTime";
 import { dismissEditorSplash } from "./splash";
+import { showError } from "@/lib/toast";
+import { consumeGpuReloadedBanner } from "./render/gpuLifecycle";
 
 const SHOW_LIBRARY_EVENT = "shell://show-library";
 
@@ -49,9 +51,13 @@ export function EditorApp() {
   const cameraUrl = useEditorStore((s) => s.cameraUrl);
   const recordingMetadata = useEditorStore((s) => s.recordingMetadata);
   const zoomFragments = useEditorStore((s) => s.zoomFragments);
-  const selectedZoomFragmentId = useEditorStore((s) => s.selectedZoomFragmentId);
+  const selectedZoomFragmentId = useEditorStore(
+    (s) => s.selectedZoomFragmentId,
+  );
   const selectZoomFragment = useEditorStore((s) => s.selectZoomFragment);
-  const updateSelectedZoomFragment = useEditorStore((s) => s.updateSelectedZoomFragment);
+  const updateSelectedZoomFragment = useEditorStore(
+    (s) => s.updateSelectedZoomFragment,
+  );
   const duration = useEditorStore((s) => s.duration);
   const segments = useEditorStore((s) => s.segments);
   const exporting = useEditorStore((s) => s.exporting);
@@ -73,8 +79,16 @@ export function EditorApp() {
     }
     const id = params.get("project");
     if (id) void init(id);
-    else useEditorStore.setState({ ready: true, error: "No project id in URL." });
+    else
+      useEditorStore.setState({ ready: true, error: "No project id in URL." });
   }, [init]);
+
+  // One-shot banner after a dead-GPU reload (export reclaim failed).
+  useEffect(() => {
+    if (consumeGpuReloadedBanner()) {
+      showError(t("editor.gpuReloaded"));
+    }
+  }, [t]);
 
   // Drop the HTML splash once the shell can paint (library chrome, or editor
   // after `loadProject`). Idempotent — in-window library switches stay splash-free.
@@ -180,22 +194,19 @@ export function EditorApp() {
 
   const kept = segments.length > 0 ? totalKeptDuration(segments) : duration;
 
-  const renameTitle = useCallback(
-    (next: string) => {
-      const { projectId: pid, project: p } = useEditorStore.getState();
-      if (!pid || !p) return;
-      const title = next.trim() || null;
-      const prev = p.title?.trim() || null;
-      if (title === prev) return;
-      void commands
-        .renameProject(pid, title)
-        .then(() => {
-          useEditorStore.setState({ project: { ...p, title } });
-        })
-        .catch(() => undefined);
-    },
-    [],
-  );
+  const renameTitle = useCallback((next: string) => {
+    const { projectId: pid, project: p } = useEditorStore.getState();
+    if (!pid || !p) return;
+    const title = next.trim() || null;
+    const prev = p.title?.trim() || null;
+    if (title === prev) return;
+    void commands
+      .renameProject(pid, title)
+      .then(() => {
+        useEditorStore.setState({ project: { ...p, title } });
+      })
+      .catch(() => undefined);
+  }, []);
 
   const runExport = (settings: ExportSettings) => {
     setExportOpen(false);
@@ -215,7 +226,10 @@ export function EditorApp() {
         <div className="flex h-screen min-h-0 flex-col bg-background text-foreground">
           <EditorTitleBar title={t("recorder.recordings")} />
           <div className="min-h-0 flex-1 overflow-y-auto">
-            <RecordingsLibrary currentProjectId={projectId} onOpenProject={(id) => void openProject(id)} />
+            <RecordingsLibrary
+              currentProjectId={projectId}
+              onOpenProject={(id) => void openProject(id)}
+            />
           </div>
         </div>
       </TooltipProvider>
@@ -266,7 +280,9 @@ export function EditorApp() {
               {error ? (
                 <p className="p-6 text-sm text-destructive">{error}</p>
               ) : !ready ? (
-                <p className="p-6 text-sm text-muted-foreground">{t("app.loading")}</p>
+                <p className="p-6 text-sm text-muted-foreground">
+                  {t("app.loading")}
+                </p>
               ) : (
                 <PreviewStage videoRef={videoRef} />
               )}

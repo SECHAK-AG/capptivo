@@ -74,6 +74,9 @@ export const it: Record<TranslationKey, string> = {
   "export.status.saving": "Salvataggio…",
   "export.status.addingAudio": "Aggiunta dell'audio…",
   "export.cancel": "Annulla",
+  "export.error.gpuContextLost": "Esportazione interrotta: il driver grafico si è resettato durante il rendering. Prova di nuovo.",
+  "editor.previewGpuLost": "Anteprima interrotta: il driver grafico si è resettato. Riapri l’editor se non si ripristina.",
+  "editor.gpuReloaded": "L’editor si è ricaricato dopo un reset grafico. Puoi esportare di nuovo.",
   "export.dialog.title": "Esporta",
   "export.dialog.description":
     "Scegli formato, codifica, fotogrammi al secondo e tipo di file.",
@@ -245,6 +248,8 @@ export const it: Record<TranslationKey, string> = {
   "config.theme.system": "Sistema",
   "config.language.title": "Lingua",
   "config.language.desc": "Scegli la tua lingua.",
+  "config.about.title": "Informazioni",
+  "config.about.version": "Versione {version}",
 
   "captions.desc":
     "Trascrive l’audio della registrazione schermo (dove il microfono è mixato). Mostrato in anteprima e masterizzato nell’export se attivo.",

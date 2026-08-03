@@ -1,27 +1,10 @@
-/** Click-through on-screen guide for the crop region during area capture. */
-
-import { useEffect, useState } from "react";
-import { listen } from "@tauri-apps/api/event";
-import { AreaRegionChrome, type AreaRect } from "./AreaRegionChrome";
+/** Click-through crop outline — window geometry is the rect (no fullscreen dim). */
 
 export function AreaFrameApp() {
-  const [rect, setRect] = useState<AreaRect | null>(null);
-
-  useEffect(() => {
-    let unlisten: (() => void) | undefined;
-    void listen<AreaRect>("area-frame://rect", (e) => setRect(e.payload)).then(
-      (fn) => {
-        unlisten = fn;
-      },
-    );
-    return () => unlisten?.();
-  }, []);
-
-  if (!rect) return null;
-
   return (
-    <div className="pointer-events-none relative h-screen w-screen overflow-hidden">
-      <AreaRegionChrome rect={rect} />
-    </div>
+    <div
+      className="pointer-events-none box-border h-screen w-screen rounded-sm border-2 border-dashed border-sky-400 bg-transparent"
+      aria-hidden
+    />
   );
 }

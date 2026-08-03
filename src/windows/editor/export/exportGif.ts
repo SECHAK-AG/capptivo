@@ -29,10 +29,15 @@ import {
 } from "./gifQuantizePool";
 import type { ResolvedExportParams } from "./exportSettings";
 import { useEditorStore } from "../store";
+import { GpuContextLostError } from "../render/gpuLifecycle";
 
 /** Flush the encoder's buffer to disk once it grows past this, so the whole
  *  GIF never sits in RAM. */
 const GIF_FLUSH_THRESHOLD = 4 * 1024 * 1024;
+
+function throwIfGpuLost(isLost: () => boolean): void {
+  if (isLost()) throw new GpuContextLostError();
+}
 
 export async function renderGifToSink(
   sink: ExportSink,
@@ -49,7 +54,8 @@ export async function renderGifToSink(
   const session = sequential
     ? await createExportCompositorFromMedia(sequential.media, width, height, { cpuReadback: true })
     : await createExportCompositor(screenUrl, faceCam, width, height, { cpuReadback: true });
-  const { ctx, video, camera, segments, drawAt, dispose, stats } = session;
+  const { ctx, video, camera, segments, drawAt, dispose, stats, isGpuLost } =
+    session;
   if (!ctx) {
     dispose();
     throw new Error("GIF export requires a readable canvas context");
@@ -76,6 +82,7 @@ export async function renderGifToSink(
       await seekTo(video, firstT);
       if (camera) await seekTo(camera, firstT).catch(() => undefined);
     }
+    throwIfGpuLost(isGpuLost);
     drawAt(firstT);
     try {
       ctx.getImageData(0, 0, 1, 1);
@@ -142,6 +149,7 @@ export async function renderGifToSink(
         if (camera) await seekTo(camera, t).catch(() => undefined);
       }
       drawAt(t);
+      throwIfGpuLost(isGpuLost);
 
       const readStart = performance.now();
       const { data } = ctx.getImageData(0, 0, width, height);

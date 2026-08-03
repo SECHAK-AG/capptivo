@@ -9,6 +9,7 @@ pub mod captions;
 mod capabilities;
 mod commands;
 mod proc;
+mod webview_gpu;
 #[cfg(any(
     all(target_os = "macos", feature = "scap-capture"),
     all(target_os = "windows", feature = "wgc-capture")

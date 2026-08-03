@@ -375,7 +375,15 @@ export function Timeline({
     e.preventDefault();
     dragRef.current = state;
     (e.currentTarget as HTMLElement).setPointerCapture?.(e.pointerId);
-    if (state.kind !== "playhead") beginTimelineEdit();
+    if (state.kind !== "playhead") {
+      beginTimelineEdit();
+      return;
+    }
+    // Moving the playhead means "take me here and let me look at it". Landing
+    // it in a running preview leaves the frame that was asked for already gone
+    // by the time it draws, so stop before the seek rather than after it.
+    const { isPlaying, setPlaying } = useEditorStore.getState();
+    if (isPlaying) setPlaying(false);
   };
 
   const onTrackClick = (e: React.MouseEvent) => {

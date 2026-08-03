@@ -41,6 +41,10 @@ import type {
   FrameCompositorOptions,
   FrameCompositorSurface,
 } from "./frameCompositor";
+import {
+  hasHadSuccessfulGpuContext,
+  markGpuContextSucceeded,
+} from "./gpuLifecycle";
 import { ComposeProfiler } from "./composeProfiler";
 import { CanvasLayer } from "./pixi/canvasLayer";
 import { OutputSurface } from "./pixi/outputSurface";
@@ -460,19 +464,28 @@ export async function createPixiFrameCompositor(
     faceMask.set(0, 0, camWidth, camHeight, cornerRadius);
   }
 
+  let disposed = false;
   function dispose(): void {
-    screenTexture.destroy();
-    faceTexture.destroy();
-    background.destroy();
-    cursorOverlay.destroy();
-    captionsLayer.destroy();
-    recordingShadow.destroy();
-    faceShadow.destroy();
-    screenMask.destroy();
-    faceMask.destroy();
-    output.destroy();
-    stage.destroy({ children: true });
-    renderer.destroy();
+    if (disposed) return;
+    disposed = true;
+    // After CONTEXT_LOST, Pixi destroy can spam
+    // INVALID_OPERATION: loseContext: context already lost — swallow and move on.
+    try {
+      screenTexture.destroy();
+      faceTexture.destroy();
+      background.destroy();
+      cursorOverlay.destroy();
+      captionsLayer.destroy();
+      recordingShadow.destroy();
+      faceShadow.destroy();
+      screenMask.destroy();
+      faceMask.destroy();
+      output.destroy();
+      stage.destroy({ children: true });
+      renderer.destroy();
+    } catch (e) {
+      console.warn("[compositor] dispose after GPU loss (ignored)", e);
+    }
   }
 
   console.info(
@@ -559,6 +572,12 @@ async function createRenderer(
         );
       }
     }
+    if (hasHadSuccessfulGpuContext()) {
+      throw new Error(
+        "GPU context unavailable after a graphics reset (WebGL context was lost). " +
+          `Reclaim or reload the editor, then retry. (${errors.join(" | ") || "no preferences"})`,
+      );
+    }
     throw new Error(
       `no GPU renderer available (${errors.join(" | ") || "no preferences"})`,
     );
@@ -569,10 +588,12 @@ async function createRenderer(
       const renderer = await tryPreferences(
         new OffscreenCanvas(width, height) as unknown as HTMLCanvasElement,
       );
+      markGpuContextSucceeded();
       return { renderer, offscreen: true };
     } catch (e) {
       if (options.requireOffscreen) {
         const detail = e instanceof Error ? e.message : String(e);
+        // eslint-disable-next-line preserve-caught-error -- ErrorOptions.cause not in this TS lib target
         throw new Error(
           "export requires an OffscreenCanvas GPU surface (presentation-path " +
             `fallback would pace encode to the display refresh): ${detail}`,
@@ -590,10 +611,9 @@ async function createRenderer(
     );
   }
 
-  return {
-    renderer: await tryPreferences(),
-    offscreen: false,
-  };
+  const renderer = await tryPreferences();
+  markGpuContextSucceeded();
+  return { renderer, offscreen: false };
 }
 
 /** WeakMap identity keys for per-frame cache invalidation. */

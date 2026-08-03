@@ -6,9 +6,11 @@ import {
   useRef,
   useState,
   type ComponentPropsWithoutRef,
+  type PointerEvent as ReactPointerEvent,
   type ReactNode,
 } from "react";
 import {
+  GripVertical,
   Maximize2,
   Mic,
   MicOff,
@@ -21,11 +23,13 @@ import {
 } from "lucide-react";
 import { useI18n } from "@/lib/settings";
 import { cn } from "@/lib/utils";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 import { commands } from "../../ipc/bindings";
 import { RecorderBarAnchor } from "./RecorderErrorToast";
 import { useRecorderStore } from "./store";
 import { Countdown } from "./Countdown";
 import { useBarDrag } from "./menuSurface";
+import { barTransform, type BarOffset } from "./barOffset";
 import { RecorderToolbar } from "./RecorderToolbar";
 
 /** Keep in sync with `duration-300` on `BarPane`. */
@@ -59,6 +63,20 @@ export function RecorderApp() {
   const barOffset = useBarDrag((s) => s.offset);
   const resetBarOffset = useBarDrag((s) => s.resetOffset);
   const chromeRef = useRef<HTMLDivElement>(null);
+  const syncHitboxRef = useRef<(() => void) | null>(null);
+  const areaSelection = useRecorderStore((s) => s.areaSelection);
+  const captureMode = useRecorderStore((s) => s.captureMode);
+
+  // Live drag preview — mutate the chrome node directly (no React re-render).
+  const onDragPreview = useCallback((offset: BarOffset) => {
+    const el = chromeRef.current;
+    if (el) el.style.transform = barTransform(offset);
+  }, []);
+
+  // After store commit on pointer-up, resync click-through hitbox once layout settles.
+  const onDragCommit = useCallback(() => {
+    requestAnimationFrame(() => syncHitboxRef.current?.());
+  }, []);
 
   useEffect(() => {
     void init();
@@ -85,6 +103,18 @@ export function RecorderApp() {
   // What the window shows. `starting` covers the pipeline bring-up window so the
   // HUD is on screen the instant the countdown ends.
   const showHud = live || starting;
+
+  // Esc dismisses the crop guide (click-through window can't take keys itself).
+  useEffect(() => {
+    if (captureMode !== "area" || !areaSelection || counting || showHud) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== "Escape") return;
+      e.preventDefault();
+      void commands.hideAreaFrameGuide().catch(() => undefined);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [captureMode, areaSelection, counting, showHud]);
 
   // Hand off from the optimistic HUD to the real one: `live` means the recorder
   // came up, `lastError` means it did not (`startRecording` swallows failures
@@ -152,11 +182,18 @@ export function RecorderApp() {
       const r = el.getBoundingClientRect();
       void commands.setRecorderBarHitbox(r.left, r.top, r.width, r.height);
     };
+    syncHitboxRef.current = sync;
     const ro = new ResizeObserver(sync);
     ro.observe(el);
+    // ResizeObserver fires an initial callback, but keep an explicit sync so the
+    // first paint cannot leave the bar click-through before that lands.
     sync();
-    return () => ro.disconnect();
-  }, [counting, showHud, barOffset, mountSetup, mountHud, lastError]);
+    return () => {
+      if (syncHitboxRef.current === sync) syncHitboxRef.current = null;
+      ro.disconnect();
+    };
+    // Position changes resync via onDragCommit — barOffset must stay out of deps.
+  }, [counting, showHud, mountSetup, mountHud, lastError]);
 
   // Stable identity: `start` is a zustand action, so this is created once. The
   // countdown latches its own fire, but a stable prop means its ref-sync effect
@@ -234,13 +271,17 @@ export function RecorderApp() {
         className="pointer-events-auto absolute left-1/2 flex w-fit flex-col items-center"
         style={{
           bottom: BAR_BOTTOM_MARGIN_PX,
-          transform: `translate3d(calc(-50% + ${barOffset.x}px), ${barOffset.y}px, 0)`,
+          transform: barTransform(barOffset),
         }}
       >
         <RecorderBarAnchor>
           {mountSetup ? (
             <BarPane active={!hudOn}>
-              <RecorderToolbar onRecord={onRecord} />
+              <RecorderToolbar
+                onRecord={onRecord}
+                onDragPreview={onDragPreview}
+                onDragCommit={onDragCommit}
+              />
             </BarPane>
           ) : null}
           {mountHud ? (
@@ -329,10 +370,13 @@ function RecordingHud({ starting }: { starting: boolean }) {
     return (
       <div className="inline-flex h-10 w-fit items-center gap-0.5 rounded-2xl border border-border bg-card p-1">
         <div
-          data-tauri-drag-region
-          className="flex h-8 cursor-grab items-center gap-2 rounded-xl px-2.5 active:cursor-grabbing"
+          className="flex h-8 cursor-grab items-center gap-1.5 rounded-xl pl-1 pr-2.5 active:cursor-grabbing"
           title={t("recorder.drag")}
+          onPointerDown={startHudWindowDrag}
         >
+          <span className="flex w-6 shrink-0 items-center justify-center text-muted-foreground">
+            <GripVertical className="pointer-events-none size-4" />
+          </span>
           <span
             className={cn(
               "size-2 shrink-0 rounded-full",
@@ -366,10 +410,13 @@ function RecordingHud({ starting }: { starting: boolean }) {
   return (
     <div className="inline-flex h-12 w-fit max-w-full items-center gap-0.5 rounded-2xl border border-border bg-card p-1.5">
       <div
-        data-tauri-drag-region
-        className="flex h-9 cursor-grab items-center gap-2 rounded-xl px-2 active:cursor-grabbing"
+        className="flex h-9 cursor-grab items-center gap-1.5 rounded-xl pl-0.5 pr-2 active:cursor-grabbing"
         title={t("recorder.drag")}
+        onPointerDown={startHudWindowDrag}
       >
+        <span className="flex w-7 shrink-0 items-center justify-center text-muted-foreground">
+          <GripVertical className="pointer-events-none size-4" />
+        </span>
         <span
           className={cn(
             "size-2 shrink-0 rounded-full",
@@ -486,6 +533,13 @@ function RecordingHud({ starting }: { starting: boolean }) {
 const HUD_ICON =
   "flex size-9 shrink-0 items-center justify-center rounded-xl text-muted-foreground transition-colors hover:bg-muted hover:text-foreground disabled:pointer-events-none disabled:opacity-40";
 
+/** Compact HUD uses a docked native window — startDragging moves the HWND. */
+function startHudWindowDrag(e: ReactPointerEvent) {
+  if (e.button !== 0) return;
+  e.preventDefault();
+  void getCurrentWindow().startDragging();
+}
+
 function HudIconBtn({
   className,
   children,
@@ -494,7 +548,6 @@ function HudIconBtn({
   return (
     <button
       type="button"
-      data-tauri-drag-region="false"
       className={cn(HUD_ICON, className)}
       {...props}
     >

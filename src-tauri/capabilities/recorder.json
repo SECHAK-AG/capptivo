@@ -8,6 +8,8 @@
     "allow-list-capture-sources",
     "allow-list-capture-devices",
     "allow-list-microphones",
+    "allow-warm-microphone",
+    "allow-cool-microphone",
     "allow-platform-capabilities",
     "allow-check-permissions",
     "allow-request-screen-permission",

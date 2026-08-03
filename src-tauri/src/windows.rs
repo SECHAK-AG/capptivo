@@ -105,10 +105,10 @@ const LAYOUT_SETUP_W_MIN: f64 = 640.0;
 const LAYOUT_SETUP_W_MAX: f64 = 1200.0;
 /// Setup toolbar + error toast underneath (toast used to clip to a red sliver).
 const LAYOUT_ALERT_H: f64 = 120.0;
-/// Compact live HUD (status + icon controls).
-const LAYOUT_HUD: (f64, f64) = (420.0, 56.0);
-/// Collapsed HUD chip (REC + timer + expand).
-const LAYOUT_HUD_MINI: (f64, f64) = (168.0, 48.0);
+/// Compact live HUD (status + grip + icon controls).
+const LAYOUT_HUD: (f64, f64) = (448.0, 56.0);
+/// Collapsed HUD chip (grip + REC + timer + expand).
+const LAYOUT_HUD_MINI: (f64, f64) = (196.0, 48.0);
 /// Countdown badge (centered on the primary display).
 /// Must stay square — a wide leftover setup width makes the digit look
 /// top/bottom-cramped with huge side gaps.
@@ -452,10 +452,11 @@ fn set_follows_spaces(_win: &tauri::WebviewWindow, _follows: bool) {}
 
 /// Capptivo chrome that must stay visible to the user but out of `screen.mp4`.
 /// Annotation is deliberately omitted — ink is meant to land in the recording.
-/// Editor / library are never listed (title-based matching used to collide with
-/// the HUD's `"Capptivo"` title and black out fullscreen shells).
+/// Area frame is chrome (crop guide), never content. Editor / library are never
+/// listed (title-based matching used to collide with the HUD's `"Capptivo"`
+/// title and black out fullscreen shells).
 #[cfg(any(target_os = "macos", target_os = "windows"))]
-const CAPTURE_EXCLUDED_LABELS: &[&str] = &[RECORDER_LABEL, CAMERA_LABEL];
+const CAPTURE_EXCLUDED_LABELS: &[&str] = &[RECORDER_LABEL, CAMERA_LABEL, "area-frame"];
 
 /// macOS: CGWindowIDs (`NSWindow.windowNumber`) for SCK `excluded_targets`.
 /// Prefer this over window *titles* — titles change (library `setTitle`, rename).
@@ -484,26 +485,52 @@ pub fn overlay_cgwindow_ids(app: &AppHandle) -> Vec<u32> {
 
 #[cfg(target_os = "windows")]
 pub fn set_capture_exclusion(app: &AppHandle, excluded: bool) {
-    use windows::Win32::Foundation::HWND;
-    use windows::Win32::UI::WindowsAndMessaging::{
-        SetWindowDisplayAffinity, WDA_EXCLUDEFROMCAPTURE, WDA_NONE,
-    };
+    use windows::Win32::UI::WindowsAndMessaging::{WDA_EXCLUDEFROMCAPTURE, WDA_NONE};
 
-    let affinity = if excluded { WDA_EXCLUDEFROMCAPTURE } else { WDA_NONE };
+    let affinity = if excluded {
+        WDA_EXCLUDEFROMCAPTURE
+    } else {
+        WDA_NONE
+    };
     for label in CAPTURE_EXCLUDED_LABELS {
         let Some(win) = app.get_webview_window(label) else {
             continue;
         };
-        let Ok(hwnd) = win.hwnd() else { continue };
-        let hwnd = HWND(hwnd.0 as *mut std::ffi::c_void);
-        if let Err(e) = unsafe { SetWindowDisplayAffinity(hwnd, affinity) } {
-            tracing::warn!(%e, label, excluded, "failed to set capture exclusion");
-        }
+        apply_display_affinity(&win, affinity, label);
+    }
+}
+
+/// Mark one overlay HWND as capture-excluded. Used when chrome is shown after
+/// `set_capture_exclusion(true)` already ran (area frame after record start).
+#[cfg(target_os = "windows")]
+pub fn exclude_overlay_from_capture(win: &tauri::WebviewWindow) {
+    use windows::Win32::UI::WindowsAndMessaging::WDA_EXCLUDEFROMCAPTURE;
+    apply_display_affinity(win, WDA_EXCLUDEFROMCAPTURE, "overlay");
+}
+
+#[cfg(target_os = "windows")]
+fn apply_display_affinity(
+    win: &tauri::WebviewWindow,
+    affinity: windows::Win32::UI::WindowsAndMessaging::WINDOW_DISPLAY_AFFINITY,
+    label: &str,
+) {
+    use windows::Win32::Foundation::HWND;
+    use windows::Win32::UI::WindowsAndMessaging::SetWindowDisplayAffinity;
+
+    let Ok(hwnd) = win.hwnd() else {
+        return;
+    };
+    let hwnd = HWND(hwnd.0 as *mut std::ffi::c_void);
+    if let Err(e) = unsafe { SetWindowDisplayAffinity(hwnd, affinity) } {
+        tracing::warn!(%e, label, "failed to set capture exclusion");
     }
 }
 
 #[cfg(not(target_os = "windows"))]
 pub fn set_capture_exclusion(_app: &AppHandle, _excluded: bool) {}
+
+#[cfg(not(target_os = "windows"))]
+pub fn exclude_overlay_from_capture(_win: &tauri::WebviewWindow) {}
 
 /// Whether a recording is currently active (used to apply capture exclusion to
 /// overlay windows created mid-recording, e.g. the camera bubble).
@@ -823,6 +850,11 @@ pub(crate) fn reveal_recorder_bar(app: &AppHandle) {
 /// Hide the recorder popover (close button / after stop).
 #[tauri::command]
 pub fn hide_recorder(app: AppHandle) -> tauri::Result<()> {
+    // Area guide outlives the bar if we only hide the recorder WebView — tear
+    // it down with the session UI and tell the store to drop the selection.
+    crate::area_picker::hide_area_frame_guide(&app);
+    crate::recorder::cool_microphone();
+    let _ = app.emit("recorder://dismissed", ());
     if let Some(win) = app.get_webview_window(RECORDER_LABEL) {
         set_follows_spaces(&win, false);
         win.hide()?;
@@ -1167,6 +1199,7 @@ pub fn show_recorder_popover(app: &AppHandle) -> tauri::Result<()> {
         if geometry().layout.is_setup_bar() {
             ensure_setup_click_through(app.clone());
         }
+        let _ = app.emit("recorder://shown", ());
         return Ok(());
     }
     create_recorder_popover(app)
@@ -1177,6 +1210,8 @@ pub fn toggle_recorder_popover(app: &AppHandle) -> tauri::Result<()> {
     if let Some(win) = app.get_webview_window(RECORDER_LABEL) {
         if win.is_visible().unwrap_or(false) {
             set_follows_spaces(&win, false);
+            crate::recorder::cool_microphone();
+            let _ = app.emit("recorder://dismissed", ());
             win.hide()?;
             return Ok(());
         }
@@ -1189,33 +1224,36 @@ fn create_recorder_popover(app: &AppHandle) -> tauri::Result<()> {
     // builder needs *some* size before the window exists.
     let size = RecorderLayout::Setup.size();
     let (x, y) = recorder_bottom_center(app, size.width, size.height);
-    let win = WebviewWindowBuilder::new(app, RECORDER_LABEL, WebviewUrl::App("recorder.html".into()))
-        .title("Capptivo")
-        .inner_size(size.width, size.height)
-        .resizable(false)
-        .decorations(false)
-        .transparent(true)
-        .shadow(false)
-        .always_on_top(true)
-        .skip_taskbar(true)
-        // First click must always act: once the annotation overlay (or any
-        // other window) takes key status, macOS otherwise swallows the next
-        // HUD click just to refocus — the "click twice to toggle" feel.
-        .accept_first_mouse(true)
-        // Built hidden, shown only after the Spaces pin: macOS bakes a
-        // window's Space eligibility at its *first* orderFront, so a
-        // `.visible(true)` build (default collection behavior) left the bar
-        // glued to one Space no matter what was set afterwards. The
-        // annotation overlay always used this hidden→pin→show sequence and
-        // is the one overlay that followed Spaces correctly.
-        .visible(false)
-        .position(x, y)
-        .build()?;
+    let win = crate::webview_gpu::apply_gpu_args(
+        WebviewWindowBuilder::new(app, RECORDER_LABEL, WebviewUrl::App("recorder.html".into()))
+            .title("Capptivo")
+            .inner_size(size.width, size.height)
+            .resizable(false)
+            .decorations(false)
+            .transparent(true)
+            .shadow(false)
+            .always_on_top(true)
+            .skip_taskbar(true)
+            // First click must always act: once the annotation overlay (or any
+            // other window) takes key status, macOS otherwise swallows the next
+            // HUD click just to refocus — the "click twice to toggle" feel.
+            .accept_first_mouse(true)
+            // Built hidden, shown only after the Spaces pin: macOS bakes a
+            // window's Space eligibility at its *first* orderFront, so a
+            // `.visible(true)` build (default collection behavior) left the bar
+            // glued to one Space no matter what was set afterwards. The
+            // annotation overlay always used this hidden→pin→show sequence and
+            // is the one overlay that followed Spaces correctly.
+            .visible(false)
+            .position(x, y),
+    )
+    .build()?;
     apply_setup_overlay(app, &win)?;
     set_follows_spaces(&win, true);
     win.show()?;
     win.set_focus()?;
     ensure_setup_click_through(app.clone());
+    let _ = app.emit("recorder://shown", ());
     Ok(())
 }
 
@@ -1285,23 +1323,25 @@ fn create_camera_preview_window(app: &AppHandle, device_id: &str) -> tauri::Resu
         urlencoding_minimal(device_id)
     );
     let (x, y) = camera_default_position(app);
-    let win = WebviewWindowBuilder::new(app, CAMERA_LABEL, WebviewUrl::App(url.into()))
-        .title("Capptivo Camera")
-        .inner_size(CAMERA_W, CAMERA_H)
-        .resizable(false)
-        .decorations(false)
-        .transparent(true)
-        .shadow(false)
-        .always_on_top(true)
-        .skip_taskbar(true)
-        // Exclude via ScreenCaptureKit `excluded_targets` — content_protected
-        // blacks the bubble on some macOS versions once capture starts.
-        .content_protected(false)
-        // Hidden→pin→show, same as the recorder bar: the first orderFront
-        // bakes Space eligibility (see create_recorder_popover).
-        .visible(false)
-        .position(x, y)
-        .build()?;
+    let win = crate::webview_gpu::apply_gpu_args(
+        WebviewWindowBuilder::new(app, CAMERA_LABEL, WebviewUrl::App(url.into()))
+            .title("Capptivo Camera")
+            .inner_size(CAMERA_W, CAMERA_H)
+            .resizable(false)
+            .decorations(false)
+            .transparent(true)
+            .shadow(false)
+            .always_on_top(true)
+            .skip_taskbar(true)
+            // Exclude via ScreenCaptureKit `excluded_targets` — content_protected
+            // blacks the bubble on some macOS versions once capture starts.
+            .content_protected(false)
+            // Hidden→pin→show, same as the recorder bar: the first orderFront
+            // bakes Space eligibility (see create_recorder_popover).
+            .visible(false)
+            .position(x, y),
+    )
+    .build()?;
     let _ = win.set_content_protected(false);
     set_follows_spaces(&win, true);
     win.show()?;
@@ -1552,23 +1592,25 @@ fn show_annotation_overlay_inner(app: &AppHandle) -> tauri::Result<()> {
         return Ok(());
     }
 
-    let win = WebviewWindowBuilder::new(
-        app,
-        ANNOTATION_LABEL,
-        WebviewUrl::App("annotation.html".into()),
+    let win = crate::webview_gpu::apply_gpu_args(
+        WebviewWindowBuilder::new(
+            app,
+            ANNOTATION_LABEL,
+            WebviewUrl::App("annotation.html".into()),
+        )
+        .title("Capptivo Annotation")
+        .resizable(false)
+        .decorations(false)
+        .transparent(true)
+        .shadow(false)
+        .always_on_top(true)
+        .skip_taskbar(true)
+        // Same first-click rule as the recorder bar: the overlay is click-through
+        // most of the time, so it's almost never the key window when the user
+        // clicks its toolbar — without this the first click only refocuses.
+        .accept_first_mouse(true)
+        .visible(false),
     )
-    .title("Capptivo Annotation")
-    .resizable(false)
-    .decorations(false)
-    .transparent(true)
-    .shadow(false)
-    .always_on_top(true)
-    .skip_taskbar(true)
-    // Same first-click rule as the recorder bar: the overlay is click-through
-    // most of the time, so it's almost never the key window when the user
-    // clicks its toolbar — without this the first click only refocuses.
-    .accept_first_mouse(true)
-    .visible(false)
     .build()?;
 
     position_annotation_on_active_display(app, &win)?;
@@ -1853,7 +1895,7 @@ fn editor_window_builder<'a>(
         builder = builder.decorations(false);
     }
 
-    builder
+    crate::webview_gpu::apply_gpu_args(builder)
 }
 
 fn build_editor_window(

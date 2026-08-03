@@ -70,6 +70,12 @@ export const en = {
   "export.status.saving": "Saving…",
   "export.status.addingAudio": "Adding audio…",
   "export.cancel": "Cancel",
+  "export.error.gpuContextLost":
+    "Export stopped: the graphics driver reset mid-render. Try exporting again.",
+  "editor.previewGpuLost":
+    "Preview stopped: the graphics driver reset. Reopen the editor if it does not recover.",
+  "editor.gpuReloaded":
+    "The editor reloaded after a graphics reset. You can export again.",
   "export.dialog.title": "Export",
   "export.dialog.description": "Choose format, encoding, frame rate, and file type.",
   "export.format": "Format",
@@ -232,6 +238,8 @@ export const en = {
   "config.theme.system": "System",
   "config.language.title": "Language",
   "config.language.desc": "Choose your language.",
+  "config.about.title": "About",
+  "config.about.version": "Version {version}",
 
   "captions.desc":
     "Transcribes audio from the screen recording (where the mic is muxed). Shown in preview and burned into export when enabled.",

@@ -52,8 +52,8 @@ pub struct CaptureDevice {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct MicrophoneDevice {
-    /// Stable id for [`RecorderConfig::microphone_device_id`] (AVFoundation
-    /// `uniqueID` on macOS; device name on Windows/Linux).
+    /// Stable id for [`RecorderConfig::microphone_device_id`].
+    /// macOS/Windows: cpal `DeviceId` display string. Linux: Pulse source name.
     pub device_id: String,
     pub label: String,
 }
@@ -95,8 +95,8 @@ pub struct RecorderConfig {
   /// WebView / OS mic device id — resolved to a native unique id on macOS.
   #[serde(default)]
   pub microphone_device_id: Option<String>,
-  /// Human label used to match `AVCaptureDevice` / WASAPI / Pulse when the
-  /// WebView deviceId is an opaque hash.
+  /// Human label used to match the cpal / Pulse input when the id alone is
+  /// ambiguous. Prefer an exact label match, then the device id.
   #[serde(default)]
   pub microphone_label: Option<String>,
   #[serde(default)]

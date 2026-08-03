@@ -19,6 +19,8 @@ macro_rules! command_handlers {
             $crate::commands::recording::list_capture_sources,
             $crate::commands::recording::list_capture_devices,
             $crate::commands::recording::list_microphones,
+            $crate::commands::recording::warm_microphone,
+            $crate::commands::recording::cool_microphone,
             $crate::commands::recording::platform_capabilities,
             $crate::commands::recording::check_permissions,
             $crate::commands::recording::request_screen_permission,

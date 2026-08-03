@@ -33,3 +33,9 @@ export function clampBarOffset(
     y: clampAxis(offset.y, bounds.top, bounds.bottom, viewport.height),
   };
 }
+
+/** Bar transform for a drag offset. React render and the live drag preview
+ *  must produce identical strings or the bar jumps when the drag commits. */
+export function barTransform(offset: BarOffset): string {
+  return `translate3d(calc(-50% + ${offset.x}px), ${offset.y}px, 0)`;
+}

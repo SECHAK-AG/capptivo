@@ -36,6 +36,7 @@ import { commands } from "../../ipc/bindings";
 import type { CaptureSource } from "../../ipc/types";
 import { RecorderMenu } from "./RecorderMenu";
 import { useBarDrag } from "./menuSurface";
+import type { BarOffset } from "./barOffset";
 import { useRecorderStore, type CaptureMode } from "./store";
 import { usePlatformCapabilities } from "./usePlatformCapabilities";
 
@@ -51,7 +52,17 @@ type MenuId =
   | "audio"
   | "settings";
 
-export function RecorderToolbar({ onRecord }: { onRecord: () => void }) {
+export function RecorderToolbar({
+  onRecord,
+  onDragPreview,
+  onDragCommit,
+}: {
+  onRecord: () => void;
+  /** Direct DOM transform during drag — no React re-render per frame. */
+  onDragPreview: (offset: BarOffset) => void;
+  /** Hitbox resync after the store commit on pointer-up. */
+  onDragCommit: () => void;
+}) {
   const { t } = useI18n();
   const caps = usePlatformCapabilities();
   const captureMode = useRecorderStore((s) => s.captureMode);
@@ -178,13 +189,16 @@ export function RecorderToolbar({ onRecord }: { onRecord: () => void }) {
         y: drag.originY + (top - drag.initialTop),
       };
       offsetRef.current = next;
-      setBarOffset(next);
+      onDragPreview(next);
     });
   };
 
-  const onGripPointerUp = (e: ReactPointerEvent<HTMLDivElement>) => {
+  const endGripDrag = (e: ReactPointerEvent<HTMLDivElement>) => {
+    // Guard re-entry: releasePointerCapture synthesizes lostpointercapture.
+    if (!draggingRef.current) return;
     const start = dragStartRef.current;
-    if (!start || start.pointerId !== e.pointerId) return;
+    if (start && start.pointerId !== e.pointerId) return;
+    draggingRef.current = false;
     if (e.currentTarget.hasPointerCapture(e.pointerId)) {
       e.currentTarget.releasePointerCapture(e.pointerId);
     }
@@ -194,7 +208,9 @@ export function RecorderToolbar({ onRecord }: { onRecord: () => void }) {
     }
     pendingPointerRef.current = null;
     dragStartRef.current = null;
-    draggingRef.current = false;
+    // One store write for the whole gesture — React re-applies the same transform.
+    setBarOffset(offsetRef.current);
+    onDragCommit();
     void commands.endRecorderDrag();
   };
 
@@ -212,8 +228,9 @@ export function RecorderToolbar({ onRecord }: { onRecord: () => void }) {
           title={t("recorder.drag")}
           onPointerDown={onGripPointerDown}
           onPointerMove={onGripPointerMove}
-          onPointerUp={onGripPointerUp}
-          onPointerCancel={onGripPointerUp}
+          onPointerUp={endGripDrag}
+          onPointerCancel={endGripDrag}
+          onLostPointerCapture={endGripDrag}
         >
           <GripVertical className="pointer-events-none size-4" />
         </div>

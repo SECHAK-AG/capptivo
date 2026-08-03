@@ -72,6 +72,9 @@ export const ja: Record<TranslationKey, string> = {
   "export.status.saving": "保存中…",
   "export.status.addingAudio": "オーディオを追加中…",
   "export.cancel": "キャンセル",
+  "export.error.gpuContextLost": "書き出しが停止しました。レンダリング中にグラフィックドライバーがリセットされました。もう一度書き出してください。",
+  "editor.previewGpuLost": "プレビューが停止しました。グラフィックドライバーがリセットされました。復帰しない場合はエディターを開き直してください。",
+  "editor.gpuReloaded": "グラフィックのリセット後にエディターを再読み込みしました。再び書き出せます。",
   "export.dialog.title": "書き出し",
   "export.dialog.description": "形式、エンコード、フレームレート、ファイル種別を選びます。",
   "export.format": "形式",
@@ -235,6 +238,8 @@ export const ja: Record<TranslationKey, string> = {
   "config.theme.system": "システム",
   "config.language.title": "言語",
   "config.language.desc": "言語を選択してください。",
+  "config.about.title": "情報",
+  "config.about.version": "バージョン {version}",
 
   "captions.desc":
     "画面録画の音声（マイクが多重化されている場合）を文字起こしします。有効時はプレビュー表示と書き出しに焼き込みます。",

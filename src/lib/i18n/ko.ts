@@ -72,6 +72,9 @@ export const ko: Record<TranslationKey, string> = {
   "export.status.saving": "저장 중…",
   "export.status.addingAudio": "오디오 추가 중…",
   "export.cancel": "취소",
+  "export.error.gpuContextLost": "내보내기가 중지되었습니다. 렌더링 중 그래픽 드라이버가 재설정되었습니다. 다시 내보내세요.",
+  "editor.previewGpuLost": "미리보기가 중지되었습니다. 그래픽 드라이버가 재설정되었습니다. 복구되지 않으면 편집기를 다시 여세요.",
+  "editor.gpuReloaded": "그래픽 재설정 후 편집기가 다시 로드되었습니다. 다시 내보낼 수 있습니다.",
   "export.dialog.title": "내보내기",
   "export.dialog.description": "형식, 인코딩, 프레임 레이트, 파일 유형을 선택하세요.",
   "export.format": "형식",
@@ -235,6 +238,8 @@ export const ko: Record<TranslationKey, string> = {
   "config.theme.system": "시스템",
   "config.language.title": "언어",
   "config.language.desc": "언어를 선택하세요.",
+  "config.about.title": "정보",
+  "config.about.version": "버전 {version}",
 
   "captions.desc":
     "화면 녹화 오디오(마이크가 포함된 경우)를 받아씁니다. 켜면 미리보기에 표시되고 내보내기에 굽습니다.",

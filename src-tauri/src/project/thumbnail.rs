@@ -63,6 +63,8 @@ pub fn extract_from_mp4(screen_mp4: &Path, thumbnail_jpg: &Path) -> AppResult<()
     if !screen_mp4.exists() {
         return Err(AppError::Project("screen.mp4 missing".into()));
     }
+    let tmp = thumbnail_jpg.with_extension("jpg.tmp");
+    let _ = std::fs::remove_file(&tmp);
     let ffmpeg = ffmpeg_path();
     let status = crate::proc::command(&ffmpeg)
         .args([
@@ -83,15 +85,53 @@ pub fn extract_from_mp4(screen_mp4: &Path, thumbnail_jpg: &Path) -> AppResult<()
             &format!("scale={THUMB_MAX_WIDTH}:-2"),
             "-q:v",
             "5",
+            // `.jpg.tmp` is not a format FFmpeg recognizes; force image2 so we
+            // can still stage+rename like `write_from_bgra`.
+            "-f",
+            "image2",
         ])
-        .arg(thumbnail_jpg)
+        .arg(&tmp)
         .status()
         .map_err(|e| AppError::Encoder(format!("thumbnail ffmpeg spawn: {e}")))?;
 
-    if !status.success() || !thumbnail_jpg.exists() {
+    let wrote = std::fs::metadata(&tmp).map(|m| m.len()).unwrap_or(0);
+    if !status.success() || wrote == 0 {
+        let _ = std::fs::remove_file(&tmp);
         return Err(AppError::Encoder(format!(
             "thumbnail ffmpeg failed ({status})"
         )));
     }
+    std::fs::rename(&tmp, thumbnail_jpg)
+        .map_err(|e| AppError::Encoder(format!("thumbnail rename: {e}")))?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn failed_extract_leaves_no_partial_thumbnail() {
+        let dir = std::env::temp_dir().join(format!(
+            "capptivo-thumb-test-{}",
+            uuid::Uuid::new_v4().simple()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let fake = dir.join("screen.mp4");
+        let thumbnail_jpg = dir.join("thumbnail.jpg");
+        std::fs::write(&fake, b"not an mp4").unwrap();
+
+        let err = extract_from_mp4(&fake, &thumbnail_jpg);
+        assert!(err.is_err(), "invalid mp4 must not produce a poster");
+        assert!(
+            !thumbnail_jpg.exists(),
+            "final thumbnail must not exist after failure"
+        );
+        assert!(
+            !thumbnail_jpg.with_extension("jpg.tmp").exists(),
+            "staging jpg.tmp must not remain after failure"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }

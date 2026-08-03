@@ -7,7 +7,10 @@ pub mod backend;
 pub mod encoder;
 pub mod hw_encoder;
 pub mod mic_devices;
+pub mod mic_warm;
 pub mod types;
+
+pub use mic_warm::{cool_microphone, warm_microphone};
 
 use crate::cursor::{CursorTrack, CursorTracker};
 use crate::error::{AppError, AppResult};
@@ -569,15 +572,11 @@ fn spawn_encode_loop(
 
             let frames_dropped = capture.dropped.load(Ordering::Relaxed);
             drop(capture);
-            let finished_path = if encode_error.is_none() {
-                encoder.finish()?
-            } else {
-                match encoder.finish() {
-                    Ok(path) => path,
-                    Err(e) => {
-                        tracing::warn!(%e, "encoder.finish failed after encode error; keeping partial file");
-                        screen_path.clone()
-                    }
+            let finished_path = match encoder.finish() {
+                Ok(path) => path,
+                Err(e) => {
+                    tracing::warn!(%e, "encoder.finish failed; keeping partial file");
+                    screen_path.clone()
                 }
             };
             let lead_in = media_epoch.unwrap_or(0.0);

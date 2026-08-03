@@ -74,6 +74,9 @@ export const es: Record<TranslationKey, string> = {
   "export.status.saving": "Guardando…",
   "export.status.addingAudio": "Añadiendo audio…",
   "export.cancel": "Cancelar",
+  "export.error.gpuContextLost": "Exportación detenida: el controlador gráfico se reinició al renderizar. Intenta exportar de nuevo.",
+  "editor.previewGpuLost": "Vista previa detenida: el controlador gráfico se reinició. Vuelve a abrir el editor si no se recupera.",
+  "editor.gpuReloaded": "El editor se recargó tras un reinicio gráfico. Ya puedes exportar de nuevo.",
   "export.dialog.title": "Exportar",
   "export.dialog.description":
     "Elige formato, codificación, fotogramas por segundo y tipo de archivo.",
@@ -245,6 +248,8 @@ export const es: Record<TranslationKey, string> = {
   "config.theme.system": "Sistema",
   "config.language.title": "Idioma",
   "config.language.desc": "Elige tu idioma.",
+  "config.about.title": "Acerca de",
+  "config.about.version": "Versión {version}",
 
   "captions.desc":
     "Transcribe el audio de la grabación de pantalla (donde está mezclado el micrófono). Se muestra en la vista previa y se quema en la exportación si está activado.",

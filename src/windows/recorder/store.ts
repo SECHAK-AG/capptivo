@@ -108,6 +108,10 @@ interface RecorderStore {
   setCameraDeviceId: (id: string | null) => void;
   setMicDeviceId: (id: string | null) => void;
   /**
+   * Keep the selected native mic open (discarding) until Record. Soft-fail.
+   */
+  syncMicWarm: () => void;
+  /**
    * Arm face-cam (and window prep) during countdown. Mic is native — no
    * WebView getUserMedia here. Safe to skip: `startRecording` awaits the same work.
    */
@@ -172,6 +176,33 @@ function pickDefaultSource(
   const filtered = sources.filter((s) => s.kind === mode);
   if (currentId && filtered.some((s) => s.id === currentId)) return currentId;
   return filtered.find((s) => s.isPrimary)?.id ?? filtered[0]?.id ?? null;
+}
+
+/** Drop a stale area pick — guide is already torn down by Rust on dismiss/stop. */
+function resetAreaCapture(
+  set: (partial: {
+    areaSelection: null;
+    captureMode?: CaptureMode;
+    selectedSourceId?: string | null;
+  }) => void,
+  get: () => {
+    captureMode: CaptureMode;
+    sources: CaptureSource[];
+    selectedSourceId: string | null;
+    areaSelection: CaptureAreaSelection | null;
+  },
+) {
+  const { captureMode, sources, selectedSourceId, areaSelection } = get();
+  if (!areaSelection && captureMode !== "area") return;
+  if (captureMode === "area") {
+    set({
+      areaSelection: null,
+      captureMode: "display",
+      selectedSourceId: pickDefaultSource(sources, "display", selectedSourceId),
+    });
+  } else {
+    set({ areaSelection: null });
+  }
 }
 
 export const useRecorderStore = create<RecorderStore>((set, get) => {
@@ -243,6 +274,14 @@ export const useRecorderStore = create<RecorderStore>((set, get) => {
       // fire before the IPC round-trip; keep the flag in sync immediately.
       void listen("annotation://closed", () => {
         set({ annotationVisible: false });
+      });
+      // Bar closed / take finished — area pick is session UI, not sticky.
+      void listen("recorder://dismissed", () => {
+        resetAreaCapture(set, get);
+      });
+      // Bar reopened — re-warm mic if still selected (Rust cools on dismiss).
+      void listen("recorder://shown", () => {
+        get().syncMicWarm();
       });
       if (typeof navigator !== "undefined" && navigator.mediaDevices) {
         navigator.mediaDevices.addEventListener("devicechange", () => {
@@ -415,6 +454,7 @@ export const useRecorderStore = create<RecorderStore>((set, get) => {
             ? s.micDeviceId
             : (microphones[0]?.deviceId ?? null),
       }));
+      get().syncMicWarm();
     } catch {
       set({ microphones: [] });
     }
@@ -498,6 +538,8 @@ export const useRecorderStore = create<RecorderStore>((set, get) => {
     set({ micEnabled: enabled, micSessionMuted: enabled ? false : get().micSessionMuted });
     if (enabled) {
       void get().ensureMicrophoneDevices();
+    } else {
+      void commands.coolMicrophone().catch(() => undefined);
     }
   },
 
@@ -546,8 +588,32 @@ export const useRecorderStore = create<RecorderStore>((set, get) => {
   },
 
   setMicDeviceId(id) {
-    // Selection only — native capture uses this id at record start.
     set({ micDeviceId: id, micEnabled: id !== null });
+    if (id) {
+      get().syncMicWarm();
+    } else {
+      void commands.coolMicrophone().catch(() => undefined);
+    }
+  },
+
+  syncMicWarm() {
+    const { micEnabled, micDeviceId, microphones, state } = get();
+    if (
+      state.status === "recording" ||
+      state.status === "paused" ||
+      state.status === "finalizing"
+    ) {
+      return;
+    }
+    if (!micEnabled || !micDeviceId) {
+      void commands.coolMicrophone().catch(() => undefined);
+      return;
+    }
+    const label =
+      microphones.find((m) => m.deviceId === micDeviceId)?.label ?? null;
+    void commands
+      .warmMicrophone(micDeviceId, label)
+      .catch(() => undefined);
   },
 
   prewarmCapture() {
@@ -660,6 +726,8 @@ export const useRecorderStore = create<RecorderStore>((set, get) => {
       }
     } catch (e) {
       reportError(describeError(e));
+      // Warm mic was taken for the failed start — reopen if still selected.
+      get().syncMicWarm();
     }
   },
 
@@ -672,6 +740,7 @@ export const useRecorderStore = create<RecorderStore>((set, get) => {
       // Rust stops ScreenCaptureKit first, then opens the editor (so the blank
       // editor shell is never in the last frames), then finishes mux/finalize.
       await commands.stopRecording();
+      // `hide_recorder` emits `recorder://dismissed` (clears area); belt for guide/cam.
       void commands.hideAreaFrameGuide().catch(() => undefined);
       void commands.hideCameraPreview().catch(() => undefined);
       set({ annotationVisible: false, micSessionMuted: false });

@@ -3,7 +3,13 @@
  * then a full-bleed timeline docked to the bottom of the column.
  */
 
-import { useEffect, useRef, useState, type RefObject } from "react";
+import {
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+  type RefObject,
+} from "react";
 import {
   computeCursorLoopReturn,
   findSegmentIndexAtTime,
@@ -21,7 +27,14 @@ import {
   markPreviewGpuHeld,
   releasePreviewGpu,
 } from "../render/previewGpuGate";
-import { trackVideoFrames } from "../render/videoFrameTrack";
+import {
+  attachContextLossHandlers,
+  decideRecovery,
+  reclaimGpuAfterLoss,
+} from "../render/gpuLifecycle";
+import { showError } from "@/lib/toast";
+import { translateNow } from "@/lib/i18n";
+import { trackVideoFrames, videoFrameStamp } from "../render/videoFrameTrack";
 import { useStageDimensions } from "../lib/useStageDimensions";
 import { resolveZoomCompositionLayout } from "../lib/composition";
 import { getZoomPanAtTime } from "../lib/zoomCache";
@@ -35,29 +48,17 @@ import {
 import { PlaybackControls } from "./PlaybackControls";
 import { useSameOriginMediaUrl } from "../lib/useSameOriginMediaUrl";
 import { mediaDuration } from "../lib/mediaDuration";
-import { faceCamFrameAt } from "../lib/faceCamSync";
+import {
+  faceCamFrameAt,
+  faceCamPlaybackRate,
+  screenClockIsRolling,
+  shouldSeekFaceCam,
+} from "../lib/faceCamSync";
 import {
   MEDIA_DIRECT_PREVIEW_LIMIT,
   probeMediaSize,
 } from "../lib/mediaBlobUrl";
 import { useI18n } from "@/lib/settings";
-
-/** Pace the play loop to presented video samples when RVFC exists; else rAF. */
-function playFrameScheduler(video: HTMLVideoElement | null): {
-  request: (cb: () => void) => number;
-  cancel: (id: number) => void;
-} {
-  if (video && typeof video.requestVideoFrameCallback === "function") {
-    return {
-      request: (cb) => video.requestVideoFrameCallback(() => cb()),
-      cancel: (id) => video.cancelVideoFrameCallback(id),
-    };
-  }
-  return {
-    request: (cb) => requestAnimationFrame(cb),
-    cancel: (id) => cancelAnimationFrame(id),
-  };
-}
 
 /** The hidden <video> lives here but is owned by the parent so the full-width
  *  timeline (a sibling, not a child) can seek it too. */
@@ -109,9 +110,104 @@ export function PreviewStage({
   const previewUrl = proxyUrl ?? (waitingForProxy ? null : screenUrl);
   const playbackUrl = useSameOriginMediaUrl(previewUrl);
   const playbackCameraUrl = useSameOriginMediaUrl(cameraUrl);
+
   const isPlaying = useEditorStore((s) => s.isPlaying);
   const muted = useEditorStore((s) => s.muted);
   const volume = useEditorStore((s) => s.volume);
+
+  /**
+   * The cam source actually mounted, which lags `playbackCameraUrl` on purpose.
+   *
+   * The first time a fresh take is opened, `ensure_camera_track` finds no
+   * normalized MP4, transcodes on a background thread and republishes the
+   * face-cam through `project://camera-ready` — mid-session, and usually mid
+   * play. Feeding that straight to `key` remounts the element cold: it reports
+   * no duration until the new file loads, so `faceCamFrameAt` withholds it from
+   * the compositor, and it re-enters at the live position once decoded. That
+   * drop-and-re-enter is what reads as the face-cam starting twice, and it
+   * happens exactly once per recording because the MP4 is cached afterwards.
+   */
+  const [mountedCameraUrl, setMountedCameraUrl] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (playbackCameraUrl === mountedCameraUrl) return;
+    const camera = cameraRef.current;
+    // Only an element presenting samples has a picture worth protecting. A cam
+    // that never composited (the duration-less WebM on WKWebView) has nothing
+    // to lose, so it takes the normalized track immediately.
+    const showingPicture =
+      mountedCameraUrl !== null &&
+      camera !== null &&
+      videoFrameStamp(camera)?.presentedFrames != null;
+    if (playbackCameraUrl === null || !isPlaying || !showingPicture) {
+      setMountedCameraUrl(playbackCameraUrl);
+    }
+  }, [playbackCameraUrl, mountedCameraUrl, isPlaying]);
+
+  /**
+   * Face-cam sync — the only writer to the cam element.
+   *
+   * Driven by the store clock, which moves at `PLAYBACK_UI_HZ` and is flushed
+   * on every seek and pause. Driving it from `paint()` instead meant mutating a
+   * media element at display rate, so every transient it passes through got
+   * sampled and acted on: the pre-seek `currentTime` WKWebView reports while
+   * `seeking` holds, a readyState dip, a seek still in flight. The store clock
+   * has none of those states — it changes once per thing that actually asked
+   * for a new time.
+   */
+  const currentTime = useEditorStore((s) => s.currentTime);
+  const cameraOffsetMs = useEditorStore((s) => s.cameraOffsetMs);
+  /** Previous synced timeline time; `null` = new source, so align outright. */
+  const camSyncTimeRef = useRef<number | null>(null);
+
+  const syncFaceCam = useCallback(() => {
+    const camera = cameraRef.current;
+    if (!camera) return;
+    const frame = faceCamFrameAt(
+      currentTime,
+      cameraOffsetMs,
+      mediaDuration(camera),
+    );
+    // No duration yet — nothing to align against; the load handler retries.
+    if (frame.state === "before") return;
+
+    if (
+      shouldSeekFaceCam({
+        desiredTime: frame.mediaTime,
+        isPlaying,
+        isSeeking: camera.seeking,
+        previousTimelineTime: camSyncTimeRef.current,
+        timelineTime: currentTime,
+        cameraCurrentTime: camera.currentTime,
+      })
+    ) {
+      camera.currentTime = frame.mediaTime;
+    }
+    camSyncTimeRef.current = currentTime;
+
+    // Outside the recorded span the timeline maps to one pinned frame, and the
+    // cam must not roll against a screen clock that is not rolling either.
+    const shouldPlay =
+      isPlaying &&
+      frame.state === "active" &&
+      screenClockIsRolling(videoRef.current);
+    if (!shouldPlay) {
+      camera.playbackRate = 1;
+      camera.pause();
+      return;
+    }
+    // Absorb drift a few percent at a time. Letting it accumulate and settling
+    // it on pause rewinds the cam, and the resumed cam replays that stretch.
+    camera.playbackRate = faceCamPlaybackRate(
+      camera.currentTime,
+      frame.mediaTime,
+    );
+    void camera.play().catch(() => undefined);
+  }, [currentTime, cameraOffsetMs, isPlaying, videoRef]);
+
+  useEffect(() => {
+    syncFaceCam();
+  }, [syncFaceCam]);
 
   const stage = useStageDimensions();
   const stageRef = useRef(stage);
@@ -127,14 +223,23 @@ export function PreviewStage({
 
     let disposed = false;
     let loopRaf = 0;
-    let loopCancel: ((id: number) => void) | null = null;
     let paintRaf = 0;
     let playing = useEditorStore.getState().isPlaying;
     let compositor: FrameCompositor | null = null;
     let remounting = false;
     let recoverAttempts = 0;
+    let lastRecoverAtMs: number | null = null;
+    let notifiedGpuFailure = false;
+    let initReclaimTried = false;
+    let detachContextLoss: (() => void) | null = null;
     /** Bumped to cancel in-flight Pixi init when export takes the GPU. */
     let generation = 0;
+
+    const notifyGpuFailureOnce = () => {
+      if (notifiedGpuFailure) return;
+      notifiedGpuFailure = true;
+      showError(translateNow("editor.previewGpuLost"));
+    };
 
     const mountCanvas = (canvas: FrameCompositorSurface) => {
       if (!(canvas instanceof HTMLCanvasElement)) {
@@ -150,6 +255,11 @@ export function PreviewStage({
       compositor = comp;
       compositorRef.current = comp;
       mountCanvas(comp.canvas);
+      detachContextLoss?.();
+      detachContextLoss = attachContextLossHandlers(comp.canvas, () => {
+        console.warn("[preview] webglcontextlost — remounting compositor");
+        recoverCompositor();
+      });
       console.info(`[preview] compositor backend=${comp.backend}`);
     };
 
@@ -184,35 +294,21 @@ export function PreviewStage({
 
       const video = videoRef.current;
       const camera = cameraRef.current;
-      const t = video?.currentTime ?? currentTime;
+      // One clock, one owner. A rolling element's own position is the truth —
+      // it advances between store publishes. The moment it stops rolling that
+      // position is stale (WKWebView reports the pre-seek time for as long as
+      // `seeking` holds), and the requested time is what the frame means.
+      const screenRolling = screenClockIsRolling(video);
+      const t = screenRolling && video ? video.currentTime : currentTime;
 
-      // The face-cam rides the screen timeline through its measured start
-      // offset — the same mapping the exporter uses, so what plays here is what
-      // gets written out.
-      const camFrame = camera
-        ? faceCamFrameAt(t, cameraOffsetMs, mediaDuration(camera))
-        : { state: "before" as const };
-      /** Withheld from the compositor when the cam has no picture for `t`. */
-      let cameraForFrame: HTMLVideoElement | null = null;
-
-      if (camera && camFrame.state !== "before") {
-        cameraForFrame = camera;
-        if (Math.abs(camera.currentTime - camFrame.mediaTime) > 0.12) {
-          camera.currentTime = camFrame.mediaTime;
-        }
-        // Only drive the element inside the recorded span. Past the end it is
-        // parked on the last frame: replaying a finished element restarts and
-        // re-ends it every tick, which is what made the face-cam flicker at the
-        // tail of the timeline.
-        const shouldPlay = nowPlaying && camFrame.state === "active";
-        if (shouldPlay && camera.paused) {
-          void camera.play().catch(() => undefined);
-        } else if (!shouldPlay && !camera.paused) {
-          camera.pause();
-        }
-      } else if (camera && !camera.paused) {
-        camera.pause();
-      }
+      // Read-only: `syncFaceCam` owns the element. All this decides is whether
+      // the cam has a picture for `t` at all — the compositor is handed nothing
+      // when the timeline sits outside the recorded span.
+      const camHasPicture =
+        camera !== null &&
+        faceCamFrameAt(t, cameraOffsetMs, mediaDuration(camera)).state !==
+          "before";
+      const cameraForFrame = camHasPicture ? camera : null;
 
       const hasSelectedBackground = backgroundImage !== null;
       const hasImageBackground =
@@ -298,17 +394,22 @@ export function PreviewStage({
       }
     };
 
+    /**
+     * Paced by rAF, not by the screen track's `requestVideoFrameCallback`.
+     * RVFC only fires once the screen decoder presents a sample, so pacing on
+     * it stalled the *whole* stage — face-cam included — for as long as that
+     * element took to spin up after a play or a seek. The compositor already
+     * skips redundant GPU uploads per element (see `videoStampNeedsUpload`),
+     * so a display-rate loop costs no extra texture traffic.
+     */
     const loop = () => {
       advancePlayback();
       paint();
       if (!playing) {
         loopRaf = 0;
-        loopCancel = null;
         return;
       }
-      const sched = playFrameScheduler(videoRef.current);
-      loopCancel = sched.cancel;
-      loopRaf = sched.request(loop);
+      loopRaf = requestAnimationFrame(loop);
     };
 
     const startLoop = () => {
@@ -317,16 +418,13 @@ export function PreviewStage({
         cancelAnimationFrame(paintRaf);
         paintRaf = 0;
       }
-      const sched = playFrameScheduler(videoRef.current);
-      loopCancel = sched.cancel;
-      loopRaf = sched.request(loop);
+      loopRaf = requestAnimationFrame(loop);
     };
 
     const stopLoop = () => {
       if (!loopRaf) return;
-      (loopCancel ?? cancelAnimationFrame)(loopRaf);
+      cancelAnimationFrame(loopRaf);
       loopRaf = 0;
-      loopCancel = null;
     };
 
     const requestPaint = () => {
@@ -347,6 +445,8 @@ export function PreviewStage({
         cancelAnimationFrame(paintRaf);
         paintRaf = 0;
       }
+      detachContextLoss?.();
+      detachContextLoss = null;
       const dead = compositor;
       compositor = null;
       compositorRef.current = null;
@@ -387,23 +487,50 @@ export function PreviewStage({
           if (playing) startLoop();
           else requestPaint();
         })
-        .catch((err) => {
+        .catch(async (err) => {
           remounting = false;
           releasePreviewGpu();
           console.error("[preview] compositor init failed", err);
+          // One reclaim+retry before telling the user — covers post-export TDR.
+          if (
+            !initReclaimTried &&
+            !disposed &&
+            gen === generation &&
+            !useEditorStore.getState().exporting
+          ) {
+            initReclaimTried = true;
+            const { ok } = await reclaimGpuAfterLoss();
+            if (
+              ok &&
+              !disposed &&
+              gen === generation &&
+              !useEditorStore.getState().exporting &&
+              !compositor
+            ) {
+              startCompositor();
+              return;
+            }
+          }
+          notifyGpuFailureOnce();
         });
     };
 
     const recoverCompositor = () => {
-      if (
-        disposed ||
-        remounting ||
-        recoverAttempts >= 3 ||
-        useEditorStore.getState().exporting
-      ) {
+      if (disposed || remounting || useEditorStore.getState().exporting) {
         return;
       }
-      recoverAttempts += 1;
+      const now = performance.now();
+      const { decision, nextAttempts } = decideRecovery({
+        attempts: recoverAttempts,
+        lastAttemptAtMs: lastRecoverAtMs,
+        nowMs: now,
+      });
+      recoverAttempts = nextAttempts;
+      lastRecoverAtMs = now;
+      if (decision === "giveUp") {
+        notifyGpuFailureOnce();
+        return;
+      }
       dropCompositor();
       startCompositor();
     };
@@ -475,6 +602,8 @@ export function PreviewStage({
       if (paintRaf) cancelAnimationFrame(paintRaf);
       unsubscribe();
       requestPaintRef.current = () => {};
+      detachContextLoss?.();
+      detachContextLoss = null;
       compositor?.dispose();
       compositor = null;
       compositorRef.current = null;
@@ -508,45 +637,19 @@ export function PreviewStage({
   }, [playbackUrl, videoRef]);
 
   useEffect(() => {
+    // A replaced source has no baseline, so its first sync counts as a jump
+    // and aligns outright instead of measuring drift against the old file.
+    camSyncTimeRef.current = null;
     const camera = cameraRef.current;
     if (!camera) return;
     const stopTrack = trackVideoFrames(camera, () => requestPaintRef.current());
     const onFrameReady = () => requestPaintRef.current();
-
-    /** Align to timeline and wake WKWebView's decoder (same as screen track). */
-    const wakeDecoder = () => {
-      const { currentTime, isPlaying: playing, cameraOffsetMs } =
-        useEditorStore.getState();
-      // Through the offset, like `paint` — a raw timeline seek here would land
-      // on a different frame and the two would seek against each other.
-      const frame = faceCamFrameAt(
-        currentTime,
-        cameraOffsetMs,
-        mediaDuration(camera),
-      );
-      if (frame.state !== "before") {
-        if (Math.abs(camera.currentTime - frame.mediaTime) > 0.04) {
-          camera.currentTime = frame.mediaTime;
-        }
-      }
-      if (playing) {
-        onFrameReady();
-        return;
-      }
-      void primePausedVideoFrame(camera).then(onFrameReady);
-    };
-
     camera.addEventListener("seeked", onFrameReady);
-    camera.addEventListener("loadeddata", wakeDecoder);
-    if (camera.readyState >= HTMLMediaElement.HAVE_METADATA) {
-      wakeDecoder();
-    }
     return () => {
       stopTrack();
       camera.removeEventListener("seeked", onFrameReady);
-      camera.removeEventListener("loadeddata", wakeDecoder);
     };
-  }, [playbackCameraUrl]);
+  }, [mountedCameraUrl]);
 
   useEffect(() => {
     const video = videoRef.current;
@@ -585,20 +688,9 @@ export function PreviewStage({
           video.duration,
         );
       }
-      const camera = cameraRef.current;
-      if (camera) {
-        const frame = faceCamFrameAt(
-          state.currentTime,
-          state.cameraOffsetMs,
-          mediaDuration(camera),
-        );
-        if (
-          frame.state !== "before" &&
-          Math.abs(camera.currentTime - frame.mediaTime) > 0.04
-        ) {
-          camera.currentTime = frame.mediaTime;
-        }
-      }
+      // The cam is not touched here. `paint()` owns it, and a paused
+      // `currentTime` change always schedules one — two writers reading the
+      // clock from different places is what let a seek pull the cam both ways.
     });
   }, []);
 
@@ -661,31 +753,21 @@ export function PreviewStage({
                 )
               }
             />
-            {playbackCameraUrl ? (
+            {mountedCameraUrl ? (
               <video
                 ref={cameraRef}
-                key={playbackCameraUrl}
-                src={playbackCameraUrl}
+                key={mountedCameraUrl}
+                src={mountedCameraUrl}
                 className="hidden"
                 muted
                 playsInline
                 preload="auto"
-                onLoadedMetadata={(e) => {
-                  const cam = e.currentTarget;
-                  const { currentTime, isPlaying: playing, cameraOffsetMs } =
-                    useEditorStore.getState();
-                  const frame = faceCamFrameAt(
-                    currentTime,
-                    cameraOffsetMs,
-                    mediaDuration(cam),
-                  );
-                  if (frame.state === "before") return;
-                  cam.currentTime = frame.mediaTime;
-                  if (playing && frame.state === "active") {
-                    void cam.play().catch(() => undefined);
-                  }
-                }}
+                // A duration only exists once metadata lands, so this is the
+                // first point `syncFaceCam` can align anything — before it, it
+                // sees `before` and returns.
+                onLoadedMetadata={syncFaceCam}
                 onLoadedData={(e) => {
+                  syncFaceCam();
                   if (useEditorStore.getState().isPlaying) return;
                   void primePausedVideoFrame(e.currentTarget).then(() =>
                     requestPaintRef.current(),
