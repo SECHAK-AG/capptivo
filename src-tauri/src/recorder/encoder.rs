@@ -29,8 +29,9 @@ const FFMPEG_STDERR_CAP: usize = 64 * 1024;
 pub struct Encoder {
     child: Child,
     /// Buffered so a padded (strided) frame is one `write` + flush per frame,
-    /// not one syscall per scanline.
-    video_stdin: BufWriter<ChildStdin>,
+    /// not one syscall per scanline. `Option` so `finish` can close stdin
+    /// without moving out of a type that implements `Drop`.
+    video_stdin: Option<BufWriter<ChildStdin>>,
     pcm: Option<File>,
     pcm_path: Option<PathBuf>,
     pcm_rate: u32,
@@ -121,8 +122,10 @@ impl Encoder {
             })
             .map_err(|e| AppError::Encoder(format!("failed to spawn stderr drainer: {e}")))?;
         // One buffer wide enough to hold a whole frame keeps padded writes cheap.
-        let video_stdin =
-            BufWriter::with_capacity((width as usize) * (height as usize) * 4, raw_stdin);
+        let video_stdin = Some(BufWriter::with_capacity(
+            (width as usize) * (height as usize) * 4,
+            raw_stdin,
+        ));
 
         let (pcm, pcm_path) = if system_audio {
             let path = output.with_file_name("system.pcm");
@@ -175,6 +178,9 @@ impl Encoder {
     /// Both paths below honor that — the tight path slices to `frame_len`, the
     /// strided path stops at `self.height` — so the extra pixels are dropped.
     pub fn write_frame(&mut self, data: &[u8], bytes_per_row: u32) -> AppResult<()> {
+        let stdin = self.video_stdin.as_mut().ok_or_else(|| {
+            AppError::Encoder("ffmpeg stdin already closed".into())
+        })?;
         let tight_row = (self.width as usize) * 4;
         let write_res = if bytes_per_row as usize == tight_row {
             if data.len() < self.frame_len {
@@ -184,7 +190,7 @@ impl Encoder {
                     self.frame_len
                 )));
             }
-            self.video_stdin.write_all(&data[..self.frame_len])
+            stdin.write_all(&data[..self.frame_len])
         } else {
             // Strip row padding: BufWriter coalesces the per-row copies into a
             // single frame-sized write when we flush below.
@@ -201,7 +207,7 @@ impl Encoder {
                         data.len()
                     )));
                 }
-                if let Err(e) = self.video_stdin.write_all(&data[start..end]) {
+                if let Err(e) = stdin.write_all(&data[start..end]) {
                     res = Err(e);
                     break;
                 }
@@ -210,7 +216,7 @@ impl Encoder {
         };
 
         write_res
-            .and_then(|()| self.video_stdin.flush())
+            .and_then(|()| stdin.flush())
             .map_err(|e| AppError::Encoder(format!("write to ffmpeg failed: {e}")))
     }
 
@@ -379,14 +385,19 @@ impl Encoder {
 
     pub fn finish(mut self) -> AppResult<PathBuf> {
         // Flush any buffered tail, then close stdin so ffmpeg finalizes.
-        let _ = self.video_stdin.flush();
-        drop(self.video_stdin);
-
-        if let Some(reader) = self.stderr_reader.take() {
-            let _ = reader.join();
+        if let Some(mut stdin) = self.video_stdin.take() {
+            let _ = stdin.flush();
         }
 
-        let status = wait_child(&mut self.child, FFMPEG_FINISH_TIMEOUT)?;
+        // Wait (with kill-on-timeout) *before* joining the stderr drainer.
+        // The drainer only returns when ffmpeg closes stderr, so joining first
+        // made FFMPEG_FINISH_TIMEOUT unreachable on a wedged child.
+        let reader = self.stderr_reader.take();
+        let wait_result = wait_child(&mut self.child, FFMPEG_FINISH_TIMEOUT);
+        if let Some(reader) = reader {
+            let _ = reader.join();
+        }
+        let status = wait_result?;
 
         if !status.success() {
             let stderr = self
@@ -435,7 +446,20 @@ impl Encoder {
             let _ = fs::remove_file(&mic_path);
         }
 
-        Ok(self.output)
+        // `Drop` forbids moving out of `self`; PathBuf::default is fine leftover.
+        Ok(std::mem::take(&mut self.output))
+    }
+}
+
+impl Drop for Encoder {
+    fn drop(&mut self) {
+        // `finish()` consumes self and reaps the child; this only fires on the
+        // panic / early-return paths, where an orphaned ffmpeg would keep the
+        // output file open and burn CPU for the rest of the process lifetime.
+        if matches!(self.child.try_wait(), Ok(None)) {
+            let _ = self.child.kill();
+            let _ = self.child.wait();
+        }
     }
 }
 
@@ -1127,6 +1151,42 @@ pub(crate) fn ffprobe_path() -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn wait_child_times_out_and_kills_the_child() {
+        // Long-lived sleeper: proves the finalize timeout is reachable and that
+        // the kill path runs (the ordering bug in `finish()` made this dead).
+        let mut child = if cfg!(windows) {
+            std::process::Command::new("cmd")
+                .args(["/C", "timeout", "/T", "60", "/NOBREAK"])
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .spawn()
+                .expect("spawn sleeper")
+        } else {
+            std::process::Command::new("sleep")
+                .arg("60")
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .spawn()
+                .expect("spawn sleeper")
+        };
+
+        let started = Instant::now();
+        let err = wait_child(&mut child, Duration::from_millis(200)).expect_err("must time out");
+        assert!(
+            started.elapsed() < Duration::from_secs(5),
+            "wait_child blocked far longer than the timeout"
+        );
+        assert!(
+            err.to_string().contains("timed out"),
+            "unexpected error: {err}"
+        );
+        assert!(
+            matches!(child.try_wait(), Ok(Some(_))),
+            "child must be reaped after timeout kill"
+        );
+    }
 
     #[test]
     fn pcm_pad_covers_late_audio_start() {
