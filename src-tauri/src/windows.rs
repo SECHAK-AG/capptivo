@@ -105,10 +105,10 @@ const LAYOUT_SETUP_W_MIN: f64 = 640.0;
 const LAYOUT_SETUP_W_MAX: f64 = 1200.0;
 /// Setup toolbar + error toast underneath (toast used to clip to a red sliver).
 const LAYOUT_ALERT_H: f64 = 120.0;
-/// Compact live HUD (status + icon controls).
-const LAYOUT_HUD: (f64, f64) = (420.0, 56.0);
-/// Collapsed HUD chip (REC + timer + expand).
-const LAYOUT_HUD_MINI: (f64, f64) = (168.0, 48.0);
+/// Compact live HUD (status + grip + icon controls).
+const LAYOUT_HUD: (f64, f64) = (448.0, 56.0);
+/// Collapsed HUD chip (grip + REC + timer + expand).
+const LAYOUT_HUD_MINI: (f64, f64) = (196.0, 48.0);
 /// Countdown badge (centered on the primary display).
 /// Must stay square — a wide leftover setup width makes the digit look
 /// top/bottom-cramped with huge side gaps.
