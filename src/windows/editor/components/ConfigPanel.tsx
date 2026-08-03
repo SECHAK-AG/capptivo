@@ -1,9 +1,12 @@
 /**
- * Config inspector panel — appearance (light / dark / system) and language.
- * Preferences are persisted and applied app-wide by the settings provider.
+ * Config inspector panel — appearance (light / dark / system), language, and
+ * installed app version. Preferences are persisted and applied app-wide by the
+ * settings provider.
  */
 
+import { getVersion } from "@tauri-apps/api/app";
 import { Monitor, Moon, Sun, type LucideIcon } from "lucide-react";
+import { useEffect, useState } from "react";
 
 import {
   Select,
@@ -28,6 +31,17 @@ const THEME_OPTIONS: { mode: ThemeMode; icon: LucideIcon; labelKey: TranslationK
 export function ConfigPanel({ visible = true }: { visible?: boolean }) {
   const { t, language, setLanguage } = useI18n();
   const { theme, setTheme } = useTheme();
+  const [version, setVersion] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    void getVersion().then((next) => {
+      if (!cancelled) setVersion(next);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   return (
     <div className={cn("flex flex-col gap-7", !visible && "hidden")}>
@@ -80,6 +94,15 @@ export function ConfigPanel({ visible = true }: { visible?: boolean }) {
             ))}
           </SelectContent>
         </Select>
+      </section>
+
+      <section className="space-y-2">
+        <SectionLabel>{t("config.about.title")}</SectionLabel>
+        {version ? (
+          <p className="text-sm tabular-nums text-foreground">
+            {t("config.about.version", { version })}
+          </p>
+        ) : null}
       </section>
     </div>
   );

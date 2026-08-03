@@ -238,6 +238,8 @@ export const en = {
   "config.theme.system": "System",
   "config.language.title": "Language",
   "config.language.desc": "Choose your language.",
+  "config.about.title": "About",
+  "config.about.version": "Version {version}",
 
   "captions.desc":
     "Transcribes audio from the screen recording (where the mic is muxed). Shown in preview and burned into export when enabled.",

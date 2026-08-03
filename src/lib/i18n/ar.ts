@@ -242,6 +242,8 @@ export const ar: Record<TranslationKey, string> = {
   "config.theme.system": "النظام",
   "config.language.title": "اللغة",
   "config.language.desc": "اختر لغتك.",
+  "config.about.title": "حول",
+  "config.about.version": "الإصدار {version}",
 
   "captions.desc":
     "يفرغ صوت تسجيل الشاشة (حيث يُدمج الميكروفون). يظهر في المعاينة ويُدمَج في التصدير عند التفعيل.",

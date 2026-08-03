@@ -238,6 +238,8 @@ export const ko: Record<TranslationKey, string> = {
   "config.theme.system": "시스템",
   "config.language.title": "언어",
   "config.language.desc": "언어를 선택하세요.",
+  "config.about.title": "정보",
+  "config.about.version": "버전 {version}",
 
   "captions.desc":
     "화면 녹화 오디오(마이크가 포함된 경우)를 받아씁니다. 켜면 미리보기에 표시되고 내보내기에 굽습니다.",

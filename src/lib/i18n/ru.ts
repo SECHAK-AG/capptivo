@@ -241,6 +241,8 @@ export const ru: Record<TranslationKey, string> = {
   "config.theme.system": "Системная",
   "config.language.title": "Язык",
   "config.language.desc": "Выберите язык.",
+  "config.about.title": "О программе",
+  "config.about.version": "Версия {version}",
 
   "captions.desc":
     "Распознаёт речь из записи экрана (где смикширован микрофон). Показывается в превью и вшивается в экспорт, если включено.",

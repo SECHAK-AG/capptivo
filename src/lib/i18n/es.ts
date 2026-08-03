@@ -248,6 +248,8 @@ export const es: Record<TranslationKey, string> = {
   "config.theme.system": "Sistema",
   "config.language.title": "Idioma",
   "config.language.desc": "Elige tu idioma.",
+  "config.about.title": "Acerca de",
+  "config.about.version": "Versión {version}",
 
   "captions.desc":
     "Transcribe el audio de la grabación de pantalla (donde está mezclado el micrófono). Se muestra en la vista previa y se quema en la exportación si está activado.",

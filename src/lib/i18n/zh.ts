@@ -231,6 +231,8 @@ export const zh: Record<TranslationKey, string> = {
   "config.theme.system": "系统",
   "config.language.title": "语言",
   "config.language.desc": "选择你的语言。",
+  "config.about.title": "关于",
+  "config.about.version": "版本 {version}",
 
   "captions.desc":
     "从屏幕录制的音频（麦克风混音处）生成字幕。启用后会显示在预览中并写入导出。",

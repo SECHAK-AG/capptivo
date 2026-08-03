@@ -250,6 +250,8 @@ export const fr: Record<TranslationKey, string> = {
   "config.theme.system": "Système",
   "config.language.title": "Langue",
   "config.language.desc": "Choisissez votre langue.",
+  "config.about.title": "À propos",
+  "config.about.version": "Version {version}",
 
   "captions.desc":
     "Transcrit l'audio de l'enregistrement d'écran (là où le micro est mixé). Affiché en aperçu et incrusté à l'export si activé.",

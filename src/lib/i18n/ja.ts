@@ -238,6 +238,8 @@ export const ja: Record<TranslationKey, string> = {
   "config.theme.system": "システム",
   "config.language.title": "言語",
   "config.language.desc": "言語を選択してください。",
+  "config.about.title": "情報",
+  "config.about.version": "バージョン {version}",
 
   "captions.desc":
     "画面録画の音声（マイクが多重化されている場合）を文字起こしします。有効時はプレビュー表示と書き出しに焼き込みます。",

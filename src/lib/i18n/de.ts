@@ -241,6 +241,8 @@ export const de: Record<TranslationKey, string> = {
   "config.theme.system": "System",
   "config.language.title": "Sprache",
   "config.language.desc": "Wähle deine Sprache.",
+  "config.about.title": "Info",
+  "config.about.version": "Version {version}",
 
   "captions.desc":
     "Transkribiert Audio aus der Bildschirmaufnahme (wo das Mikrofon gemischt ist). In der Vorschau sichtbar und bei Export eingebrannt, wenn aktiviert.",
