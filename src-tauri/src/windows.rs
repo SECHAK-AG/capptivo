@@ -452,10 +452,11 @@ fn set_follows_spaces(_win: &tauri::WebviewWindow, _follows: bool) {}
 
 /// Capptivo chrome that must stay visible to the user but out of `screen.mp4`.
 /// Annotation is deliberately omitted — ink is meant to land in the recording.
-/// Editor / library are never listed (title-based matching used to collide with
-/// the HUD's `"Capptivo"` title and black out fullscreen shells).
+/// Area frame is chrome (crop guide), never content. Editor / library are never
+/// listed (title-based matching used to collide with the HUD's `"Capptivo"`
+/// title and black out fullscreen shells).
 #[cfg(any(target_os = "macos", target_os = "windows"))]
-const CAPTURE_EXCLUDED_LABELS: &[&str] = &[RECORDER_LABEL, CAMERA_LABEL];
+const CAPTURE_EXCLUDED_LABELS: &[&str] = &[RECORDER_LABEL, CAMERA_LABEL, "area-frame"];
 
 /// macOS: CGWindowIDs (`NSWindow.windowNumber`) for SCK `excluded_targets`.
 /// Prefer this over window *titles* — titles change (library `setTitle`, rename).
@@ -484,26 +485,52 @@ pub fn overlay_cgwindow_ids(app: &AppHandle) -> Vec<u32> {
 
 #[cfg(target_os = "windows")]
 pub fn set_capture_exclusion(app: &AppHandle, excluded: bool) {
-    use windows::Win32::Foundation::HWND;
-    use windows::Win32::UI::WindowsAndMessaging::{
-        SetWindowDisplayAffinity, WDA_EXCLUDEFROMCAPTURE, WDA_NONE,
-    };
+    use windows::Win32::UI::WindowsAndMessaging::{WDA_EXCLUDEFROMCAPTURE, WDA_NONE};
 
-    let affinity = if excluded { WDA_EXCLUDEFROMCAPTURE } else { WDA_NONE };
+    let affinity = if excluded {
+        WDA_EXCLUDEFROMCAPTURE
+    } else {
+        WDA_NONE
+    };
     for label in CAPTURE_EXCLUDED_LABELS {
         let Some(win) = app.get_webview_window(label) else {
             continue;
         };
-        let Ok(hwnd) = win.hwnd() else { continue };
-        let hwnd = HWND(hwnd.0 as *mut std::ffi::c_void);
-        if let Err(e) = unsafe { SetWindowDisplayAffinity(hwnd, affinity) } {
-            tracing::warn!(%e, label, excluded, "failed to set capture exclusion");
-        }
+        apply_display_affinity(&win, affinity, label);
+    }
+}
+
+/// Mark one overlay HWND as capture-excluded. Used when chrome is shown after
+/// `set_capture_exclusion(true)` already ran (area frame after record start).
+#[cfg(target_os = "windows")]
+pub fn exclude_overlay_from_capture(win: &tauri::WebviewWindow) {
+    use windows::Win32::UI::WindowsAndMessaging::WDA_EXCLUDEFROMCAPTURE;
+    apply_display_affinity(win, WDA_EXCLUDEFROMCAPTURE, "overlay");
+}
+
+#[cfg(target_os = "windows")]
+fn apply_display_affinity(
+    win: &tauri::WebviewWindow,
+    affinity: windows::Win32::UI::WindowsAndMessaging::WINDOW_DISPLAY_AFFINITY,
+    label: &str,
+) {
+    use windows::Win32::Foundation::HWND;
+    use windows::Win32::UI::WindowsAndMessaging::SetWindowDisplayAffinity;
+
+    let Ok(hwnd) = win.hwnd() else {
+        return;
+    };
+    let hwnd = HWND(hwnd.0 as *mut std::ffi::c_void);
+    if let Err(e) = unsafe { SetWindowDisplayAffinity(hwnd, affinity) } {
+        tracing::warn!(%e, label, "failed to set capture exclusion");
     }
 }
 
 #[cfg(not(target_os = "windows"))]
 pub fn set_capture_exclusion(_app: &AppHandle, _excluded: bool) {}
+
+#[cfg(not(target_os = "windows"))]
+pub fn exclude_overlay_from_capture(_win: &tauri::WebviewWindow) {}
 
 /// Whether a recording is currently active (used to apply capture exclusion to
 /// overlay windows created mid-recording, e.g. the camera bubble).
@@ -823,6 +850,10 @@ pub(crate) fn reveal_recorder_bar(app: &AppHandle) {
 /// Hide the recorder popover (close button / after stop).
 #[tauri::command]
 pub fn hide_recorder(app: AppHandle) -> tauri::Result<()> {
+    // Area guide outlives the bar if we only hide the recorder WebView — tear
+    // it down with the session UI and tell the store to drop the selection.
+    crate::area_picker::hide_area_frame_guide(&app);
+    let _ = app.emit("recorder://dismissed", ());
     if let Some(win) = app.get_webview_window(RECORDER_LABEL) {
         set_follows_spaces(&win, false);
         win.hide()?;

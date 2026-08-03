@@ -174,6 +174,33 @@ function pickDefaultSource(
   return filtered.find((s) => s.isPrimary)?.id ?? filtered[0]?.id ?? null;
 }
 
+/** Drop a stale area pick — guide is already torn down by Rust on dismiss/stop. */
+function resetAreaCapture(
+  set: (partial: {
+    areaSelection: null;
+    captureMode?: CaptureMode;
+    selectedSourceId?: string | null;
+  }) => void,
+  get: () => {
+    captureMode: CaptureMode;
+    sources: CaptureSource[];
+    selectedSourceId: string | null;
+    areaSelection: CaptureAreaSelection | null;
+  },
+) {
+  const { captureMode, sources, selectedSourceId, areaSelection } = get();
+  if (!areaSelection && captureMode !== "area") return;
+  if (captureMode === "area") {
+    set({
+      areaSelection: null,
+      captureMode: "display",
+      selectedSourceId: pickDefaultSource(sources, "display", selectedSourceId),
+    });
+  } else {
+    set({ areaSelection: null });
+  }
+}
+
 export const useRecorderStore = create<RecorderStore>((set, get) => {
   const reportError = (message: string) => {
     set({ lastError: message });
@@ -243,6 +270,10 @@ export const useRecorderStore = create<RecorderStore>((set, get) => {
       // fire before the IPC round-trip; keep the flag in sync immediately.
       void listen("annotation://closed", () => {
         set({ annotationVisible: false });
+      });
+      // Bar closed / take finished — area pick is session UI, not sticky.
+      void listen("recorder://dismissed", () => {
+        resetAreaCapture(set, get);
       });
       if (typeof navigator !== "undefined" && navigator.mediaDevices) {
         navigator.mediaDevices.addEventListener("devicechange", () => {
@@ -672,6 +703,7 @@ export const useRecorderStore = create<RecorderStore>((set, get) => {
       // Rust stops ScreenCaptureKit first, then opens the editor (so the blank
       // editor shell is never in the last frames), then finishes mux/finalize.
       await commands.stopRecording();
+      // `hide_recorder` emits `recorder://dismissed` (clears area); belt for guide/cam.
       void commands.hideAreaFrameGuide().catch(() => undefined);
       void commands.hideCameraPreview().catch(() => undefined);
       set({ annotationVisible: false, micSessionMuted: false });

@@ -59,6 +59,8 @@ export function RecorderApp() {
   const barOffset = useBarDrag((s) => s.offset);
   const resetBarOffset = useBarDrag((s) => s.resetOffset);
   const chromeRef = useRef<HTMLDivElement>(null);
+  const areaSelection = useRecorderStore((s) => s.areaSelection);
+  const captureMode = useRecorderStore((s) => s.captureMode);
 
   useEffect(() => {
     void init();
@@ -85,6 +87,18 @@ export function RecorderApp() {
   // What the window shows. `starting` covers the pipeline bring-up window so the
   // HUD is on screen the instant the countdown ends.
   const showHud = live || starting;
+
+  // Esc dismisses the crop guide (click-through window can't take keys itself).
+  useEffect(() => {
+    if (captureMode !== "area" || !areaSelection || counting || showHud) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== "Escape") return;
+      e.preventDefault();
+      void commands.hideAreaFrameGuide().catch(() => undefined);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [captureMode, areaSelection, counting, showHud]);
 
   // Hand off from the optimistic HUD to the real one: `live` means the recorder
   // came up, `lastError` means it did not (`startRecording` swallows failures
