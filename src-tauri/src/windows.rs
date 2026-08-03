@@ -853,6 +853,7 @@ pub fn hide_recorder(app: AppHandle) -> tauri::Result<()> {
     // Area guide outlives the bar if we only hide the recorder WebView — tear
     // it down with the session UI and tell the store to drop the selection.
     crate::area_picker::hide_area_frame_guide(&app);
+    crate::recorder::cool_microphone();
     let _ = app.emit("recorder://dismissed", ());
     if let Some(win) = app.get_webview_window(RECORDER_LABEL) {
         set_follows_spaces(&win, false);
@@ -1198,6 +1199,7 @@ pub fn show_recorder_popover(app: &AppHandle) -> tauri::Result<()> {
         if geometry().layout.is_setup_bar() {
             ensure_setup_click_through(app.clone());
         }
+        let _ = app.emit("recorder://shown", ());
         return Ok(());
     }
     create_recorder_popover(app)
@@ -1208,6 +1210,8 @@ pub fn toggle_recorder_popover(app: &AppHandle) -> tauri::Result<()> {
     if let Some(win) = app.get_webview_window(RECORDER_LABEL) {
         if win.is_visible().unwrap_or(false) {
             set_follows_spaces(&win, false);
+            crate::recorder::cool_microphone();
+            let _ = app.emit("recorder://dismissed", ());
             win.hide()?;
             return Ok(());
         }
@@ -1249,6 +1253,7 @@ fn create_recorder_popover(app: &AppHandle) -> tauri::Result<()> {
     win.show()?;
     win.set_focus()?;
     ensure_setup_click_through(app.clone());
+    let _ = app.emit("recorder://shown", ());
     Ok(())
 }
 

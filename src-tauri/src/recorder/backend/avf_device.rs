@@ -1083,11 +1083,10 @@ impl CaptureBackend for AvfDeviceBackend {
             handle.audio = Some(audio_rx);
         }
 
-        // Mac mic during iPhone capture: SCK companion on the main display
-        // (filter only — 2×2 unused video). Phone muxed audio stays on `audio`.
+        // Mac mic during iPhone capture: Core Audio (cpal), same as display capture.
         #[cfg(feature = "scap-capture")]
         if config.capture_microphone {
-            attach_sck_mic(&mut handle, config);
+            attach_cpal_mic(&mut handle, config);
         }
 
         Ok(handle)
@@ -1095,37 +1094,8 @@ impl CaptureBackend for AvfDeviceBackend {
 }
 
 #[cfg(feature = "scap-capture")]
-fn host_clock_ns_macos() -> u64 {
-    extern "C" {
-        fn clock_gettime_nsec_np(clock_id: u32) -> u64;
-    }
-    const CLOCK_UPTIME_RAW: u32 = 8;
-    unsafe { clock_gettime_nsec_np(CLOCK_UPTIME_RAW) }
-}
-
-#[cfg(feature = "scap-capture")]
-fn attach_sck_mic(handle: &mut CaptureHandle, config: &RecorderConfig) {
-    use super::system_audio::{CompanionAudioOpts, SystemAudioTap};
-    use core_graphics::display::CGDisplay;
-
-    let main_id = CGDisplay::main().id;
-    let source_id = format!("display:{main_id}");
-    let opts = CompanionAudioOpts {
-        system: false,
-        microphone: true,
-        microphone_device_id: config.microphone_device_id.clone(),
-        microphone_label: config.microphone_label.clone(),
-    };
-    match SystemAudioTap::start(&source_id, opts, host_clock_ns_macos()) {
-        Ok(tap) => {
-            if let Some(rx) = tap.mic_rx.clone() {
-                handle.attach_mic(rx, move || drop(tap));
-            }
-        }
-        Err(e) => {
-            tracing::warn!(%e, "microphone unavailable during device capture");
-        }
-    }
+fn attach_cpal_mic(handle: &mut CaptureHandle, config: &RecorderConfig) {
+    super::cpal_mic::attach_configured_mic(handle, config);
 }
 
 #[cfg(test)]

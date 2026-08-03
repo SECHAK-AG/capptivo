@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-warm-microphone"
+description = "Enables the warm_microphone command without any pre-configured scope."
+commands.allow = ["warm_microphone"]
+
+[[permission]]
+identifier = "deny-warm-microphone"
+description = "Denies the warm_microphone command without any pre-configured scope."
+commands.deny = ["warm_microphone"]

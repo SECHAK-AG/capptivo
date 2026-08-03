@@ -46,6 +46,12 @@ mod system_audio;
 #[cfg(all(target_os = "macos", feature = "scap-capture"))]
 pub use scap_backend::ScapBackend;
 
+#[cfg(any(
+    all(target_os = "macos", feature = "scap-capture"),
+    all(target_os = "windows", feature = "wgc-capture"),
+))]
+pub(crate) mod cpal_mic;
+
 #[cfg(all(target_os = "windows", feature = "wgc-capture"))]
 mod wasapi_audio;
 #[cfg(all(target_os = "windows", feature = "wgc-capture"))]
@@ -176,8 +182,8 @@ impl CaptureHandle {
         self.chain_stop(on_stop);
     }
 
-    /// Attach a native microphone receiver (SCK `captureMicrophone` / WASAPI /
-    /// Pulse). Same stop-hook rules as [`Self::attach_audio`].
+    /// Attach a native microphone receiver (cpal / Pulse). Same stop-hook
+    /// rules as [`Self::attach_audio`].
     pub fn attach_mic(
         &mut self,
         rx: Receiver<RawAudio>,

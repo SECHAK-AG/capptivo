@@ -1,7 +1,7 @@
 //! Windows.Graphics.Capture backend via the `windows-capture` crate — the
 //! Windows sibling of [`super::scap_backend`]. **This is the only file that
 //! drives video through WGC**; system audio is a WASAPI loopback companion in
-//! [`super::wasapi_audio`].
+//! [`super::wasapi_audio`], microphone is [`super::cpal_mic`].
 //!
 //! Threading: `start_free_threaded` runs the capture session on its own
 //! dispatcher-queue thread; [`FrameForwarder`] copies each frame into the
@@ -14,7 +14,7 @@
 //! input is [`RecorderConfig::crop`] (display-local points from the area
 //! picker), converted here using the monitor's effective DPI.
 
-use super::wasapi_audio::{WasapiLoopback, WasapiMic};
+use super::wasapi_audio::WasapiLoopback;
 use super::win_preview;
 use super::{CaptureBackend, CaptureHandle, RawFrame, CAPTURE_CHANNEL_CAP};
 use crate::error::{AppError, AppResult};
@@ -224,21 +224,7 @@ impl CaptureBackend for WgcBackend {
         }
 
         // Mic on a capture endpoint — never double-open with loopback.
-        if config.capture_microphone {
-            match WasapiMic::start(
-                config.microphone_device_id.as_deref(),
-                config.microphone_label.as_deref(),
-                epoch,
-            ) {
-                Ok(tap) => {
-                    let rx = tap.rx.clone();
-                    handle.attach_mic(rx, move || drop(tap));
-                }
-                Err(e) => {
-                    tracing::warn!(%e, "microphone unavailable; continuing without mic");
-                }
-            }
-        }
+        super::cpal_mic::attach_configured_mic(&mut handle, config);
 
         Ok(handle)
     }

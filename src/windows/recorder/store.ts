@@ -108,6 +108,10 @@ interface RecorderStore {
   setCameraDeviceId: (id: string | null) => void;
   setMicDeviceId: (id: string | null) => void;
   /**
+   * Keep the selected native mic open (discarding) until Record. Soft-fail.
+   */
+  syncMicWarm: () => void;
+  /**
    * Arm face-cam (and window prep) during countdown. Mic is native — no
    * WebView getUserMedia here. Safe to skip: `startRecording` awaits the same work.
    */
@@ -274,6 +278,10 @@ export const useRecorderStore = create<RecorderStore>((set, get) => {
       // Bar closed / take finished — area pick is session UI, not sticky.
       void listen("recorder://dismissed", () => {
         resetAreaCapture(set, get);
+      });
+      // Bar reopened — re-warm mic if still selected (Rust cools on dismiss).
+      void listen("recorder://shown", () => {
+        get().syncMicWarm();
       });
       if (typeof navigator !== "undefined" && navigator.mediaDevices) {
         navigator.mediaDevices.addEventListener("devicechange", () => {
@@ -446,6 +454,7 @@ export const useRecorderStore = create<RecorderStore>((set, get) => {
             ? s.micDeviceId
             : (microphones[0]?.deviceId ?? null),
       }));
+      get().syncMicWarm();
     } catch {
       set({ microphones: [] });
     }
@@ -529,6 +538,8 @@ export const useRecorderStore = create<RecorderStore>((set, get) => {
     set({ micEnabled: enabled, micSessionMuted: enabled ? false : get().micSessionMuted });
     if (enabled) {
       void get().ensureMicrophoneDevices();
+    } else {
+      void commands.coolMicrophone().catch(() => undefined);
     }
   },
 
@@ -577,8 +588,32 @@ export const useRecorderStore = create<RecorderStore>((set, get) => {
   },
 
   setMicDeviceId(id) {
-    // Selection only — native capture uses this id at record start.
     set({ micDeviceId: id, micEnabled: id !== null });
+    if (id) {
+      get().syncMicWarm();
+    } else {
+      void commands.coolMicrophone().catch(() => undefined);
+    }
+  },
+
+  syncMicWarm() {
+    const { micEnabled, micDeviceId, microphones, state } = get();
+    if (
+      state.status === "recording" ||
+      state.status === "paused" ||
+      state.status === "finalizing"
+    ) {
+      return;
+    }
+    if (!micEnabled || !micDeviceId) {
+      void commands.coolMicrophone().catch(() => undefined);
+      return;
+    }
+    const label =
+      microphones.find((m) => m.deviceId === micDeviceId)?.label ?? null;
+    void commands
+      .warmMicrophone(micDeviceId, label)
+      .catch(() => undefined);
   },
 
   prewarmCapture() {
@@ -691,6 +726,8 @@ export const useRecorderStore = create<RecorderStore>((set, get) => {
       }
     } catch (e) {
       reportError(describeError(e));
+      // Warm mic was taken for the failed start — reopen if still selected.
+      get().syncMicWarm();
     }
   },
 

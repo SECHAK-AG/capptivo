@@ -7,7 +7,10 @@ pub mod backend;
 pub mod encoder;
 pub mod hw_encoder;
 pub mod mic_devices;
+pub mod mic_warm;
 pub mod types;
+
+pub use mic_warm::{cool_microphone, warm_microphone};
 
 use crate::cursor::{CursorTrack, CursorTracker};
 use crate::error::{AppError, AppResult};

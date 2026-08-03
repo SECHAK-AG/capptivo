@@ -3,7 +3,8 @@
 //! (TAURI_DESKTOP_MIGRATION.md §15). scap's `Target::Window` looks up windows
 //! through `NSApp windowWithWindowNumber`, which is null for other apps and
 //! aborts the process — window video uses `DesktopIndependentWindow` instead.
-//! System audio is a companion SCStream in [`super::system_audio`].
+//! System audio is a companion SCStream in [`super::system_audio`]; microphone
+//! is Core Audio via [`super::cpal_mic`].
 //!
 //! Threading: the `scap::Capturer` is not `Send`, so it is *built and driven
 //! entirely inside the producer thread*. `start()` hands the thread a plain
@@ -11,7 +12,7 @@
 //! rendezvous channel before returning the [`CaptureHandle`].
 
 use super::sck_window;
-use super::system_audio::{CompanionAudioOpts, SystemAudioTap};
+use super::system_audio::SystemAudioTap;
 use super::picker_sources;
 use super::source_preview;
 use super::{CaptureBackend, CaptureHandle, RawFrame, CAPTURE_CHANNEL_CAP};
@@ -255,37 +256,20 @@ impl CaptureBackend for ScapBackend {
         let mut handle = CaptureHandle::new(width, height, fps, rx, dropped, stop);
         handle.epoch = epoch;
 
-        // Optional companion stream: system audio and/or SCK captureMicrophone.
-        let audio_opts = CompanionAudioOpts {
-            system: config.capture_system_audio,
-            microphone: config.capture_microphone,
-            microphone_device_id: config.microphone_device_id.clone(),
-            microphone_label: config.microphone_label.clone(),
-        };
-        if audio_opts.any() {
-            match SystemAudioTap::start(&config.source_id, audio_opts, epoch_host_ns) {
+        // System audio: SCK companion. Mic: Core Audio (cpal) — same stack as
+        // Windows, so Bluetooth headsets work without SCK sample-rate lies.
+        if config.capture_system_audio {
+            match SystemAudioTap::start(&config.source_id, epoch_host_ns) {
                 Ok(tap) => {
                     let system_rx = tap.system_rx.clone();
-                    let mic_rx = tap.mic_rx.clone();
-                    match (system_rx, mic_rx) {
-                        (Some(sys), Some(mic)) => {
-                            handle.attach_audio(sys, || {});
-                            handle.attach_mic(mic, move || drop(tap));
-                        }
-                        (Some(sys), None) => {
-                            handle.attach_audio(sys, move || drop(tap));
-                        }
-                        (None, Some(mic)) => {
-                            handle.attach_mic(mic, move || drop(tap));
-                        }
-                        (None, None) => drop(tap),
-                    }
+                    handle.attach_audio(system_rx, move || drop(tap));
                 }
                 Err(e) => {
-                    tracing::warn!(%e, "companion audio unavailable; continuing without it");
+                    tracing::warn!(%e, "system audio unavailable; continuing without it");
                 }
             }
         }
+        super::cpal_mic::attach_configured_mic(&mut handle, config);
 
         // Cursor samples are normalized against this rect (global points, the
         // space `CGEvent::location` reports in) — it must describe exactly the

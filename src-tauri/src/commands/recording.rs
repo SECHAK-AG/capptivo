@@ -33,6 +33,22 @@ pub fn list_microphones() -> AppResult<Vec<crate::recorder::types::MicrophoneDev
     crate::recorder::mic_devices::list_microphones()
 }
 
+/// Open the selected mic early (discard samples) so Record skips BT open latency.
+/// Soft-fail at the UI: a warm miss still cold-opens on Record.
+#[tauri::command(async)]
+pub fn warm_microphone(
+    device_id: Option<String>,
+    label: Option<String>,
+) -> AppResult<()> {
+    crate::recorder::warm_microphone(device_id.as_deref(), label.as_deref())
+}
+
+/// Tear down the warm mic (mic off / bar dismiss).
+#[tauri::command]
+pub fn cool_microphone() {
+    crate::recorder::cool_microphone();
+}
+
 /// `(async)` — cheap on its own, but it is awaited on the launch path
 /// immediately before [`request_screen_permission`]; splitting the two across
 /// thread policies would only make the pair harder to reason about.

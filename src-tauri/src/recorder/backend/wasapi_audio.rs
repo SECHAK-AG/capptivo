@@ -5,6 +5,8 @@
 //! The device's native rate/channels are reported honestly through
 //! [`RawAudio`]; the encoder forwards them to FFmpeg, so no resampling happens
 //! here.
+//!
+//! Microphone capture lives in [`super::cpal_mic`] (shared with macOS).
 
 use super::{RawAudio, AUDIO_CHANNEL_CAP};
 use crate::error::{AppError, AppResult};
@@ -96,7 +98,7 @@ fn build_stream(tx: Sender<RawAudio>, epoch: Instant) -> Result<cpal::Stream, St
 
     let sample_format = config.sample_format();
     let stream_config: cpal::StreamConfig = config.into();
-    let sample_rate = stream_config.sample_rate.0;
+    let sample_rate = stream_config.sample_rate;
     let channels = stream_config.channels;
 
     let err_fn = |e| tracing::warn!(%e, "WASAPI loopback stream error");
@@ -154,178 +156,8 @@ fn build_stream(tx: Sender<RawAudio>, epoch: Instant) -> Result<cpal::Stream, St
         other => return Err(format!("unsupported sample format {other:?}")),
     };
 
-    stream.play().map_err(|e| format!("start loopback: {e}"))?;
+    stream
+        .play()
+        .map_err(|e| format!("start loopback: {e}"))?;
     Ok(stream)
-}
-
-/// Microphone capture on a WASAPI *capture* endpoint (never the loopback device).
-pub struct WasapiMic {
-    stop: Arc<AtomicBool>,
-    join: Option<JoinHandle<()>>,
-    pub rx: Receiver<RawAudio>,
-}
-
-impl WasapiMic {
-    pub fn start(device_id: Option<&str>, label: Option<&str>, epoch: Instant) -> AppResult<Self> {
-        let (tx, rx) = crossbeam_channel::bounded::<RawAudio>(AUDIO_CHANNEL_CAP);
-        let stop = Arc::new(AtomicBool::new(false));
-        let stop_flag = stop.clone();
-        let device_id = device_id.map(str::to_owned);
-        let label = label.map(str::to_owned);
-
-        let (ready_tx, ready_rx) = crossbeam_channel::bounded::<Result<(), String>>(1);
-        let join = std::thread::Builder::new()
-            .name("wasapi-mic".into())
-            .spawn(move || run_mic(tx, stop_flag, ready_tx, device_id, label, epoch))
-            .map_err(|e| AppError::Other(format!("failed to spawn mic thread: {e}")))?;
-
-        match ready_rx.recv_timeout(std::time::Duration::from_secs(5)) {
-            Ok(Ok(())) => Ok(Self {
-                stop,
-                join: Some(join),
-                rx,
-            }),
-            Ok(Err(e)) => Err(AppError::Other(format!("microphone: {e}"))),
-            Err(_) => Err(AppError::Other("microphone init timed out".into())),
-        }
-    }
-
-    pub fn stop(&mut self) {
-        self.stop.store(true, Ordering::Relaxed);
-        let _ = self.join.take();
-    }
-}
-
-impl Drop for WasapiMic {
-    fn drop(&mut self) {
-        self.stop();
-    }
-}
-
-fn run_mic(
-    tx: Sender<RawAudio>,
-    stop: Arc<AtomicBool>,
-    ready: Sender<Result<(), String>>,
-    device_id: Option<String>,
-    label: Option<String>,
-    epoch: Instant,
-) {
-    let built = build_mic_stream(tx, device_id.as_deref(), label.as_deref(), epoch);
-    let stream = match built {
-        Ok(stream) => {
-            let _ = ready.send(Ok(()));
-            stream
-        }
-        Err(e) => {
-            let _ = ready.send(Err(e));
-            return;
-        }
-    };
-
-    while !stop.load(Ordering::Relaxed) {
-        std::thread::sleep(std::time::Duration::from_millis(50));
-    }
-    drop(stream);
-}
-
-fn build_mic_stream(
-    tx: Sender<RawAudio>,
-    device_id: Option<&str>,
-    label: Option<&str>,
-    epoch: Instant,
-) -> Result<cpal::Stream, String> {
-    let host = cpal::default_host();
-    let device = pick_input_device(&host, device_id, label)?;
-    let config = device
-        .default_input_config()
-        .map_err(|e| format!("input config: {e}"))?;
-
-    let sample_format = config.sample_format();
-    let stream_config: cpal::StreamConfig = config.into();
-    let sample_rate = stream_config.sample_rate.0;
-    let channels = stream_config.channels;
-
-    let err_fn = |e| tracing::warn!(%e, "WASAPI mic stream error");
-    let push = move |samples: Vec<f32>| {
-        if samples.is_empty() {
-            return;
-        }
-        let mut data = Vec::with_capacity(samples.len() * 4);
-        for s in samples {
-            data.extend_from_slice(&s.to_le_bytes());
-        }
-        let _ = tx.try_send(RawAudio {
-            data,
-            sample_rate,
-            channels,
-            timestamp: epoch.elapsed(),
-        });
-    };
-
-    let stream = match sample_format {
-        SampleFormat::F32 => device
-            .build_input_stream(
-                &stream_config,
-                move |data: &[f32], _| push(data.to_vec()),
-                err_fn,
-                None,
-            )
-            .map_err(|e| format!("build mic stream: {e}"))?,
-        SampleFormat::I16 => device
-            .build_input_stream(
-                &stream_config,
-                move |data: &[i16], _| {
-                    push(data.iter().map(|&s| f32::from(s) / 32768.0).collect())
-                },
-                err_fn,
-                None,
-            )
-            .map_err(|e| format!("build mic stream: {e}"))?,
-        SampleFormat::U16 => device
-            .build_input_stream(
-                &stream_config,
-                move |data: &[u16], _| {
-                    push(
-                        data.iter()
-                            .map(|&s| (f32::from(s) - 32768.0) / 32768.0)
-                            .collect(),
-                    )
-                },
-                err_fn,
-                None,
-            )
-            .map_err(|e| format!("build mic stream: {e}"))?,
-        other => return Err(format!("unsupported sample format {other:?}")),
-    };
-
-    stream.play().map_err(|e| format!("start mic: {e}"))?;
-    Ok(stream)
-}
-
-fn pick_input_device(
-    host: &cpal::Host,
-    device_id: Option<&str>,
-    label: Option<&str>,
-) -> Result<cpal::Device, String> {
-    let inputs: Vec<_> = host
-        .input_devices()
-        .map_err(|e| format!("list inputs: {e}"))?
-        .collect();
-
-    if let Some(label) = label.map(str::trim).filter(|s| !s.is_empty()) {
-        for d in &inputs {
-            if d.name().ok().as_deref() == Some(label) {
-                return Ok(d.clone());
-            }
-        }
-    }
-    if let Some(id) = device_id.map(str::trim).filter(|s| !s.is_empty()) {
-        for d in &inputs {
-            if d.name().ok().as_deref() == Some(id) {
-                return Ok(d.clone());
-            }
-        }
-    }
-    host.default_input_device()
-        .ok_or_else(|| "no default input device".to_string())
 }

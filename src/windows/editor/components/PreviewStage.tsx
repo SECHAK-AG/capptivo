@@ -568,8 +568,11 @@ export function PreviewStage({
 
     /** Align to timeline and wake WKWebView's decoder (same as screen track). */
     const wakeDecoder = () => {
-      const { currentTime, isPlaying: playing, cameraOffsetMs } =
-        useEditorStore.getState();
+      const {
+        currentTime,
+        isPlaying: playing,
+        cameraOffsetMs,
+      } = useEditorStore.getState();
       // Through the offset, like `paint` — a raw timeline seek here would land
       // on a different frame and the two would seek against each other.
       const frame = faceCamFrameAt(
@@ -725,8 +728,11 @@ export function PreviewStage({
                 preload="auto"
                 onLoadedMetadata={(e) => {
                   const cam = e.currentTarget;
-                  const { currentTime, isPlaying: playing, cameraOffsetMs } =
-                    useEditorStore.getState();
+                  const {
+                    currentTime,
+                    isPlaying: playing,
+                    cameraOffsetMs,
+                  } = useEditorStore.getState();
                   const frame = faceCamFrameAt(
                     currentTime,
                     cameraOffsetMs,

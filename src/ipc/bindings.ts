@@ -25,6 +25,11 @@ export const commands = {
   /** Native mics — never WebView getUserMedia (that blacks the face-cam). */
   listMicrophones: () =>
     invoke<{ deviceId: string; label: string }[]>("list_microphones"),
+  /** Open selected mic early (discard) so Record skips BT open latency. */
+  warmMicrophone: (deviceId: string | null, label: string | null) =>
+    invoke<void>("warm_microphone", { deviceId, label }),
+  /** Tear down warm mic (mic off / bar dismiss). */
+  coolMicrophone: () => invoke<void>("cool_microphone"),
   platformCapabilities: () =>
     invoke<PlatformCapabilities>("platform_capabilities"),
   checkPermissions: () => invoke<PermissionStatus>("check_permissions"),

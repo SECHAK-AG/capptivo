@@ -9,6 +9,8 @@ fn main() {
         "list_capture_sources",
         "list_capture_devices",
         "list_microphones",
+        "warm_microphone",
+        "cool_microphone",
         "platform_capabilities",
         "check_permissions",
         "request_screen_permission",

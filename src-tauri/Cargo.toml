@@ -37,6 +37,8 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 uuid = { version = "1", features = ["v4"] }
 chrono = { version = "0.4", features = ["serde", "clock"] }
+# SHA-256 pin for the whisper model download (captions/model.rs).
+sha2 = "0.10"
 
 # --- Recording pipeline ---
 crossbeam-channel = "0.5"
@@ -66,6 +68,10 @@ objc_id = { version = "0.1.1", optional = true }
 # Global cursor position + click polling for the zoom-follow data (no TCC needed
 # for position polling). Isolated behind cursor::CursorTracker.
 core-graphics = "0.24"
+# Mic capture via Core Audio (shared `cpal_mic` with Windows WASAPI). Not used
+# for system audio — that stays on the SCK companion stream.
+# 0.17+ required: 0.16 segfaults in CoreAudio device enumeration on macOS 26+.
+cpal = { version = "0.17", optional = true }
 
 [target.'cfg(target_os = "windows")'.dependencies]
 # Screen capture via Windows.Graphics.Capture. Same seam as scap on macOS:
@@ -86,7 +92,8 @@ windows = { version = "0.62", features = [
     "Win32_System_Performance",
 ] }
 # WASAPI loopback for system audio (input stream opened on an output device).
-cpal = { version = "0.16", optional = true }
+# Keep in lockstep with the macOS cpal pin (0.17+ fixes CoreAudio enum crashes).
+cpal = { version = "0.17", optional = true }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 # Screen capture via xdg-desktop-portal (ScreenCast) + PipeWire — the only path
@@ -100,7 +107,8 @@ tokio = { version = "1", features = ["rt", "time"], optional = true }
 libpulse-binding = { version = "2", optional = true }
 libpulse-simple-binding = { version = "2", optional = true }
 # Mic device enumeration only (same host API as Windows). Capture stays on Pulse.
-cpal = { version = "0.16", optional = true }
+# Keep in lockstep with the macOS/Windows cpal pin.
+cpal = { version = "0.17", optional = true }
 # Global cursor sampling on X11 sessions (pure-Rust XCB connection).
 x11rb = { version = "0.13", optional = true }
 
@@ -114,7 +122,7 @@ default = ["scap-capture", "wgc-capture", "portal-capture"]
 # test-pattern backend is compiled, keeping `cargo test` green everywhere and
 # letting `cargo check --no-default-features` verify the pipeline without the
 # ScreenCaptureKit `-sys` build.
-scap-capture = ["dep:scap", "dep:screencapturekit-sys", "dep:objc_id"]
+scap-capture = ["dep:scap", "dep:screencapturekit-sys", "dep:objc_id", "dep:cpal"]
 # Windows.Graphics.Capture backend (no-op off Windows — the target-gated deps
 # only resolve there, so the feature is safe to keep in defaults).
 wgc-capture = ["dep:windows-capture", "dep:cpal"]
