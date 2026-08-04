@@ -6,6 +6,7 @@ use crate::error::{AppError, AppResult};
 use crate::recorder::encoder::ffmpeg_path;
 use image::{ImageBuffer, ImageFormat, RgbImage};
 use std::path::Path;
+use std::process::Stdio;
 
 pub const THUMBNAIL_FILE: &str = "thumbnail.jpg";
 const THUMB_MAX_WIDTH: u32 = 480;
@@ -66,11 +67,12 @@ pub fn extract_from_mp4(screen_mp4: &Path, thumbnail_jpg: &Path) -> AppResult<()
     let tmp = thumbnail_jpg.with_extension("jpg.tmp");
     let _ = std::fs::remove_file(&tmp);
     let ffmpeg = ffmpeg_path();
-    let status = crate::proc::command(&ffmpeg)
+    let output = crate::proc::command(&ffmpeg)
         .args([
             "-hide_banner",
             "-loglevel",
             "error",
+            "-nostdin",
             "-y",
             // Skip the often-black first frame of a fresh desktop capture.
             "-ss",
@@ -83,6 +85,11 @@ pub fn extract_from_mp4(screen_mp4: &Path, thumbnail_jpg: &Path) -> AppResult<()
             "1",
             "-vf",
             &format!("scale={THUMB_MAX_WIDTH}:-2"),
+            // MJPEG only accepts the full-range `yuvj*` formats. Recordings are
+            // limited-range `yuv420p`, and without this the encoder rejects the
+            // frame outright and no poster is written.
+            "-pix_fmt",
+            "yuvj420p",
             "-q:v",
             "5",
             // `.jpg.tmp` is not a format FFmpeg recognizes; force image2 so we
@@ -91,15 +98,23 @@ pub fn extract_from_mp4(screen_mp4: &Path, thumbnail_jpg: &Path) -> AppResult<()
             "image2",
         ])
         .arg(&tmp)
-        .status()
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        // Piped, not inherited: this runs from a background backfill, so the
+        // reason a poster is missing has to travel back in the error itself.
+        .stderr(Stdio::piped())
+        .output()
         .map_err(|e| AppError::Encoder(format!("thumbnail ffmpeg spawn: {e}")))?;
 
     let wrote = std::fs::metadata(&tmp).map(|m| m.len()).unwrap_or(0);
-    if !status.success() || wrote == 0 {
+    if !output.status.success() || wrote == 0 {
         let _ = std::fs::remove_file(&tmp);
-        return Err(AppError::Encoder(format!(
-            "thumbnail ffmpeg failed ({status})"
-        )));
+        let detail = crate::proc::summarize_stderr(&output.stderr);
+        return Err(AppError::Encoder(if detail.is_empty() {
+            format!("thumbnail ffmpeg failed ({})", output.status)
+        } else {
+            format!("thumbnail ffmpeg failed ({}): {detail}", output.status)
+        }));
     }
     std::fs::rename(&tmp, thumbnail_jpg)
         .map_err(|e| AppError::Encoder(format!("thumbnail rename: {e}")))?;

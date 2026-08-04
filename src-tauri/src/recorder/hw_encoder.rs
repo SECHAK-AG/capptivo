@@ -189,31 +189,6 @@ impl std::fmt::Display for ProbeFailure {
     }
 }
 
-/// Longest FFmpeg diagnostic we will put in a log line.
-const PROBE_STDERR_CAP: usize = 256;
-
-/// Flatten FFmpeg's stderr to one bounded line.
-///
-/// This ends up in a log file on the user's disk, and FFmpeg is happy to emit
-/// dozens of lines for one rejected encoder. Truncation counts `char`s rather
-/// than bytes so a multi-byte sequence is never split.
-fn summarize_stderr(raw: &[u8]) -> String {
-    let text = String::from_utf8_lossy(raw);
-    let flat = text
-        .lines()
-        .map(str::trim)
-        .filter(|line| !line.is_empty())
-        .collect::<Vec<_>>()
-        .join("; ");
-    if flat.chars().count() <= PROBE_STDERR_CAP {
-        return flat;
-    }
-    flat.chars()
-        .take(PROBE_STDERR_CAP)
-        .chain(std::iter::once('…'))
-        .collect()
-}
-
 /// Encode 2 synthetic frames to the null muxer. Cheap, and exercises the real
 /// encoder init path (driver present, session available).
 fn probe(ffmpeg: &Path, choice: &EncoderChoice) -> Result<(), ProbeFailure> {
@@ -237,7 +212,7 @@ fn probe(ffmpeg: &Path, choice: &EncoderChoice) -> Result<(), ProbeFailure> {
         return Ok(());
     }
 
-    let detail = summarize_stderr(&output.stderr);
+    let detail = proc::summarize_stderr(&output.stderr);
     Err(ProbeFailure::Rejected(if detail.is_empty() {
         format!("exited {}", output.status)
     } else {
@@ -269,27 +244,6 @@ mod tests {
             matches!(err, ProbeFailure::FfmpegUnavailable(_)),
             "a missing binary is an install problem, not an encoder rejection: {err:?}"
         );
-    }
-
-    #[test]
-    fn stderr_summary_is_one_bounded_line() {
-        let noisy = "a rejection reason\n\nand another line\n".repeat(200);
-        let summary = summarize_stderr(noisy.as_bytes());
-        assert!(!summary.contains('\n'), "must collapse to one line");
-        assert!(
-            summary.chars().count() <= PROBE_STDERR_CAP + 1,
-            "must stay bounded, got {} chars",
-            summary.chars().count()
-        );
-    }
-
-    #[test]
-    fn stderr_summary_does_not_split_multibyte_characters() {
-        // Truncation counts chars, so a long run of 3-byte characters must come
-        // back as valid UTF-8 rather than a replacement-char smear.
-        let wide = "日".repeat(PROBE_STDERR_CAP * 2);
-        let summary = summarize_stderr(wide.as_bytes());
-        assert!(!summary.contains('\u{FFFD}'), "must not split a character");
     }
 
     #[cfg(target_os = "windows")]
