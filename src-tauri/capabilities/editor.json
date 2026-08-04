@@ -36,11 +36,16 @@
     "allow-write-export-chunk",
     "allow-finish-export",
     "allow-abort-export",
+    "allow-begin-export-h264-stream",
+    "allow-write-export-h264-chunk",
+    "allow-finish-export-h264-stream",
+    "allow-abort-export-h264-stream",
     "allow-mux-export-audio",
     "allow-prepare-export-audio",
     "allow-attach-export-audio",
     "allow-remove-temp-file",
     "allow-present-window",
-    "allow-open-editor"
+    "allow-open-editor",
+    "allow-reveal-error-log"
   ]
 }

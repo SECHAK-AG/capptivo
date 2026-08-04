@@ -1,8 +1,9 @@
 /**
- * Export: composite the timeline to MP4/WebM (MediaRecorder) or GIF (gifenc).
+ * Export: composite the timeline to MP4/WebM/GIF.
  *
+ * MP4 prefers Pixi compose → WebCodecs Annex-B H.264 → Rust ffmpeg `-c copy`.
+ * WebM (and Annex-B-unavailable) use mediabunny in-webview mux; GIF uses gifenc.
  * Export media is loaded as blob: URLs so the canvas is not tainted by media://.
- * That lets GIF read pixels; MP4 still uses captureStream + MediaRecorder.
  */
 
 import { save } from "@tauri-apps/plugin-dialog";
@@ -29,6 +30,7 @@ import { totalKeptDuration } from "@/engine";
 import { mediaUrl } from "@/lib/platform";
 import { commands } from "../../../ipc/bindings";
 import { describeError } from "../../recorder/store";
+import { logClientError } from "@/lib/errorLogging";
 import { useEditorStore } from "../store";
 import {
   createExportCompositor,
@@ -43,6 +45,10 @@ import { AdaptiveEncodeQueue } from "./encodeBackpressure";
 import { ExportSink } from "./exportSink";
 import { openExportAudioTrack } from "./exportAudioTrack";
 import { renderGifToSink } from "./exportGif";
+import {
+  probeAnnexBConfig,
+  renderMp4ViaFfmpegH264,
+} from "./exportH264Ffmpeg";
 import {
   beginExportAbort,
   endExportAbort,
@@ -167,6 +173,7 @@ export async function exportProject(
     path = await pickSavePath(suggestedName, fileExt);
   } catch (e) {
     store.setExportError(describeError(e));
+    logClientError("export:pickPath", e);
   }
   if (!path || signal.aborted) {
     endExportAbort();
@@ -188,6 +195,7 @@ export async function exportProject(
   } catch (e) {
     endExportAbort();
     store.setExportError(describeError(e));
+    logClientError("export:diskSpace", e);
     store.setExporting(false);
     store.setExportStatus(null);
     return;
@@ -252,54 +260,109 @@ export async function exportProject(
         exportPath = alignExportPathExtension(path, fileExt);
       }
     }
-    sink = await ExportSink.open(exportPath);
     throwIfAborted(signal);
 
     if (resolved.format === "gif") {
+      sink = await ExportSink.open(exportPath);
       await renderGifToSink(sink, screenUrl, faceCam, resolved, signal);
-    } else {
-      const prepared = audioPrep ? await audioPrep : null;
-      throwIfAborted(signal);
-      audioAbsPath = prepared?.absPath ?? null;
-      const audioMuxed = await renderVideoToSink(
-        sink,
-        screenUrl,
-        faceCam,
-        resolved,
-        prepared?.mediaUrl ?? null,
-        signal,
-      );
-      throwIfAborted(signal);
       store.setExportStatus(translateNow("export.status.saving"));
       const saved = await sink.finish();
       sink = null;
+      await notifyDone(saved);
+      return;
+    }
 
-      // In-container mux succeeded → skip the rewrite. Otherwise fall back to
-      // FFmpeg attach (or the classic one-shot mux if prepare also failed).
-      if (!audioMuxed) {
+    const prepared = audioPrep ? await audioPrep : null;
+    throwIfAborted(signal);
+    audioAbsPath = prepared?.absPath ?? null;
+
+    // Prefer out-of-webview ffmpeg mux for MP4: WebCodecs emits Annex-B,
+    // Rust only stream-copies into the container (no re-encode).
+    const annexBTuning =
+      resolved.container === "mp4"
+        ? await probeAnnexBConfig(
+            resolved.width,
+            resolved.height,
+            resolved.bitrate,
+            resolved.fps,
+          )
+        : null;
+
+    if (annexBTuning) {
+      console.info("[export] path=ffmpeg-h264-stream (mux outside WebView)");
+      try {
+        await renderMp4ViaFfmpegH264(
+          exportPath,
+          screenUrl,
+          faceCam,
+          resolved,
+          signal,
+          annexBTuning,
+        );
+        throwIfAborted(signal);
+        store.setExportStatus(translateNow("export.status.saving"));
         if (prepared) {
           store.setExportStatus(translateNow("export.status.addingAudio"));
           await commands
             .attachExportAudio({
-              videoPath: saved,
+              videoPath: exportPath,
               audioPath: prepared.absPath,
             })
             .catch(async (e) => {
               console.warn("export audio attach failed; trying full mux", e);
-              await muxRecordedAudio(saved, settings.audioEnhance);
+              await muxRecordedAudio(exportPath, settings.audioEnhance);
             });
         } else {
-          await muxRecordedAudio(saved, settings.audioEnhance).catch((e) =>
+          await muxRecordedAudio(exportPath, settings.audioEnhance).catch((e) =>
             console.warn("export audio mux failed; keeping silent video", e),
           );
         }
+        await notifyDone(exportPath);
+        return;
+      } catch (e) {
+        if (isExportCancelled(e) || isGpuContextLostError(e)) throw e;
+        console.warn(
+          `[export] ffmpeg-h264 failed (${describeError(e)}); falling back to in-webview mux`,
+        );
+        logClientError("export:ffmpeg-h264", e);
       }
-
-      await notifyDone(saved);
-      return;
     }
+
+    sink = await ExportSink.open(exportPath);
+    const audioMuxed = await renderVideoToSink(
+      sink,
+      screenUrl,
+      faceCam,
+      resolved,
+      prepared?.mediaUrl ?? null,
+      signal,
+    );
+    throwIfAborted(signal);
     store.setExportStatus(translateNow("export.status.saving"));
     const saved = await sink.finish();
+    sink = null;
+
+    // In-container mux succeeded → skip the rewrite. Otherwise fall back to
+    // FFmpeg attach (or the classic one-shot mux if prepare also failed).
+    if (!audioMuxed) {
+      if (prepared) {
+        store.setExportStatus(translateNow("export.status.addingAudio"));
+        await commands
+          .attachExportAudio({
+            videoPath: saved,
+            audioPath: prepared.absPath,
+          })
+          .catch(async (e) => {
+            console.warn("export audio attach failed; trying full mux", e);
+            await muxRecordedAudio(saved, settings.audioEnhance);
+          });
+      } else {
+        await muxRecordedAudio(saved, settings.audioEnhance).catch((e) =>
+          console.warn("export audio mux failed; keeping silent video", e),
+        );
+      }
+    }
+
     await notifyDone(saved);
   } catch (e) {
     await sink?.abort(e);
@@ -311,8 +374,10 @@ export async function exportProject(
         useEditorStore
           .getState()
           .setExportError(translateNow("export.error.gpuContextLost"));
+        logClientError("export:gpu", e);
       } else {
         useEditorStore.getState().setExportError(describeError(e));
+        logClientError("export", e);
       }
     }
   } finally {
@@ -500,8 +565,8 @@ async function pickVideoEncodeTuning(
  * MediaRecorder if the browser can't encode via WebCodecs at all.
  *
  * Encode queue depth is adaptive (`AdaptiveEncodeQueue`): seeded by output
- * megapixels, then nudged from composite vs encode timing so the encoder stays
- * fed without unbounded in-flight frames.
+ * megapixels and tightened at high fps, then nudged from composite vs encode
+ * timing so the encoder stays fed without unbounded in-flight frames.
  */
 async function renderVideoToSink(
   sink: ExportSink,

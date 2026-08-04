@@ -45,6 +45,7 @@
     "allow-open-library",
     "allow-open-editor",
     "allow-check-for-updates",
+    "allow-reveal-error-log",
     "notification:allow-is-permission-granted"
   ]
 }

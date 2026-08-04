@@ -87,6 +87,8 @@ fn idle_menu(app: &AppHandle) -> tauri::Result<Menu<tauri::Wry>> {
         MenuItem::with_id(app, "annotate", "Annotate Screen…", true, None::<&str>)?;
     let open_library = MenuItem::with_id(app, "open_library", "Recordings…", true, None::<&str>)?;
     let settings = MenuItem::with_id(app, "settings", "Settings…", true, None::<&str>)?;
+    let open_error_log =
+        MenuItem::with_id(app, "open_error_log", "Open Error Log…", true, None::<&str>)?;
     let check_updates =
         MenuItem::with_id(app, "check_updates", "Check for Updates…", true, None::<&str>)?;
     let separator = PredefinedMenuItem::separator(app)?;
@@ -98,6 +100,8 @@ fn idle_menu(app: &AppHandle) -> tauri::Result<Menu<tauri::Wry>> {
             &annotate,
             &open_library,
             &settings,
+            &separator,
+            &open_error_log,
             &check_updates,
             &separator,
             &quit,
@@ -185,6 +189,11 @@ fn on_menu_event(app: &AppHandle, event: tauri::menu::MenuEvent) {
         "open_library" => {
             if let Err(e) = windows::open_library(app.clone()) {
                 tracing::warn!(%e, "failed to open recordings library");
+            }
+        }
+        "open_error_log" => {
+            if let Err(e) = crate::error_log::reveal() {
+                tracing::error!(%e, "failed to reveal error log");
             }
         }
         "settings" => {

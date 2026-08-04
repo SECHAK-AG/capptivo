@@ -4,9 +4,11 @@ import { setCursorDebugOverlay } from "@/engine";
 import { AppToaster } from "@/lib/toast";
 import { SettingsProvider } from "@/lib/settings";
 import { initTheme } from "@/lib/theme";
+import { installErrorLogging } from "@/lib/errorLogging";
 import { EditorApp } from "./EditorApp";
 import "../../styles.css";
 
+installErrorLogging("editor");
 document.documentElement.classList.add("editor-shell");
 // Apply the stored theme to <html> before first paint to avoid a theme flash.
 initTheme();

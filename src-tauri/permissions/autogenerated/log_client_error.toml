@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-log-client-error"
+description = "Enables the log_client_error command without any pre-configured scope."
+commands.allow = ["log_client_error"]
+
+[[permission]]
+identifier = "deny-log-client-error"
+description = "Denies the log_client_error command without any pre-configured scope."
+commands.deny = ["log_client_error"]

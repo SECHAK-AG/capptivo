@@ -6,6 +6,7 @@
 //! Tauri's event loop (spinning beachball).
 
 use crate::error::{AppError, AppResult};
+use crate::export_h264::H264StreamMuxer;
 use crate::recorder::encoder::{
     attach_export_audio as run_attach_export_audio,
     mux_export_audio as run_mux_export_audio,
@@ -290,9 +291,81 @@ fn finish_export_blocking(sink: ExportSink) -> AppResult<String> {
 #[tauri::command(async)]
 pub fn abort_export(state: State<AppState>, handle: u64, reason: String) -> AppResult<()> {
     if let Some(sink) = state.exports.lock().remove(&handle) {
-        tracing::info!(handle, %reason, "export aborted");
+        tracing::error!(handle, %reason, "export aborted");
         drop(sink.file);
         let _ = std::fs::remove_file(&sink.path);
+    }
+    Ok(())
+}
+
+// --- Annex-B H.264 → ffmpeg MP4 (out-of-webview mux) -------------------------
+
+/// Start ffmpeg reading Annex-B H.264 from IPC writes; output is a temp MP4
+/// promoted on [`finish_export_h264_stream`].
+#[tauri::command(async)]
+pub fn begin_export_h264_stream(
+    state: State<AppState>,
+    path: String,
+    fps: u32,
+) -> AppResult<u64> {
+    let final_path = PathBuf::from(path);
+    let muxer = H264StreamMuxer::spawn(&final_path, fps)?;
+    let mut next = state.next_export_id.lock();
+    let handle = *next;
+    *next += 1;
+    drop(next);
+    state.h264_exports.lock().insert(handle, muxer);
+    Ok(handle)
+}
+
+const H264_HANDLE_HEADER: &str = "x-export-handle";
+
+/// Append one Annex-B chunk to the ffmpeg stdin pipe.
+#[tauri::command(async)]
+pub fn write_export_h264_chunk(
+    state: State<AppState>,
+    request: tauri::ipc::Request<'_>,
+) -> AppResult<()> {
+    let handle = export_header(&request, H264_HANDLE_HEADER)?;
+    let tauri::ipc::InvokeBody::Raw(chunk) = request.body() else {
+        return Err(AppError::Other(
+            "write_export_h264_chunk expects a raw byte body".into(),
+        ));
+    };
+    let mut exports = state.h264_exports.lock();
+    let muxer = exports
+        .get_mut(&handle)
+        .ok_or_else(|| AppError::Other(format!("unknown h264 export handle {handle}")))?;
+    muxer.write_chunk(chunk)
+}
+
+#[tauri::command]
+pub async fn finish_export_h264_stream(
+    state: State<'_, AppState>,
+    handle: u64,
+) -> AppResult<String> {
+    let muxer = state
+        .h264_exports
+        .lock()
+        .remove(&handle)
+        .ok_or_else(|| AppError::Other(format!("unknown h264 export handle {handle}")))?;
+    tauri::async_runtime::spawn_blocking(move || {
+        let path = muxer.finish()?;
+        Ok(path.to_string_lossy().into_owned())
+    })
+    .await
+    .map_err(|e| AppError::Other(format!("h264 export finish task failed: {e}")))?
+}
+
+#[tauri::command(async)]
+pub fn abort_export_h264_stream(
+    state: State<AppState>,
+    handle: u64,
+    reason: String,
+) -> AppResult<()> {
+    if let Some(muxer) = state.h264_exports.lock().remove(&handle) {
+        tracing::error!(handle, %reason, "h264 export aborted");
+        muxer.abort();
     }
     Ok(())
 }

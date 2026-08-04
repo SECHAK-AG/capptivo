@@ -98,11 +98,17 @@ const ENCODING_BITRATE: Record<ExportEncoding, number> = {
   quality: 16_000_000,
 };
 
-/** Reference pixel rate for "balanced" tiers (1080p @ 30 fps). */
-const REF_PIXEL_RATE = 1920 * 1080 * 30;
+/** Reference pixels / fps for bitrate scaling (1080p @ 30). */
+const REF_PIXELS = 1920 * 1080;
+const REF_FPS = 30;
 const MIN_VIDEO_BITRATE = 500_000;
 const MAX_VIDEO_BITRATE = 50_000_000;
 
+/**
+ * Bitrate grows with resolution linearly, but only with √(fps/30) for frame
+ * rate — so 60fps is ~1.4× 30fps, not 2× (linear fps was overworking the
+ * encoder on Windows WebView2 at 60).
+ */
 function scaledVideoBitrate(
   encoding: ExportEncoding,
   width: number,
@@ -110,12 +116,11 @@ function scaledVideoBitrate(
   fps: number,
 ): number {
   const base = ENCODING_BITRATE[encoding];
-  const scale = (width * height * fps) / REF_PIXEL_RATE;
-  const raw = Math.round(base * scale);
-  return Math.max(
-    MIN_VIDEO_BITRATE,
-    Math.min(MAX_VIDEO_BITRATE, raw),
-  );
+  const pixelScale = (width * height) / REF_PIXELS;
+  // Floor at 1 so 24fps does not under-scale below the 30fps reference.
+  const fpsScale = Math.sqrt(Math.max(1, fps / REF_FPS));
+  const raw = Math.round(base * pixelScale * fpsScale);
+  return Math.max(MIN_VIDEO_BITRATE, Math.min(MAX_VIDEO_BITRATE, raw));
 }
 
 /** Encoder output dims for the given stage: format long-edge cap + 16px align. */
