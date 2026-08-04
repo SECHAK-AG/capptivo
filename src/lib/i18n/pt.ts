@@ -323,8 +323,6 @@ export const pt: Record<TranslationKey, string> = {
   "recorder.sources.empty": "Nenhuma fonte encontrada.",
   "recorder.settings.open": "Definições",
   "recorder.settings.checkUpdates": "Procurar atualizações…",
-  "recorder.frameRate": "Taxa de fotogramas",
-  "recorder.frameRate.value": "{fps} fps",
   "recorder.language": "Idioma",
   "recorder.hud.pause": "Pausar",
   "recorder.hud.resume": "Retomar",

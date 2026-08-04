@@ -323,8 +323,6 @@ export const ru: Record<TranslationKey, string> = {
   "recorder.sources.empty": "Источники не найдены.",
   "recorder.settings.open": "Настройки",
   "recorder.settings.checkUpdates": "Проверить обновления…",
-  "recorder.frameRate": "Частота кадров",
-  "recorder.frameRate.value": "{fps} кадр/с",
   "recorder.language": "Язык",
   "recorder.hud.pause": "Пауза",
   "recorder.hud.resume": "Продолжить",

@@ -8,6 +8,13 @@ import { ALL_FORMATS, CustomSource, Input, VideoSampleSink, type VideoSample } f
 import type { CompositorMedia } from "./exportCompositor";
 import { faceCamMediaTime, type FaceCamTrack } from "../lib/faceCamSync";
 import { createFrameSurface, type FrameSurface, type FrameSurfaceMode } from "./frameSurface";
+import {
+  decodeFallbackMessage,
+  decodeFallbackReason,
+  type DecodeFallbackCode,
+} from "./decodeFallback";
+import { logClientError } from "@/lib/errorLogging";
+import { describeError } from "../../recorder/store";
 
 /** Bounded Range reads for `media://` — avoids materializing multi-GB responses. */
 export function rangedMediaSource(url: string): CustomSource {
@@ -44,6 +51,15 @@ type SequentialTrack = {
   dispose: () => void;
 };
 
+/** One opened file: its decodable track plus the duration the surface needs. */
+type OpenedTrack = { track: SequentialTrack; duration: number };
+
+type OpenFailure =
+  | { code: Exclude<DecodeFallbackCode, "open-failed"> }
+  | { code: "open-failed"; cause: unknown };
+
+type OpenResult = ({ ok: true; track: OpenedTrack } | ({ ok: false } & OpenFailure));
+
 export type SequentialReadOptions = {
   /** `"video-frame"` (default) uploads directly; canvas paint for rotated samples. */
   mode?: FrameSurfaceMode;
@@ -67,23 +83,56 @@ export type SequentialMedia = {
 /** Decodes kept ahead of the current export frame (mediabunny path). */
 const PREFETCH_DEPTH = 2;
 
-/** Open screen (+ camera) for sequential decode; `null` → seek fallback for all tracks. */
+/**
+ * Report the downgrade to both the console and the rolling disk log, then hand
+ * back the `null` that selects the seek path.
+ *
+ * Disk, not just console: a per-frame-seek export is ~60× slower than a linear
+ * one, and the only way that ever gets diagnosed is a log the user can send.
+ * `route` names which export path fell back, so a report covers the case where
+ * one route degrades and another does not.
+ */
+function unavailable(route: string, reason: string): null {
+  const message = decodeFallbackMessage(route, reason);
+  console.warn(`[export] ${message}`);
+  logClientError("export:decode-fallback", message);
+  return null;
+}
+
+function failed(route: string, failure: OpenFailure): null {
+  const detail = "cause" in failure ? describeError(failure.cause) : "";
+  return unavailable(route, decodeFallbackReason(failure.code, detail));
+}
+
+/**
+ * Open screen (+ camera) for sequential decode; `null` → seek fallback for all
+ * tracks, with the reason logged rather than swallowed.
+ *
+ * Never throws: every caller treats a failure to decode linearly as "use the
+ * slow path", so a rejection here would only be a second way to express the
+ * same outcome — and the one that used to lose the reason.
+ */
 export async function openSequentialMedia(
   screenUrl: string,
   faceCam: FaceCamTrack,
+  route: string,
 ): Promise<SequentialMedia | null> {
-  if (typeof VideoDecoder === "undefined") return null;
+  if (typeof VideoDecoder === "undefined") {
+    return failed(route, { code: "no-decoder" });
+  }
 
-  const screen = await openTrack(screenUrl).catch(() => null);
-  if (!screen) return null;
+  const screenOpen = await openTrack(screenUrl);
+  if (!screenOpen.ok) return failed(route, screenOpen);
+  const screen = screenOpen.track;
 
-  let camera: Awaited<ReturnType<typeof openTrack>> = null;
+  let camera: OpenedTrack | null = null;
   if (faceCam.url) {
-    camera = await openTrack(faceCam.url).catch(() => null);
-    if (!camera) {
+    const cameraOpen = await openTrack(faceCam.url);
+    if (!cameraOpen.ok) {
       screen.track.dispose();
-      return null;
+      return failed(route, cameraOpen);
     }
+    camera = cameraOpen.track;
   }
 
   const tracks: SequentialTrack[] = [
@@ -150,33 +199,46 @@ function swallow(promise: Promise<unknown>): void {
   void promise.catch(() => undefined);
 }
 
-async function openTrack(
-  url: string,
-): Promise<{ track: SequentialTrack; duration: number } | null> {
+/**
+ * Open one file for linear decode.
+ *
+ * Returns a failure rather than throwing so the three ways this can go wrong
+ * stay distinguishable in the log: a file with no video track, a codec this
+ * WebView cannot decode, and a demux/network error. They have different fixes,
+ * and collapsing them to `null` is what made the slowdown undiagnosable.
+ */
+async function openTrack(url: string): Promise<OpenResult> {
   const input = new Input({ source: rangedMediaSource(url), formats: ALL_FORMATS });
   try {
     const videoTrack = await input.getPrimaryVideoTrack();
-    if (!videoTrack || !(await videoTrack.canDecode())) {
+    if (!videoTrack) {
       input.dispose();
-      return null;
+      return { ok: false, code: "no-video-track" };
+    }
+    if (!(await videoTrack.canDecode())) {
+      input.dispose();
+      return { ok: false, code: "undecodable" };
     }
     const duration = await input.computeDuration();
     const sink = new VideoSampleSink(videoTrack);
     const surface = createFrameSurface(duration);
 
     return {
-      duration,
+      ok: true,
       track: {
-        surface,
-        begin: (frameTimes) => sink.samplesAtTimestamps(frameTimes),
-        dispose: () => {
-          surface.dispose();
-          input.dispose();
+        duration,
+        track: {
+          surface,
+          begin: (frameTimes) => sink.samplesAtTimestamps(frameTimes),
+          dispose: () => {
+            surface.dispose();
+            input.dispose();
+          },
         },
       },
     };
-  } catch (e) {
+  } catch (cause) {
     input.dispose();
-    throw e;
+    return { ok: false, code: "open-failed", cause };
   }
 }

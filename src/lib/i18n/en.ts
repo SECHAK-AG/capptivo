@@ -319,8 +319,6 @@ export const en = {
   "recorder.sources.empty": "No sources found.",
   "recorder.settings.open": "Settings",
   "recorder.settings.checkUpdates": "Check for Updates…",
-  "recorder.frameRate": "Frame rate",
-  "recorder.frameRate.value": "{fps} fps",
   "recorder.language": "Language",
   "recorder.hud.pause": "Pause",
   "recorder.hud.resume": "Resume",

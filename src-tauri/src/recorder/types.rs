@@ -104,7 +104,7 @@ pub struct RecorderConfig {
 }
 
 fn default_fps() -> u32 {
-    30
+    60
 }
 fn default_true() -> bool {
     true

@@ -20,21 +20,15 @@ import type {
   RecorderConfig,
   RecorderState,
 } from "../../ipc/types";
-import {
-  getStoredCaptureFps,
-  isCaptureFps,
-  storeCaptureFps,
-  type CaptureFps,
-} from "./captureFps";
+import { SCREEN_CAPTURE_FPS } from "./captureFps";
 import { probeCameraPermission } from "./cameraAccess";
 import { flushCameraCaptureWithTimeout } from "./flushCamera";
 import { logClientError, logClientInfo } from "@/lib/errorLogging";
 
 export type CaptureMode = CaptureSourceKind | "area" | "device";
 
-/** Local capture options (everything in RecorderConfig except the source id). */
+/** Local capture options (everything in RecorderConfig except source id + fps). */
 interface CaptureOptions {
-  fps: CaptureFps;
   showCursor: boolean;
   captureSystemAudio: boolean;
   quality: QualityPreset;
@@ -131,10 +125,6 @@ interface RecorderStore {
 }
 
 const DEFAULT_OPTIONS: CaptureOptions = {
-  // Read at module load rather than baked in: the rate a take is captured at
-  // cannot be changed afterwards, so a user who picked 60 must not silently get
-  // 30 back on the next launch.
-  fps: getStoredCaptureFps(),
   showCursor: true,
   captureSystemAudio: false,
   quality: "balanced",
@@ -539,7 +529,6 @@ export const useRecorderStore = create<RecorderStore>((set, get) => {
   },
 
   setOption(key, value) {
-    if (key === "fps" && isCaptureFps(value)) storeCaptureFps(value);
     set((s) => ({ options: { ...s.options, [key]: value } }));
   },
 
@@ -710,12 +699,15 @@ export const useRecorderStore = create<RecorderStore>((set, get) => {
     const captureMicrophone = micEnabled && !!micDeviceId;
     const micLabel =
       microphones.find((m) => m.deviceId === micDeviceId)?.label ?? null;
+    // Screen rate is fixed — export is where 30 vs 60 is chosen.
+    const rate = { fps: SCREEN_CAPTURE_FPS };
     let config: RecorderConfig;
     if (captureMode === "device") {
       // No crop and no cursor exist for a phone's screen; `captureSystemAudio`
       // means the *device's* own audio, which rides the same muxed stream.
       config = {
         ...options,
+        ...rate,
         sourceId: selectedDeviceId!,
         crop: null,
         showCursor: false,
@@ -728,6 +720,7 @@ export const useRecorderStore = create<RecorderStore>((set, get) => {
         sourceId: areaSelection.sourceId,
         crop: areaSelection.crop,
         ...options,
+        ...rate,
         captureMicrophone,
         microphoneDeviceId: micDeviceId,
         microphoneLabel: micLabel,
@@ -736,6 +729,7 @@ export const useRecorderStore = create<RecorderStore>((set, get) => {
       config = {
         sourceId: selectedSourceId!,
         ...options,
+        ...rate,
         captureMicrophone,
         microphoneDeviceId: micDeviceId,
         microphoneLabel: micLabel,

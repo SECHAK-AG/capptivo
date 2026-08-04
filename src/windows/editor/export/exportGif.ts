@@ -50,7 +50,7 @@ export async function renderGifToSink(
   const { width, height, fps, gifColors, gifDither, gifSpeed } = params;
   // GIF is the one consumer of getImageData — the only path that wants a
   // CPU-resident canvas (see CompositorOptions.cpuReadback).
-  const sequential = await openSequentialMedia(screenUrl, faceCam).catch(() => null);
+  const sequential = await openSequentialMedia(screenUrl, faceCam, "gif");
   const session = sequential
     ? await createExportCompositorFromMedia(sequential.media, width, height, { cpuReadback: true })
     : await createExportCompositor(screenUrl, faceCam, width, height, { cpuReadback: true });

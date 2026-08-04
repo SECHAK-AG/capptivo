@@ -320,8 +320,6 @@ export const ja: Record<TranslationKey, string> = {
   "recorder.sources.empty": "ソースが見つかりません。",
   "recorder.settings.open": "設定",
   "recorder.settings.checkUpdates": "アップデートを確認…",
-  "recorder.frameRate": "フレームレート",
-  "recorder.frameRate.value": "{fps} fps",
   "recorder.language": "言語",
   "recorder.hud.pause": "一時停止",
   "recorder.hud.resume": "再開",

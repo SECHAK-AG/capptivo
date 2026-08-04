@@ -323,8 +323,6 @@ export const ar: Record<TranslationKey, string> = {
   "recorder.sources.empty": "لم يتم العثور على مصادر.",
   "recorder.settings.open": "الإعدادات",
   "recorder.settings.checkUpdates": "التحقق من التحديثات…",
-  "recorder.frameRate": "معدل الإطارات",
-  "recorder.frameRate.value": "{fps} إطار/ث",
   "recorder.language": "اللغة",
   "recorder.hud.pause": "إيقاف مؤقت",
   "recorder.hud.resume": "متابعة",

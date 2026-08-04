@@ -115,7 +115,7 @@ mod tests {
         RecorderConfig {
             source_id: source_id.into(),
             crop: None,
-            fps: 30,
+            fps: 60,
             show_cursor: true,
             capture_system_audio: false,
             capture_microphone: false,

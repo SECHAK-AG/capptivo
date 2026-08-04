@@ -4,6 +4,7 @@ import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
 
 import { bindCameraCaptureApi, ensureCameraCaptureSubscribed } from "./cameraCapture";
+import { CAMERA_CAPTURE_FPS } from "../recorder/captureFps";
 
 const DEVICE_EVENT = "camera://device";
 const REVIVE_EVENT = "camera://revive";
@@ -52,7 +53,7 @@ export function CameraApp() {
             deviceId: { exact: deviceId },
             width: { ideal: 1280 },
             height: { ideal: 720 },
-            frameRate: { ideal: 30, max: 30 },
+            frameRate: { ideal: CAMERA_CAPTURE_FPS, max: CAMERA_CAPTURE_FPS },
           },
         });
         const prev = streamRef.current;

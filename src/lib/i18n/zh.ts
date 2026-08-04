@@ -310,8 +310,6 @@ export const zh: Record<TranslationKey, string> = {
   "recorder.sources.empty": "未找到来源。",
   "recorder.settings.open": "设置",
   "recorder.settings.checkUpdates": "检查更新…",
-  "recorder.frameRate": "帧率",
-  "recorder.frameRate.value": "{fps} 帧/秒",
   "recorder.language": "语言",
   "recorder.hud.pause": "暂停",
   "recorder.hud.resume": "继续",

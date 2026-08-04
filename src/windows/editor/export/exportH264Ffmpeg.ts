@@ -75,9 +75,7 @@ export async function renderMp4ViaFfmpegH264(
     await commands.abortExportH264Stream(handle, reason).catch(() => undefined);
   };
 
-  const sequential = await openSequentialMedia(screenUrl, faceCam).catch(
-    () => null,
-  );
+  const sequential = await openSequentialMedia(screenUrl, faceCam, "annexb");
   const session = sequential
     ? await createExportCompositorFromMedia(sequential.media, width, height)
     : await createExportCompositor(screenUrl, faceCam, width, height);

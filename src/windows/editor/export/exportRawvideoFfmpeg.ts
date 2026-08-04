@@ -71,9 +71,7 @@ export async function renderMp4ViaFfmpegRawvideo(
   // No `cpuReadback`: frames are pulled straight off the GPU into pooled
   // buffers, so the compositor never allocates the software 2D canvas that
   // `getImageData` would need.
-  const sequential = await openSequentialMedia(screenUrl, faceCam).catch(
-    () => null,
-  );
+  const sequential = await openSequentialMedia(screenUrl, faceCam, "rawvideo");
   const session = sequential
     ? await createExportCompositorFromMedia(sequential.media, width, height)
     : await createExportCompositor(screenUrl, faceCam, width, height);
@@ -149,12 +147,27 @@ export async function renderMp4ViaFfmpegRawvideo(
         `compositor=${backend} frames=${frameTimes.length} ` +
         `${width}x${height}@${fps} pool=${FRAME_POOL_SIZE}×${(frameBytes / 1e6).toFixed(1)}MB`,
     );
+    if (!reader) {
+      // Loud, because this is the difference between minutes and an hour. The
+      // reason was already logged by openSequentialMedia; this says what it
+      // costs, next to the frame count it will be paid on.
+      console.warn(
+        `[export] ffmpeg-rawvideo is seeking per frame for all ` +
+          `${frameTimes.length} frames — expect an export far slower than realtime`,
+      );
+    }
 
     let lastYieldAt = performance.now();
     let driftLogs = 0;
     let yields = 0;
     let yieldMs = 0;
     let readbackMs = 0;
+    // The three phases that can each plausibly dominate. Each bucket closes
+    // before any await that is not part of its own phase — otherwise waiting on
+    // one phase silently inflates another, and the numbers point at the wrong
+    // thing.
+    let decodeMs = 0;
+    let compositeMs = 0;
     const loopStart = performance.now();
 
     /**
@@ -210,6 +223,7 @@ export async function renderMp4ViaFfmpegRawvideo(
       if (writeError) throw writeError;
       throwIfGpuLost(isGpuLost);
 
+      const decodeStart = performance.now();
       if (reader) {
         await reader.nextFrame();
       } else {
@@ -227,8 +241,12 @@ export async function renderMp4ViaFfmpegRawvideo(
         }
       }
 
+      decodeMs += performance.now() - decodeStart;
+
       throwIfGpuLost(isGpuLost);
+      const composeStart = performance.now();
       drawAt(t);
+      compositeMs += performance.now() - composeStart;
       throwIfGpuLost(isGpuLost);
 
       // Free a ring slot *before* taking a buffer, so the pool can never be
@@ -298,12 +316,16 @@ export async function renderMp4ViaFfmpegRawvideo(
 
     const wallMs = performance.now() - loopStart;
     const uploads = uploadStats();
+    /** `<name> Nms/frame (P% of wall)` — the shape that makes phases comparable. */
+    const phase = (name: string, ms: number) =>
+      `${name} ${(ms / Math.max(1, framesEncoded)).toFixed(2)}ms/frame ` +
+      `(${((ms / Math.max(1, wallMs)) * 100).toFixed(1)}%)`;
     console.info(
       `[export] ffmpeg-rawvideo done in ${(wallMs / 1000).toFixed(1)}s ` +
         `(${(framesEncoded / (wallMs / 1000)).toFixed(1)} fps) — ` +
-        `readback(${asyncReadback ? "async" : "sync"}) ` +
-        `${(readbackMs / Math.max(1, framesEncoded)).toFixed(2)}ms/frame ` +
-        `(${((readbackMs / Math.max(1, wallMs)) * 100).toFixed(1)}% of wall), ` +
+        `${phase(reader ? "decode(linear)" : "decode(seek)", decodeMs)}, ` +
+        `${phase("composite", compositeMs)}, ` +
+        `${phase(`readback(${asyncReadback ? "async" : "sync"})`, readbackMs)}, ` +
         `yields=${yields} yieldMs=${yieldMs.toFixed(0)}` +
         (uploads
           ? ` uploads=${uploads.uploads} skipped=${uploads.skipped}`

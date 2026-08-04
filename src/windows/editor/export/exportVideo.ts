@@ -573,9 +573,7 @@ async function renderWebmToSink(
   }
 
   throwIfAborted(signal);
-  const sequential = await openSequentialMedia(screenUrl, faceCam).catch(
-    () => null,
-  );
+  const sequential = await openSequentialMedia(screenUrl, faceCam, "webcodecs");
   const session = sequential
     ? await createExportCompositorFromMedia(sequential.media, width, height)
     : await createExportCompositor(screenUrl, faceCam, width, height);
