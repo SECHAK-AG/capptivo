@@ -96,13 +96,12 @@ impl CaptureBackend for ScapBackend {
             {
                 continue;
             }
-            let (width, height) = picker_sources::window_pixel_size(window.id).unwrap_or((0, 0));
             sources.push(CaptureSource {
                 id: format!("window:{}", window.id),
                 kind: CaptureSourceKind::Window,
                 title: window.title,
-                width,
-                height,
+                width: window.width,
+                height: window.height,
                 is_primary: false,
                 thumbnail: preview.map(|p| p.png_base64),
             });

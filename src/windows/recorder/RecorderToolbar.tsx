@@ -68,6 +68,9 @@ export function RecorderToolbar({
   const captureMode = useRecorderStore((s) => s.captureMode);
   const areaSelection = useRecorderStore((s) => s.areaSelection);
   const selectedSourceId = useRecorderStore((s) => s.selectedSourceId);
+  // Quartz's legacy still-image APIs can block WindowServer on current macOS.
+  // Keep native thumbnails on Windows; source metadata is enough elsewhere.
+  const includePickerThumbnails = caps?.os === "windows";
   const selectedDeviceId = useRecorderStore((s) => s.selectedDeviceId);
 
   const [openMenu, setOpenMenu] = useState<MenuId | null>(null);
@@ -270,7 +273,9 @@ export function RecorderToolbar({
             onOpenChange={(open) => {
               if (open) {
                 useRecorderStore.getState().setCaptureMode("display");
-                void useRecorderStore.getState().refreshSources({ thumbnails: true });
+                void useRecorderStore.getState().refreshSources({
+                  thumbnails: includePickerThumbnails,
+                });
               }
               setMenuOpen("display", open);
             }}
@@ -285,7 +290,9 @@ export function RecorderToolbar({
               onOpenChange={(open) => {
                 if (open) {
                   useRecorderStore.getState().setCaptureMode("window");
-                  void useRecorderStore.getState().refreshSources({ thumbnails: true });
+                  void useRecorderStore.getState().refreshSources({
+                    thumbnails: includePickerThumbnails,
+                  });
                 }
                 setMenuOpen("window", open);
               }}
@@ -800,6 +807,7 @@ function SourceMenuContent({
   const select = useRecorderStore((s) => s.selectSource);
   const loading = useRecorderStore((s) => s.loadingSources);
   const refresh = useRecorderStore((s) => s.refreshSources);
+  const caps = usePlatformCapabilities();
   const filtered = sources.filter((s) => s.kind === mode);
 
   return (
@@ -813,7 +821,7 @@ function SourceMenuContent({
         <button
           type="button"
           className="rounded-sm px-1.5 py-0.5 text-xs text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
-          onClick={() => void refresh({ thumbnails: true })}
+          onClick={() => void refresh({ thumbnails: caps?.os === "windows" })}
         >
           {loading ? "…" : t("recorder.refresh")}
         </button>
@@ -912,7 +920,7 @@ function SourceThumbnail({
         className,
       )}
     >
-      {source.kind === "display" ? (index ?? 0) + 1 : "🪟"}
+      {source.kind === "display" ? (index ?? 0) + 1 : <AppWindowIcon />}
     </span>
   );
 }
