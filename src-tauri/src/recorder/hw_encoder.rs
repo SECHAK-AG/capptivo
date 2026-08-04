@@ -75,6 +75,12 @@ fn candidates() -> &'static [EncoderChoice] {
             SOFTWARE_FALLBACK,
         ]
     }
+    // `h264_mf` is deliberately absent. It is a Media Foundation wrapper: when a
+    // hardware MFT exists, NVENC/QSV/AMF have already claimed it above; when one
+    // does not, `h264_mf` falls back to its own software MFT, which is slower and
+    // lower quality than `libx264 -preset veryfast` and takes no tuning
+    // arguments. There is no machine on which it is the best remaining choice —
+    // it only ever displaced a better fallback that sits one line below it.
     #[cfg(target_os = "windows")]
     {
         &[
@@ -96,13 +102,6 @@ fn candidates() -> &'static [EncoderChoice] {
                 name: "h264_amf",
                 pre_input_args: &[],
                 pix_fmt: Some("yuv420p"),
-                upload_filter: None,
-                tuning_args: &[],
-            },
-            EncoderChoice {
-                name: "h264_mf",
-                pre_input_args: &[],
-                pix_fmt: Some("nv12"),
                 upload_filter: None,
                 tuning_args: &[],
             },
@@ -144,11 +143,19 @@ pub fn pick(ffmpeg: &Path) -> &'static EncoderChoice {
 fn select(ffmpeg: &Path) -> &'static EncoderChoice {
     let all = candidates();
     for choice in all {
-        if probe(ffmpeg, choice) {
-            tracing::info!(encoder = choice.name, "selected H.264 encoder");
-            return choice;
+        match probe(ffmpeg, choice) {
+            Ok(()) => {
+                tracing::info!(encoder = choice.name, "selected H.264 encoder");
+                return choice;
+            }
+            // INFO, not DEBUG: "why is my export slow on an RTX card" is only
+            // answerable from a shipped log if the rejections are in it.
+            Err(failure) => tracing::info!(
+                encoder = choice.name,
+                reason = %failure,
+                "H.264 encoder unavailable"
+            ),
         }
-        tracing::debug!(encoder = choice.name, "H.264 encoder probe failed");
     }
     // Every hardware probe failed — software encode is the safe last resort.
     let fallback = all.last().unwrap_or(&SOFTWARE_FALLBACK);
@@ -159,9 +166,57 @@ fn select(ffmpeg: &Path) -> &'static EncoderChoice {
     fallback
 }
 
+/// Why a candidate was rejected.
+///
+/// Worth distinguishing: [`Self::FfmpegUnavailable`] means the sidecar itself
+/// could not be run, so *every* candidate is going to fail and the install is
+/// broken; [`Self::Rejected`] means FFmpeg ran fine and refused this one
+/// encoder, which is a driver or hardware question about that candidate alone.
+/// Collapsing both into "probe failed" is what made slow-export reports
+/// undiagnosable from a log.
+#[derive(Debug)]
+enum ProbeFailure {
+    FfmpegUnavailable(String),
+    Rejected(String),
+}
+
+impl std::fmt::Display for ProbeFailure {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::FfmpegUnavailable(e) => write!(f, "ffmpeg could not be started: {e}"),
+            Self::Rejected(e) => write!(f, "{e}"),
+        }
+    }
+}
+
+/// Longest FFmpeg diagnostic we will put in a log line.
+const PROBE_STDERR_CAP: usize = 256;
+
+/// Flatten FFmpeg's stderr to one bounded line.
+///
+/// This ends up in a log file on the user's disk, and FFmpeg is happy to emit
+/// dozens of lines for one rejected encoder. Truncation counts `char`s rather
+/// than bytes so a multi-byte sequence is never split.
+fn summarize_stderr(raw: &[u8]) -> String {
+    let text = String::from_utf8_lossy(raw);
+    let flat = text
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .collect::<Vec<_>>()
+        .join("; ");
+    if flat.chars().count() <= PROBE_STDERR_CAP {
+        return flat;
+    }
+    flat.chars()
+        .take(PROBE_STDERR_CAP)
+        .chain(std::iter::once('…'))
+        .collect()
+}
+
 /// Encode 2 synthetic frames to the null muxer. Cheap, and exercises the real
 /// encoder init path (driver present, session available).
-fn probe(ffmpeg: &Path, choice: &EncoderChoice) -> bool {
+fn probe(ffmpeg: &Path, choice: &EncoderChoice) -> Result<(), ProbeFailure> {
     let mut cmd = proc::command(ffmpeg);
     cmd.args(["-hide_banner", "-loglevel", "error", "-nostdin"])
         .args(choice.pre_input_args)
@@ -172,8 +227,22 @@ fn probe(ffmpeg: &Path, choice: &EncoderChoice) -> bool {
         .args(["-frames:v", "2", "-f", "null", "-"])
         .stdin(Stdio::null())
         .stdout(Stdio::null())
-        .stderr(Stdio::null());
-    cmd.status().map(|s| s.success()).unwrap_or(false)
+        // Piped, not null: the rejection reason is the whole point.
+        .stderr(Stdio::piped());
+
+    let output = cmd
+        .output()
+        .map_err(|e| ProbeFailure::FfmpegUnavailable(e.to_string()))?;
+    if output.status.success() {
+        return Ok(());
+    }
+
+    let detail = summarize_stderr(&output.stderr);
+    Err(ProbeFailure::Rejected(if detail.is_empty() {
+        format!("exited {}", output.status)
+    } else {
+        detail
+    }))
 }
 
 #[cfg(test)]
@@ -190,5 +259,45 @@ mod tests {
     fn selection_falls_back_to_software_when_all_probes_fail() {
         let choice = select(Path::new("/nonexistent/ffmpeg-for-test"));
         assert_eq!(choice.name, "libx264");
+    }
+
+    #[test]
+    fn probe_reports_a_spawn_failure_when_ffmpeg_is_missing() {
+        let err = probe(Path::new("/nonexistent/ffmpeg-for-test"), &SOFTWARE_FALLBACK)
+            .expect_err("a missing ffmpeg must not probe successfully");
+        assert!(
+            matches!(err, ProbeFailure::FfmpegUnavailable(_)),
+            "a missing binary is an install problem, not an encoder rejection: {err:?}"
+        );
+    }
+
+    #[test]
+    fn stderr_summary_is_one_bounded_line() {
+        let noisy = "a rejection reason\n\nand another line\n".repeat(200);
+        let summary = summarize_stderr(noisy.as_bytes());
+        assert!(!summary.contains('\n'), "must collapse to one line");
+        assert!(
+            summary.chars().count() <= PROBE_STDERR_CAP + 1,
+            "must stay bounded, got {} chars",
+            summary.chars().count()
+        );
+    }
+
+    #[test]
+    fn stderr_summary_does_not_split_multibyte_characters() {
+        // Truncation counts chars, so a long run of 3-byte characters must come
+        // back as valid UTF-8 rather than a replacement-char smear.
+        let wide = "日".repeat(PROBE_STDERR_CAP * 2);
+        let summary = summarize_stderr(wide.as_bytes());
+        assert!(!summary.contains('\u{FFFD}'), "must not split a character");
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn windows_does_not_offer_media_foundation() {
+        assert!(
+            !candidates().iter().any(|c| c.name == "h264_mf"),
+            "h264_mf displaces the faster, better libx264 fallback"
+        );
     }
 }
