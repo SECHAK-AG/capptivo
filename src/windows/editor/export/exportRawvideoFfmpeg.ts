@@ -18,12 +18,19 @@ import { shouldYieldNow, yieldToMain } from "./exportYield";
 import { throwIfAborted } from "./exportCancel";
 import { FLUSH_STALL_MS, StallWatchdog, withDeadline } from "./exportStall";
 import { throttledProgress } from "./exportProgress";
+import { FramePool } from "./framePool";
 import type { ResolvedExportParams } from "./exportSettings";
 import { GpuContextLostError } from "../render/gpuLifecycle";
 import { describeError } from "../../recorder/store";
 
-/** Cap in-flight IPC frames so compose does not outrun the ffmpeg pipe. */
-const MAX_PENDING_WRITES = 2;
+/**
+ * In-flight frames, and therefore the export's peak frame memory: this many
+ * buffers of `width * height * 4`. Three is enough to keep the IPC pipe fed
+ * while one frame is being composed and one is being written, and at 1080p it
+ * caps frame memory at ~25 MB. The pool is the only limit — there is no
+ * separate pending-write counter to drift out of agreement with it.
+ */
+const FRAME_POOL_SIZE = 3;
 
 function throwIfGpuLost(isLost: () => boolean): void {
   if (isLost()) throw new GpuContextLostError();
@@ -65,19 +72,17 @@ export async function renderMp4ViaFfmpegRawvideo(
       .catch(() => undefined);
   };
 
-  // Same cpuReadback surface as GIF — getImageData after each compose.
+  // No `cpuReadback`: frames are pulled straight off the GPU into pooled
+  // buffers, so the compositor never allocates the software 2D canvas that
+  // `getImageData` would need.
   const sequential = await openSequentialMedia(screenUrl, faceCam).catch(
     () => null,
   );
   const session = sequential
-    ? await createExportCompositorFromMedia(sequential.media, width, height, {
-        cpuReadback: true,
-      })
-    : await createExportCompositor(screenUrl, faceCam, width, height, {
-        cpuReadback: true,
-      });
+    ? await createExportCompositorFromMedia(sequential.media, width, height)
+    : await createExportCompositor(screenUrl, faceCam, width, height);
   const {
-    ctx,
+    readPixelsInto,
     video,
     camera,
     segments,
@@ -89,15 +94,25 @@ export async function renderMp4ViaFfmpegRawvideo(
     isGpuLost,
   } = session;
 
-  if (!ctx) {
+  const frameBytes = width * height * 4;
+  const pool = new FramePool(frameBytes, FRAME_POOL_SIZE);
+
+  // Prove readback works before composing anything. A route that cannot read
+  // pixels must fail here, while failing is still cheap, rather than after a
+  // few hundred frames of wasted compositing.
+  const probeBuffer = pool.acquire();
+  if (!probeBuffer || !readPixelsInto(probeBuffer)) {
+    if (probeBuffer) pool.release(probeBuffer);
     dispose();
-    await abortMux("rawvideo export requires a readable canvas");
-    throw new Error("rawvideo export requires a readable canvas");
+    const reason =
+      "rawvideo export requires GPU pixel readback, which this renderer does not provide";
+    await abortMux(reason);
+    throw new Error(reason);
   }
+  pool.release(probeBuffer);
 
   let writeChain: Promise<void> = Promise.resolve();
   let writeError: Error | null = null;
-  let pendingWrites = 0;
   let framesEncoded = 0;
   /** Monotonic evidence of forward motion, for the stall watchdog. */
   let progressToken = 0;
@@ -106,10 +121,13 @@ export async function renderMp4ViaFfmpegRawvideo(
     if (!writeError) writeError = new Error(describeError(e));
   };
 
-  const enqueueFrame = (pixels: Uint8ClampedArray) => {
-    // Copy — the next getImageData reuses compositor backing stores.
-    const buf = new Uint8Array(pixels);
-    pendingWrites += 1;
+  /**
+   * Hand one pooled buffer to Rust. Ownership transfers for the duration of the
+   * write: the buffer goes back to the pool only once the IPC call has settled,
+   * because releasing it earlier would let the next frame overwrite bytes that
+   * are still being read.
+   */
+  const enqueueFrame = (buf: Uint8Array) => {
     writeChain = writeChain
       .then(async () => {
         if (writeError || signal.aborted) return;
@@ -117,7 +135,7 @@ export async function renderMp4ViaFfmpegRawvideo(
       })
       .catch(fail)
       .finally(() => {
-        pendingWrites = Math.max(0, pendingWrites - 1);
+        pool.release(buf);
         progressToken += 1;
       });
   };
@@ -127,18 +145,18 @@ export async function renderMp4ViaFfmpegRawvideo(
     const reader =
       sequential?.begin(frameTimes, { mode: "video-frame" }) ?? null;
     const progress = throttledProgress(frameTimes.length);
-    const expectedBytes = width * height * 4;
 
     console.info(
       `[export] ffmpeg-rawvideo: path=${reader ? "sequential" : "seek"} ` +
         `compositor=${backend} frames=${frameTimes.length} ` +
-        `${width}x${height}@${fps}`,
+        `${width}x${height}@${fps} pool=${FRAME_POOL_SIZE}×${(frameBytes / 1e6).toFixed(1)}MB`,
     );
 
     let lastYieldAt = performance.now();
     let driftLogs = 0;
     let yields = 0;
     let yieldMs = 0;
+    let readbackMs = 0;
     const loopStart = performance.now();
 
     for (const t of frameTimes) {
@@ -167,25 +185,30 @@ export async function renderMp4ViaFfmpegRawvideo(
       drawAt(t);
       throwIfGpuLost(isGpuLost);
 
-      const image = ctx.getImageData(0, 0, width, height);
-      if (image.data.byteLength !== expectedBytes) {
-        throw new Error(
-          `rawvideo readback size mismatch: got ${image.data.byteLength}, expected ${expectedBytes}`,
-        );
-      }
-
-      // Watched: an ffmpeg child that stops draining its stdin pipe would
-      // otherwise park this loop forever with the progress bar frozen.
+      // Backpressure is the pool running dry: every buffer is still in flight
+      // to FFmpeg. Watched, because an ffmpeg child that stops draining its
+      // stdin pipe would otherwise park this loop forever with the progress bar
+      // frozen. Never allocate a replacement buffer here — that would remove
+      // the only thing bounding this loop's memory.
       const watchdog = new StallWatchdog("rawvideo write backpressure");
-      while (pendingWrites >= MAX_PENDING_WRITES) {
+      let buf = pool.acquire();
+      while (!buf) {
         watchdog.check(progressToken);
         await writeChain.catch(() => undefined);
         if (writeError) throw writeError;
         throwIfAborted(signal);
-        if (pendingWrites >= MAX_PENDING_WRITES) await yieldToMain();
+        buf = pool.acquire();
+        if (!buf) await yieldToMain();
       }
 
-      enqueueFrame(image.data);
+      const readStart = performance.now();
+      if (!readPixelsInto(buf)) {
+        pool.release(buf);
+        throw new Error("rawvideo readback failed mid-export");
+      }
+      readbackMs += performance.now() - readStart;
+
+      enqueueFrame(buf);
       framesEncoded += 1;
       progress(framesEncoded);
 
@@ -211,6 +234,8 @@ export async function renderMp4ViaFfmpegRawvideo(
     console.info(
       `[export] ffmpeg-rawvideo done in ${(wallMs / 1000).toFixed(1)}s ` +
         `(${(framesEncoded / (wallMs / 1000)).toFixed(1)} fps) — ` +
+        `readback ${(readbackMs / Math.max(1, framesEncoded)).toFixed(2)}ms/frame ` +
+        `(${((readbackMs / Math.max(1, wallMs)) * 100).toFixed(1)}% of wall), ` +
         `yields=${yields} yieldMs=${yieldMs.toFixed(0)}` +
         (uploads
           ? ` uploads=${uploads.uploads} skipped=${uploads.skipped}`

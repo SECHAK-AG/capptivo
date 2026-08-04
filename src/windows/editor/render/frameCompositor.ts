@@ -89,8 +89,26 @@ export type FrameCompositor = {
   /**
    * 2D context over `canvas` when `cpuReadback` is on, for `getImageData`.
    * Null otherwise — WebCodecs MP4/WebM paths never read pixels back.
+   *
+   * Prefer {@link FrameCompositor.readPixelsInto} for anything in a per-frame
+   * loop: this route costs a GPU→CPU blit into a software canvas *plus* a
+   * second copy out of it.
    */
   readback: CanvasRenderingContext2D | null;
+  /**
+   * Copy the current output-sized frame into `target` as RGBA, straight off the
+   * GPU. Returns `false` when the active renderer cannot do it (a WebGPU
+   * backend, or a Pixi version that no longer exposes its GL context), so
+   * callers can fall back rather than break.
+   *
+   * `target.length` must be exactly `outputWidth * outputHeight * 4`.
+   *
+   * Rows arrive **bottom-up**, because that is how `glReadPixels` defines its
+   * origin. The consumer owns the flip — see `export_rawvideo.rs`, which hands
+   * FFmpeg a `vflip` filter so the correction folds into a pixel-format
+   * conversion it was already doing, instead of costing a full extra copy in JS.
+   */
+  readPixelsInto(target: Uint8Array): boolean;
   backend: "pixi";
   resize(
     width: number,

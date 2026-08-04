@@ -38,8 +38,14 @@ import { useEditorStore } from "../store";
 export type ExportCompositor = {
   /** Output-sized bitmap: what the encoder captures. */
   canvas: FrameCompositorSurface;
-  /** Present when `cpuReadback` was requested (GIF / Path B rawvideo). */
+  /** Present when `cpuReadback` was requested (GIF only). */
   ctx: CanvasRenderingContext2D | null;
+  /**
+   * Copy the composed output frame into `target` as bottom-up RGBA, straight
+   * off the GPU. False when the renderer cannot (WebGPU). See
+   * `FrameCompositor.readPixelsInto` for the orientation contract.
+   */
+  readPixelsInto: (target: Uint8Array) => boolean;
   /** Which compositor won — decode strategy tunes itself off this. */
   backend: FrameCompositor["backend"];
   video: HTMLVideoElement;
@@ -382,6 +388,7 @@ export async function createExportCompositorFromMedia(
   return {
     canvas: frame.canvas,
     ctx: frame.readback,
+    readPixelsInto: (target) => frame.readPixelsInto(target),
     backend: frame.backend,
     stats: () => frame.stats(),
     uploadStats: () => frame.uploadStats(),

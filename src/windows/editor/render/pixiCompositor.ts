@@ -495,6 +495,49 @@ export async function createPixiFrameCompositor(
       `output=${outputWidth}x${outputHeight} downscale=${output.needsDownscale}`,
   );
 
+  /**
+   * Pixi's WebGL2 context.
+   *
+   * `GlContextSystem` assigns it onto the renderer (`this._renderer.gl = gl`)
+   * and Pixi's own `GlTextureSystem.getPixels` reads it back exactly this way,
+   * but it is absent from the published type definitions — hence the cast.
+   * Feature-detected rather than assumed: a WebGPU backend, or a future Pixi
+   * that stops exposing it, makes `readPixelsInto` return false and the caller
+   * falls back instead of the export breaking.
+   */
+  function glContext(): WebGL2RenderingContext | null {
+    if (typeof WebGL2RenderingContext === "undefined") return null;
+    const candidate = (renderer as unknown as { gl?: unknown }).gl;
+    return candidate instanceof WebGL2RenderingContext ? candidate : null;
+  }
+
+  function readPixelsInto(target: Uint8Array): boolean {
+    const gl = glContext();
+    if (!gl) return false;
+    if (target.length !== outputWidth * outputHeight * 4) return false;
+
+    // `compose()` ends with a render to the canvas, which is the default
+    // framebuffer (Pixi's back buffer is off by default and export does not
+    // enable it). Pixi may still have a render target bound afterwards, so bind
+    // the default explicitly — and restore whatever was there, because Pixi
+    // caches its own binding state and would not expect us to have changed it.
+    const previous = gl.getParameter(
+      gl.FRAMEBUFFER_BINDING,
+    ) as WebGLFramebuffer | null;
+    gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+    gl.readPixels(
+      0,
+      0,
+      outputWidth,
+      outputHeight,
+      gl.RGBA,
+      gl.UNSIGNED_BYTE,
+      target,
+    );
+    gl.bindFramebuffer(gl.FRAMEBUFFER, previous);
+    return true;
+  }
+
   return {
     get canvas() {
       return readbackCanvas ?? pixiCanvas;
@@ -502,6 +545,7 @@ export async function createPixiFrameCompositor(
     get readback() {
       return readbackCtx;
     },
+    readPixelsInto,
     backend: "pixi",
     resize,
     compose,

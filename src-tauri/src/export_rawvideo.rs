@@ -79,7 +79,12 @@ impl RawvideoStreamEncoder {
                 "-b:v",
                 &bitrate_s,
             ])
-            .args(encoder.output_args(None))
+            // Frames arrive bottom-up: they come from `glReadPixels`, whose
+            // origin is bottom-left. Flipping here is free — FFmpeg is already
+            // running a pixel-format conversion pass over every frame and
+            // `vflip` folds into it — whereas flipping in JS would cost a full
+            // extra copy of every frame on the main thread.
+            .args(encoder.output_args(Some("vflip")))
             .args(encoder.tuning_args)
             .args(["-r", &fps_s, "-f", "mp4"])
             .arg(&temp_path)
