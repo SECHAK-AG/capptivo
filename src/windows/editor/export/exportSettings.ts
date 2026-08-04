@@ -1,6 +1,6 @@
 /**
  * Export settings — pure types + resolution/bitrate math.
- * UI and MediaRecorder / GIF plumbing live elsewhere.
+ * UI and encode/mux plumbing live elsewhere.
  */
 
 import { computeExportDimensionsForVideo } from "../lib/composition";

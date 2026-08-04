@@ -29,6 +29,8 @@ import {
   markPreferDomCanvasForExport,
   shouldPreferDomCanvasForExport,
 } from "../render/gpuLifecycle";
+import { shouldUseOffscreenExportCanvas } from "./exportRouting";
+import { isWindows } from "@/lib/platform";
 import { toBlobMediaUrl } from "../lib/mediaBlobUrl";
 import { faceCamFrameAt, type FaceCamTrack } from "../lib/faceCamSync";
 import { useEditorStore } from "../store";
@@ -83,11 +85,6 @@ export type CompositorOptions = {
    * stay on the GPU.
    */
   cpuReadback?: boolean;
-  /**
-   * Set false to force a DOM-backed canvas. Only the MediaRecorder fallback
-   * needs this — it calls `captureStream()`, which an OffscreenCanvas has not.
-   */
-  offscreen?: boolean;
 };
 
 /**
@@ -110,8 +107,8 @@ async function loadVideo(src: string): Promise<HTMLVideoElement> {
   return video;
 }
 
-/** Load screen (+ camera) as blob-backed `<video>` elements — the legacy
- * decode path, still used by the seek-based fallback and MediaRecorder. */
+/** Load screen (+ camera) as blob-backed `<video>` elements — the decode path
+ * used when sequential frame reading cannot initialize. */
 export async function loadElementMedia(
   screenUrl: string,
   faceCam: FaceCamTrack,
@@ -194,10 +191,13 @@ export async function createExportCompositorFromMedia(
   // OffscreenCanvas init on some Windows WebView2 GPUs (and can white-out the UI).
   await waitForPreviewGpuRelease();
 
-  // After a prior Offscreen failure or context loss this session, skip straight
-  // to DOM canvas. Offscreen stays default for speed until then.
-  const wantOffscreen =
-    options.offscreen !== false && !shouldPreferDomCanvasForExport();
+  // Windows always uses a DOM canvas (dual GL + Offscreen loses the WebView2
+  // context); elsewhere Offscreen stays the default for speed until a failure
+  // or context loss latches this session onto DOM.
+  const wantOffscreen = shouldUseOffscreenExportCanvas({
+    windows: isWindows,
+    sessionPreferDom: shouldPreferDomCanvasForExport(),
+  });
   const baseOptions = {
     width: renderWidth,
     height: renderHeight,
@@ -447,22 +447,6 @@ export function seekTo(video: HTMLVideoElement, time: number): Promise<void> {
     video.addEventListener("seeked", onSeeked, { once: true });
     video.addEventListener("error", onErr, { once: true });
     video.currentTime = time;
-  });
-}
-
-export function waitUntil(
-  video: HTMLVideoElement,
-  pred: () => boolean,
-): Promise<void> {
-  return new Promise((resolve) => {
-    const tick = () => {
-      if (pred()) {
-        resolve();
-        return;
-      }
-      requestAnimationFrame(tick);
-    };
-    tick();
   });
 }
 

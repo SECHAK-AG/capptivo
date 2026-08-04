@@ -1,44 +1,87 @@
-/** Selfcheck: encode stall detection (pure). */
+/** Selfcheck: export stall detection (pure). */
 
 import {
   ENCODE_STALL_MS,
-  createStallWaitState,
-  tickEncodeStall,
+  ExportStallError,
+  StallWatchdog,
+  isExportStallError,
+  withDeadline,
 } from "./exportStall.ts";
 
 function assert(cond: boolean, msg: string): void {
   if (!cond) throw new Error(msg);
 }
 
-const t0 = 1_000;
-let state = createStallWaitState(t0, 12, 0);
-
-// No progress under budget → not stalled.
+// A token that keeps rising is healthy no matter how long the loop runs.
 {
-  const r = tickEncodeStall(state, t0 + 100, 12, 0, ENCODE_STALL_MS);
-  assert(!r.stalled, "short wait must not stall");
-  state = r.state;
+  const watchdog = new StallWatchdog("test", ENCODE_STALL_MS, 0);
+  for (let i = 1; i <= 100; i++) {
+    watchdog.check(i, i * ENCODE_STALL_MS * 2);
+  }
 }
 
-// Still no progress past budget → stalled.
+// A flat token throws once — and only once — the window has fully elapsed.
 {
-  const r = tickEncodeStall(state, t0 + ENCODE_STALL_MS + 1, 12, 0, ENCODE_STALL_MS);
-  assert(r.stalled, "no progress past stallMs must stall");
+  const watchdog = new StallWatchdog("test", 1000, 0);
+  watchdog.check(7, 0);
+  watchdog.check(7, 999);
+  let threw = false;
+  try {
+    watchdog.check(7, 1000);
+  } catch (e) {
+    threw = true;
+    assert(isExportStallError(e), "a stall raises ExportStallError");
+    assert(
+      (e as Error).message.includes("test"),
+      "the message names the watched stage",
+    );
+  }
+  assert(threw, "a flat token past the window must throw");
 }
 
-// Queue drain resets the window.
+// Progress after a near-stall resets the clock rather than merely delaying it.
 {
-  state = createStallWaitState(t0, 12, 4);
-  const mid = tickEncodeStall(state, t0 + 4_000, 8, 4, ENCODE_STALL_MS);
-  assert(!mid.stalled, "queue drain is progress");
-  const later = tickEncodeStall(
-    mid.state,
-    mid.state.waitStartedAt + ENCODE_STALL_MS - 1,
-    8,
-    4,
-    ENCODE_STALL_MS,
+  const watchdog = new StallWatchdog("test", 1000, 0);
+  watchdog.check(1, 0);
+  watchdog.check(1, 900);
+  watchdog.check(2, 950); // progress
+  watchdog.check(2, 1900); // only 950ms since progress — still fine
+}
+
+assert(
+  !isExportStallError(new Error("plain")),
+  "an unrelated error is not a stall",
+);
+assert(
+  isExportStallError(new ExportStallError("where", 1)),
+  "ExportStallError is recognised",
+);
+
+const results: string[] = [];
+
+await withDeadline(Promise.resolve("ok"), 1000, "fast")
+  .then((v) => results.push(`resolved:${v}`))
+  .catch(() => results.push("resolved:unexpected-reject"));
+
+// A promise that never settles must reject on the deadline, not hang the suite.
+await withDeadline(new Promise(() => {}), 20, "never")
+  .then(() => results.push("hang:unexpected-resolve"))
+  .catch((e) =>
+    results.push(isExportStallError(e) ? "hang:stalled" : "hang:wrong-error"),
   );
-  assert(!later.stalled, "progress resets the stall clock");
-}
+
+// An underlying rejection wins over the deadline and keeps its own error.
+await withDeadline(Promise.reject(new Error("boom")), 1000, "rejects")
+  .then(() => results.push("reject:unexpected-resolve"))
+  .catch((e) =>
+    results.push(
+      (e as Error).message === "boom" ? "reject:original" : "reject:wrong",
+    ),
+  );
+
+assert(
+  results.join("|") === "resolved:ok|hang:stalled|reject:original",
+  `withDeadline behaved unexpectedly: ${results.join("|")}`,
+);
 
 console.log("exportStall.selfcheck: ok");

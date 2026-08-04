@@ -1,62 +1,100 @@
 /**
- * Encode / IPC backpressure stall detection.
- * Pure — WebView2 HW (and sometimes SW) encode can freeze without erroring.
+ * Deadlines for the export pipeline.
+ *
+ * Every wait in an export loop must be able to give up. WebView2's WebCodecs
+ * H.264 encoder can accept `configure()` and then accept frames forever without
+ * ever emitting a chunk — no error, no rejected promise, just silence. The
+ * backpressure loops spin on `encodeQueueSize`, which never drops, so the export
+ * freezes at whatever percentage the queue depth already allowed: ~23 frames of
+ * a 1080p30 export, which is the "stuck at 1%" report this module exists to
+ * convert into a route switch.
+ *
+ * A stall is therefore *not* a fatal error. It means "this route is dead on this
+ * machine" and the caller is expected to try the next one.
+ *
+ * Pure on purpose — selfchecks run under plain Node without Vite aliases.
  */
 
-/** No queue/write progress for this long → fail the Annex-B path. */
+/** No progress for this long inside a frame loop → the route is dead. */
 export const ENCODE_STALL_MS = 8_000;
 
-export type StallWaitState = {
-  /** Wall time when the current no-progress window started. */
-  waitStartedAt: number;
-  lastEncodeQueue: number;
-  lastPendingWrites: number;
-};
+/** `flush()`/finalize gets longer: it legitimately drains a full queue. */
+export const FLUSH_STALL_MS = 30_000;
 
-export function createStallWaitState(
-  now: number,
-  encodeQueue: number,
-  pendingWrites: number,
-): StallWaitState {
-  return {
-    waitStartedAt: now,
-    lastEncodeQueue: encodeQueue,
-    lastPendingWrites: pendingWrites,
-  };
+export class ExportStallError extends Error {
+  readonly name = "ExportStallError";
+  constructor(where: string, stalledMs: number) {
+    super(`export stalled: no progress in ${where} for ${Math.round(stalledMs)}ms`);
+  }
+}
+
+export function isExportStallError(e: unknown): boolean {
+  return e instanceof ExportStallError;
 }
 
 /**
- * Update stall tracking for one backpressure spin.
- * Returns `stalled: true` when there has been no progress for `stallMs`.
+ * Watches a monotonically increasing progress token.
+ *
+ * The token is whatever counts as real forward motion for the loop being
+ * watched — chunks emitted plus writes completed, say. One increasing number is
+ * enough, and it is far easier to reason about than tracking several counters
+ * that each move in their own direction: if the number goes up, work happened.
  */
-export function tickEncodeStall(
-  state: StallWaitState,
-  now: number,
-  encodeQueue: number,
-  pendingWrites: number,
-  stallMs: number = ENCODE_STALL_MS,
-): { stalled: boolean; state: StallWaitState } {
-  const progressed =
-    encodeQueue < state.lastEncodeQueue ||
-    pendingWrites < state.lastPendingWrites;
+export class StallWatchdog {
+  // Written out rather than declared as constructor parameter properties: the
+  // selfchecks run under Node's strip-only TypeScript mode, which rejects those.
+  private readonly where: string;
+  private readonly stallMs: number;
+  private lastToken = Number.NEGATIVE_INFINITY;
+  private lastProgressAt: number;
 
-  if (progressed) {
-    return {
-      stalled: false,
-      state: {
-        waitStartedAt: now,
-        lastEncodeQueue: encodeQueue,
-        lastPendingWrites: pendingWrites,
-      },
-    };
+  constructor(
+    where: string,
+    stallMs: number = ENCODE_STALL_MS,
+    now: number = performance.now(),
+  ) {
+    this.where = where;
+    this.stallMs = stallMs;
+    this.lastProgressAt = now;
   }
 
-  return {
-    stalled: now - state.waitStartedAt >= stallMs,
-    state: {
-      ...state,
-      lastEncodeQueue: encodeQueue,
-      lastPendingWrites: pendingWrites,
-    },
-  };
+  /** Throws {@link ExportStallError} once the token has been flat for `stallMs`. */
+  check(token: number, now: number = performance.now()): void {
+    if (token > this.lastToken) {
+      this.lastToken = token;
+      this.lastProgressAt = now;
+      return;
+    }
+    const stalledFor = now - this.lastProgressAt;
+    if (stalledFor >= this.stallMs) {
+      throw new ExportStallError(this.where, stalledFor);
+    }
+  }
+}
+
+/**
+ * Reject if `promise` has not settled within `ms`.
+ *
+ * The underlying operation is not cancelled — it cannot be, for a WebCodecs
+ * flush that has wedged. Callers close the encoder afterwards, which is what
+ * actually releases it.
+ */
+export function withDeadline<T>(
+  promise: Promise<T>,
+  ms: number,
+  where: string,
+): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const timer = setTimeout(() => reject(new ExportStallError(where, ms)), ms);
+    promise.then(
+      (value) => {
+        clearTimeout(timer);
+        resolve(value);
+      },
+      (error) => {
+        clearTimeout(timer);
+        reject(error);
+      },
+    );
+  });
 }

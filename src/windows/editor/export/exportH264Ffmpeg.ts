@@ -1,9 +1,13 @@
 /**
  * MP4 export via WebCodecs Annex-B H.264 → Rust ffmpeg `-c copy` mux.
  *
- * Pixi compose and HW encode stay in the WebView; container mux/IO run in the
- * ffmpeg sidecar so WebView2 is not also writing the MP4 (the Windows failure
- * mode when mediabunny muxes in-process).
+ * Pixi compose and H.264 encode stay in the WebView; container mux and file IO
+ * run in the ffmpeg sidecar, so WebView2 is never also writing the MP4. Only
+ * compressed bytes cross IPC, which is what makes this the fast route.
+ *
+ * Every wait in the loop is watched (`exportStall.ts`). A WebCodecs encoder that
+ * stops emitting chunks is a route failure, not a hang — the caller then falls
+ * through to the RGBA route.
  */
 
 import { commands } from "../../../ipc/bindings";
@@ -22,15 +26,17 @@ import {
   seedEncodeDepth,
 } from "./encodeBackpressure";
 import { throwIfAborted } from "./exportCancel";
+import {
+  FLUSH_STALL_MS,
+  StallWatchdog,
+  withDeadline,
+} from "./exportStall";
+import { throttledProgress } from "./exportProgress";
 import type { ResolvedExportParams } from "./exportSettings";
 import { GpuContextLostError } from "../render/gpuLifecycle";
-import { useEditorStore } from "../store";
 import { describeError } from "../../recorder/store";
-import {
-  ANNEX_B_CODEC,
-  isAnnexBStartCode,
-  isH264Keyframe,
-} from "./h264Keyframe";
+import type { AnnexBEncodeTuning } from "./annexBProbe";
+import { isAnnexBStartCode, isH264Keyframe } from "./h264Keyframe";
 
 export {
   ANNEX_B_CODEC,
@@ -42,81 +48,13 @@ export {
 /** Cap in-flight IPC writes so encode does not outrun the ffmpeg pipe. */
 const MAX_PENDING_WRITES = 6;
 
-/** Try High@L4.2 first (1080p60), then L4.0. */
-const ANNEX_B_CODEC_CANDIDATES = [ANNEX_B_CODEC, "avc1.640028"] as const;
-
-type HwMode = NonNullable<VideoEncoderConfig["hardwareAcceleration"]>;
-type LatencyMode = NonNullable<VideoEncoderConfig["latencyMode"]>;
-
-export type AnnexBEncodeTuning = {
-  codec: string;
-  hardwareAcceleration: HwMode;
-  latencyMode: LatencyMode;
-};
-
 function throwIfGpuLost(isLost: () => boolean): void {
   if (isLost()) throw new GpuContextLostError();
 }
 
-export async function probeAnnexBConfig(
-  width: number,
-  height: number,
-  bitrate: number,
-  fps: number,
-): Promise<AnnexBEncodeTuning | null> {
-  if (typeof VideoEncoder === "undefined" || !VideoEncoder.isConfigSupported) {
-    return null;
-  }
-  // WebCodecs H.264 requires even dimensions.
-  if (width % 2 !== 0 || height % 2 !== 0) return null;
-
-  const hardwareModes: HwMode[] = [
-    "prefer-hardware",
-    "no-preference",
-    "prefer-software",
-  ];
-  const latencyModes: LatencyMode[] = ["realtime", "quality"];
-
-  for (const codec of ANNEX_B_CODEC_CANDIDATES) {
-    for (const hardwareAcceleration of hardwareModes) {
-      for (const latencyMode of latencyModes) {
-        const config: VideoEncoderConfig = {
-          codec,
-          width,
-          height,
-          bitrate,
-          framerate: fps,
-          hardwareAcceleration,
-          latencyMode,
-          avc: { format: "annexb" },
-        };
-        try {
-          const { supported } = await VideoEncoder.isConfigSupported(config);
-          if (supported) {
-            return { codec, hardwareAcceleration, latencyMode };
-          }
-        } catch {
-          // try next combo
-        }
-      }
-    }
-  }
-  return null;
-}
-
-/** True when this machine can run the ffmpeg Annex-B mux path for MP4. */
-export async function canExportMp4ViaFfmpegH264(
-  width: number,
-  height: number,
-  bitrate: number,
-  fps: number,
-): Promise<boolean> {
-  return (await probeAnnexBConfig(width, height, bitrate, fps)) != null;
-}
-
 /**
  * Compose + WebCodecs Annex-B encode → ffmpeg stream-copy MP4 at `path`.
- * Audio is attached afterward by the caller (same as video-only + post-mux).
+ * Audio is attached afterward by the caller (video-only + post-mux).
  */
 export async function renderMp4ViaFfmpegH264(
   path: string,
@@ -124,16 +62,10 @@ export async function renderMp4ViaFfmpegH264(
   faceCam: FaceCamTrack,
   params: ResolvedExportParams,
   signal: AbortSignal,
-  tuning?: AnnexBEncodeTuning,
+  tuning: AnnexBEncodeTuning,
 ): Promise<void> {
   const { width, height, fps, bitrate } = params;
   throwIfAborted(signal);
-
-  const resolvedTuning =
-    tuning ?? (await probeAnnexBConfig(width, height, bitrate, fps));
-  if (!resolvedTuning) {
-    throw new Error("Annex-B H.264 encode is unavailable for ffmpeg mux");
-  }
 
   const handle = await commands.beginExportH264Stream({ path, fps });
   let settled = false;
@@ -167,6 +99,12 @@ export async function renderMp4ViaFfmpegH264(
   let pendingWrites = 0;
   let framesEncoded = 0;
   let checkedAnnexB = false;
+  /**
+   * Monotonic evidence of forward motion, for the stall watchdog: chunks the
+   * encoder has produced plus writes ffmpeg has consumed. If neither moves, the
+   * pipeline is dead no matter what the queue counters say.
+   */
+  let progressToken = 0;
 
   const fail = (e: unknown) => {
     if (!writeError) writeError = new Error(describeError(e));
@@ -184,6 +122,7 @@ export async function renderMp4ViaFfmpegH264(
         return;
       }
     }
+    progressToken += 1;
     pendingWrites += 1;
     writeChain = writeChain
       .then(async () => {
@@ -193,6 +132,7 @@ export async function renderMp4ViaFfmpegH264(
       .catch(fail)
       .finally(() => {
         pendingWrites = Math.max(0, pendingWrites - 1);
+        progressToken += 1;
       });
   };
 
@@ -213,14 +153,14 @@ export async function renderMp4ViaFfmpegH264(
 
   try {
     encoder.configure({
-      codec: resolvedTuning.codec,
+      codec: tuning.codec,
       width,
       height,
       bitrate,
       framerate: fps,
       bitrateMode: "variable",
-      latencyMode: resolvedTuning.latencyMode,
-      hardwareAcceleration: resolvedTuning.hardwareAcceleration,
+      latencyMode: tuning.latencyMode,
+      hardwareAcceleration: tuning.hardwareAcceleration,
       avc: { format: "annexb" },
     });
 
@@ -233,8 +173,8 @@ export async function renderMp4ViaFfmpegH264(
     console.info(
       `[export] ffmpeg-h264: path=${reader ? "sequential" : "seek"} ` +
         `compositor=${backend} frames=${frameTimes.length} ` +
-        `hw=${resolvedTuning.hardwareAcceleration} latency=${resolvedTuning.latencyMode} ` +
-        `encodeDepthSeed=${encodeDepth}`,
+        `codec=${tuning.codec} hw=${tuning.hardwareAcceleration} ` +
+        `latency=${tuning.latencyMode} encodeDepthSeed=${encodeDepth}`,
     );
 
     let timestampUs = 0;
@@ -273,12 +213,19 @@ export async function renderMp4ViaFfmpegH264(
       const composeMs = performance.now() - composeStart;
       emaCompositeMs = ema(emaCompositeMs, composeMs, adaptFrames);
 
-      // Backpressure: encoder queue + IPC write pipeline.
+      // Backpressure: encoder queue + IPC write pipeline. Watched, because this
+      // is the exact loop that used to spin forever when the encoder went quiet.
       const waitStart = performance.now();
+      const watchdog = new StallWatchdog(
+        "annex-b encode backpressure",
+        undefined,
+        waitStart,
+      );
       while (
         encoder.encodeQueueSize >= encodeDepth ||
         pendingWrites >= MAX_PENDING_WRITES
       ) {
+        watchdog.check(progressToken);
         await writeChain.catch(() => undefined);
         if (writeError) throw writeError;
         throwIfAborted(signal);
@@ -329,8 +276,10 @@ export async function renderMp4ViaFfmpegH264(
       }
     }
 
-    await encoder.flush();
-    await writeChain;
+    // A wedged encoder never resolves `flush()`; without a deadline this is the
+    // second place an export can hang at 99%.
+    await withDeadline(encoder.flush(), FLUSH_STALL_MS, "annex-b encoder flush");
+    await withDeadline(writeChain, FLUSH_STALL_MS, "annex-b chunk writes");
     if (writeError) throw writeError;
     if (framesEncoded === 0) {
       throw new Error("ffmpeg h264 export produced no frames");
@@ -360,22 +309,11 @@ export async function renderMp4ViaFfmpegH264(
     try {
       if (encoder.state !== "closed") encoder.close();
     } catch {
-      /* ignore */
+      /* already torn down */
     }
     dispose();
     if (!settled) {
       await abortMux("export failed");
     }
   }
-}
-
-function throttledProgress(total: number): (done: number) => void {
-  let lastPercent = -1;
-  return (done: number) => {
-    const ratio = Math.min(1, done / Math.max(1, total));
-    const percent = Math.round(ratio * 100);
-    if (percent === lastPercent) return;
-    lastPercent = percent;
-    useEditorStore.getState().setExportProgress(ratio);
-  };
 }

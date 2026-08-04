@@ -6,7 +6,7 @@
  *
  * The Rust side does positioned writes, so this works for both streaming muxers
  * (mediabunny `StreamTarget`, which writes out of order) and sequential
- * producers (GIF / MediaRecorder, which pass a monotonic offset via `append`).
+ * producers (GIF, which passes a monotonic offset via `append`).
  */
 
 import type { StreamTargetChunk } from "mediabunny";

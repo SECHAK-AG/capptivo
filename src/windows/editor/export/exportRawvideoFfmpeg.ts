@@ -16,9 +16,10 @@ import {
 import { openSequentialMedia } from "./sequentialMedia";
 import { shouldYieldNow, yieldToMain } from "./exportYield";
 import { throwIfAborted } from "./exportCancel";
+import { FLUSH_STALL_MS, StallWatchdog, withDeadline } from "./exportStall";
+import { throttledProgress } from "./exportProgress";
 import type { ResolvedExportParams } from "./exportSettings";
 import { GpuContextLostError } from "../render/gpuLifecycle";
-import { useEditorStore } from "../store";
 import { describeError } from "../../recorder/store";
 
 /** Cap in-flight IPC frames so compose does not outrun the ffmpeg pipe. */
@@ -98,6 +99,8 @@ export async function renderMp4ViaFfmpegRawvideo(
   let writeError: Error | null = null;
   let pendingWrites = 0;
   let framesEncoded = 0;
+  /** Monotonic evidence of forward motion, for the stall watchdog. */
+  let progressToken = 0;
 
   const fail = (e: unknown) => {
     if (!writeError) writeError = new Error(describeError(e));
@@ -115,6 +118,7 @@ export async function renderMp4ViaFfmpegRawvideo(
       .catch(fail)
       .finally(() => {
         pendingWrites = Math.max(0, pendingWrites - 1);
+        progressToken += 1;
       });
   };
 
@@ -170,7 +174,11 @@ export async function renderMp4ViaFfmpegRawvideo(
         );
       }
 
+      // Watched: an ffmpeg child that stops draining its stdin pipe would
+      // otherwise park this loop forever with the progress bar frozen.
+      const watchdog = new StallWatchdog("rawvideo write backpressure");
       while (pendingWrites >= MAX_PENDING_WRITES) {
+        watchdog.check(progressToken);
         await writeChain.catch(() => undefined);
         if (writeError) throw writeError;
         throwIfAborted(signal);
@@ -192,7 +200,7 @@ export async function renderMp4ViaFfmpegRawvideo(
       }
     }
 
-    await writeChain;
+    await withDeadline(writeChain, FLUSH_STALL_MS, "rawvideo frame writes");
     if (writeError) throw writeError;
     if (framesEncoded === 0) {
       throw new Error("ffmpeg rawvideo export produced no frames");
@@ -224,15 +232,4 @@ export async function renderMp4ViaFfmpegRawvideo(
       await abortMux("export failed");
     }
   }
-}
-
-function throttledProgress(total: number): (done: number) => void {
-  let lastPercent = -1;
-  return (done: number) => {
-    const ratio = Math.min(1, done / Math.max(1, total));
-    const percent = Math.round(ratio * 100);
-    if (percent === lastPercent) return;
-    lastPercent = percent;
-    useEditorStore.getState().setExportProgress(ratio);
-  };
 }
