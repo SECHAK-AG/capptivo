@@ -847,6 +847,36 @@ pub(crate) fn reveal_recorder_bar(app: &AppHandle) {
     let _ = show_recorder_popover(app);
 }
 
+/// Give the recorder bar keyboard focus.
+///
+/// The bar is a non-activating always-on-top overlay, so it takes clicks
+/// (`accept_first_mouse`) without ever asking for key status. Its Escape
+/// handler, though, is a DOM `keydown` listener — and a webview that never
+/// holds focus never receives one. Anything that wants Esc to work has to put
+/// focus here first.
+///
+/// Focus is also *lost* rather than simply never granted: showing the area
+/// guide steals it. `tao` only honours a window's don't-focus marker on its
+/// first show and clears it there, so every reuse of the guide window activates
+/// it. Re-asserting afterwards is what makes this survive the second selection.
+///
+/// No-ops while capture is active — yanking focus mid-recording would be
+/// visible in the recording itself — and when the bar is hidden.
+pub(crate) fn focus_recorder_bar(app: &AppHandle) {
+    if recorder_capture_active(app) {
+        return;
+    }
+    let Some(win) = app.get_webview_window(RECORDER_LABEL) else {
+        return;
+    };
+    if !win.is_visible().unwrap_or(false) {
+        return;
+    }
+    if let Err(e) = win.set_focus() {
+        tracing::warn!(%e, "could not focus the recorder bar");
+    }
+}
+
 /// Hide the recorder popover (close button / after stop).
 #[tauri::command]
 pub fn hide_recorder(app: AppHandle) -> tauri::Result<()> {

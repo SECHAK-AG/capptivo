@@ -564,6 +564,12 @@ fn present_area_frame(
         "area frame guide shown"
     );
     let _ = win.show();
+    // Last word on focus must be the recorder bar, not the guide: `show()` above
+    // activates the guide on every reuse (tao clears a window's don't-focus
+    // marker after the first show), and the bar's Escape-to-cancel handler is a
+    // DOM keydown that only fires while its webview holds focus. Ordered after
+    // `show()` for exactly that reason — focusing before it would be undone.
+    crate::windows::focus_recorder_bar(app);
     Ok(())
 }
 
