@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-error-log-path"
+description = "Enables the error_log_path command without any pre-configured scope."
+commands.allow = ["error_log_path"]
+
+[[permission]]
+identifier = "deny-error-log-path"
+description = "Denies the error_log_path command without any pre-configured scope."
+commands.deny = ["error_log_path"]

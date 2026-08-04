@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-reveal-error-log"
+description = "Enables the reveal_error_log command without any pre-configured scope."
+commands.allow = ["reveal_error_log"]
+
+[[permission]]
+identifier = "deny-reveal-error-log"
+description = "Denies the reveal_error_log command without any pre-configured scope."
+commands.deny = ["reveal_error_log"]

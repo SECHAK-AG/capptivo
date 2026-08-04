@@ -159,6 +159,17 @@ export const commands = {
         "x-export-position": String(position),
       },
     }),
+  /** Annex-B H.264 → ffmpeg `-c copy` MP4 (mux outside the WebView). */
+  beginExportH264Stream: (args: { path: string; fps: number }) =>
+    invoke<number>("begin_export_h264_stream", args),
+  writeExportH264Chunk: (handle: number, chunk: Uint8Array) =>
+    invoke<void>("write_export_h264_chunk", chunk, {
+      headers: { "x-export-handle": String(handle) },
+    }),
+  finishExportH264Stream: (handle: number) =>
+    invoke<string>("finish_export_h264_stream", { handle }),
+  abortExportH264Stream: (handle: number, reason: string) =>
+    invoke<void>("abort_export_h264_stream", { handle, reason }),
   /** Returns original dimensions and proxy filename when ready. */
   ensureProxy: (projectId: string) =>
     invoke<{ proxy: string | null; width: number; height: number }>(
@@ -208,4 +219,10 @@ export const commands = {
     invoke<void>("attach_export_audio", args),
   removeTempFile: (args: { path: string }) =>
     invoke<void>("remove_temp_file", args),
+  /** Append one error line to the on-disk error log (errors only). */
+  logClientError: (source: string, message: string) =>
+    invoke<void>("log_client_error", { source, message }),
+  /** Reveal `logs/errors.log` in Finder / Explorer. */
+  revealErrorLog: () => invoke<string>("reveal_error_log"),
+  errorLogPath: () => invoke<string>("error_log_path"),
 } as const;

@@ -22,6 +22,7 @@ import type {
 } from "../../ipc/types";
 import { probeCameraPermission } from "./cameraAccess";
 import { flushCameraCaptureWithTimeout } from "./flushCamera";
+import { logClientError } from "@/lib/errorLogging";
 
 export type CaptureMode = CaptureSourceKind | "area" | "device";
 
@@ -208,6 +209,7 @@ function resetAreaCapture(
 export const useRecorderStore = create<RecorderStore>((set, get) => {
   const reportError = (message: string) => {
     set({ lastError: message });
+    logClientError("recorder", message);
   };
 
   return {
@@ -764,9 +766,19 @@ export const useRecorderStore = create<RecorderStore>((set, get) => {
 
 /** Turn an `AppError` (or anything) into a human string for the UI. */
 export function describeError(e: unknown): string {
-  if (e && typeof e === "object" && "kind" in e) {
-    const err = e as { kind: string; message?: string };
-    return err.message ?? err.kind;
+  if (e instanceof Error) return e.message || e.name;
+  if (typeof e === "string") return e;
+  if (e && typeof e === "object") {
+    const err = e as { kind?: unknown; message?: unknown };
+    if (typeof err.message === "string" && err.message.length > 0) {
+      return err.message;
+    }
+    if (typeof err.kind === "string") return err.kind;
+    try {
+      return JSON.stringify(e);
+    } catch {
+      /* fall through */
+    }
   }
   return String(e);
 }

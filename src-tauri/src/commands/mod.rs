@@ -4,6 +4,7 @@
 
 pub mod backgrounds;
 pub mod captions;
+pub mod error_log;
 pub mod export;
 pub mod project;
 pub mod recording;
@@ -87,10 +88,18 @@ macro_rules! command_handlers {
             $crate::commands::export::write_export_chunk,
             $crate::commands::export::finish_export,
             $crate::commands::export::abort_export,
+            $crate::commands::export::begin_export_h264_stream,
+            $crate::commands::export::write_export_h264_chunk,
+            $crate::commands::export::finish_export_h264_stream,
+            $crate::commands::export::abort_export_h264_stream,
             $crate::commands::export::mux_export_audio,
             $crate::commands::export::prepare_export_audio,
             $crate::commands::export::attach_export_audio,
             $crate::commands::export::remove_temp_file,
+            // error log (friend-install diagnostics)
+            $crate::commands::error_log::log_client_error,
+            $crate::commands::error_log::reveal_error_log,
+            $crate::commands::error_log::error_log_path,
             // updater
             $crate::updater::check_for_updates,
         ]

@@ -3,7 +3,8 @@
 // ponytail: mirrors helpers in exportSettings.ts — keeps this file
 // dependency-free for Node selfcheck (exportSettings pulls composition).
 const BALANCED = 8_000_000;
-const REF_PIXEL_RATE = 1920 * 1080 * 30;
+const REF_PIXELS = 1920 * 1080;
+const REF_FPS = 30;
 const MIN = 500_000;
 const MAX = 50_000_000;
 
@@ -13,7 +14,9 @@ const GIF_SPEED_STEP = 0.25;
 const DEFAULT_GIF_SPEED = 1;
 
 function scaled(encodingBitrate: number, w: number, h: number, fps: number): number {
-  const raw = Math.round(encodingBitrate * ((w * h * fps) / REF_PIXEL_RATE));
+  const pixelScale = (w * h) / REF_PIXELS;
+  const fpsScale = Math.sqrt(Math.max(1, fps / REF_FPS));
+  const raw = Math.round(encodingBitrate * pixelScale * fpsScale);
   return Math.max(MIN, Math.min(MAX, raw));
 }
 
@@ -31,6 +34,7 @@ function assert(cond: boolean, msg: string): void {
 
 const hd60 = scaled(BALANCED, 1920, 1080, 60);
 const hd30 = scaled(BALANCED, 1920, 1080, 30);
+const hd24 = scaled(BALANCED, 1920, 1080, 24);
 const sd24 = scaled(BALANCED, 640, 360, 24);
 
 assert(hd60 > sd24, `1080p60 (${hd60}) should exceed 640×360@24 (${sd24})`);
@@ -38,6 +42,14 @@ assert(
   Math.abs(hd30 - BALANCED) < 500_000,
   `1080p30 balanced should be ~8 Mbps, got ${hd30}`,
 );
+assert(hd24 === hd30, `24fps should not under-scale vs 30fps (got ${hd24} vs ${hd30})`);
+
+const expected60 = Math.round(BALANCED * Math.sqrt(2));
+assert(
+  Math.abs(hd60 - expected60) < 1,
+  `1080p60 should be ~√2× 30fps (${expected60}), got ${hd60}`,
+);
+assert(hd60 < BALANCED * 2, `60fps must not fully double 30fps bitrate (got ${hd60})`);
 
 assert(clampGifSpeed(undefined) === DEFAULT_GIF_SPEED, "missing → default");
 assert(clampGifSpeed(0) === GIF_SPEED_MIN, "below min clamps");

@@ -78,10 +78,18 @@ fn main() {
         "write_export_chunk",
         "finish_export",
         "abort_export",
+        "begin_export_h264_stream",
+        "write_export_h264_chunk",
+        "finish_export_h264_stream",
+        "abort_export_h264_stream",
         "mux_export_audio",
         "prepare_export_audio",
         "attach_export_audio",
         "remove_temp_file",
+        // error log
+        "log_client_error",
+        "reveal_error_log",
+        "error_log_path",
         // updater
         "check_for_updates",
     ];

@@ -11,5 +11,9 @@
     "area-picker",
     "area-frame"
   ],
-  "permissions": ["core:default"]
+  "permissions": [
+    "core:default",
+    "allow-log-client-error",
+    "allow-error-log-path"
+  ]
 }

@@ -6,12 +6,10 @@
  * of those in-flight encodes we allow before awaiting the oldest — that is the
  * backpressure valve (memory + error latency).
  *
- * Seed depth from output megapixels (more pixels → fewer concurrent frames).
- * Then nudge ±1 every few frames from EMA of composite cost vs encode wait,
- * relative to the output frame budget (`1000/fps`).
+ * Seed from output megapixels, then tighten for high fps so 60fps does not keep
+ * the same in-flight count as 30fps (half the frame budget → less GPU pressure).
+ * Adapt ±1 from composite vs encode wait EMAs, never above the fps ceiling.
  *
- * Ceiling matches a stable consumer-GPU encode queue (~48); the megapixel
- * soft-cap keeps 4K from opening that many full frames at once.
  * Backpressure awaits promises — never `requestAnimationFrame` (rAF stalls when
  * the window is backgrounded and can starve the encoder).
  */
@@ -21,22 +19,46 @@ export const ENCODE_DEPTH_MAX = 48;
 
 /** Soft cap on in-flight uncompressed frame area (~48 MP total → ~23 at 1080p). */
 const TARGET_IN_FLIGHT_MP = 48;
+/** Reference fps for depth scaling — above this, shrink in-flight count. */
+const REF_FPS = 30;
+/** Wall-clock backlog ceiling (~0.75s of frames). */
+const QUEUE_SECONDS = 0.75;
 
 const EMA_ALPHA = 0.2;
 /** How often depth may change — avoids thrashing every frame. */
 const ADAPT_EVERY = 8;
 
-export function clampEncodeDepth(n: number): number {
-  return Math.max(ENCODE_DEPTH_MIN, Math.min(ENCODE_DEPTH_MAX, Math.round(n)));
+export function clampEncodeDepth(
+  n: number,
+  max: number = ENCODE_DEPTH_MAX,
+): number {
+  const hi = Math.max(ENCODE_DEPTH_MIN, Math.min(ENCODE_DEPTH_MAX, max));
+  return Math.max(ENCODE_DEPTH_MIN, Math.min(hi, Math.round(n)));
 }
 
 /**
- * Initial queue depth from output resolution. 1080p (~2.1 MP) → ~23;
- * 4K (~8.3 MP) → ~6; small outputs hit the max.
+ * Hard ceiling from fps: ~0.75s of frames, never above {@link ENCODE_DEPTH_MAX}.
+ * 30fps → ~23; 60fps → ~45 (then megapixel / scale caps usually win first).
  */
-export function seedEncodeDepth(width: number, height: number): number {
+export function encodeDepthCeiling(fps: number): number {
+  return clampEncodeDepth(Math.max(1, fps) * QUEUE_SECONDS);
+}
+
+/**
+ * Initial queue depth. 1080p30 → ~23; 1080p60 → ~12 (fps scale);
+ * 4K → lower from megapixels.
+ */
+export function seedEncodeDepth(
+  width: number,
+  height: number,
+  fps: number = REF_FPS,
+): number {
   const mp = Math.max(1e-6, (width * height) / 1_000_000);
-  return clampEncodeDepth(TARGET_IN_FLIGHT_MP / mp);
+  const byPixels = TARGET_IN_FLIGHT_MP / mp;
+  const ceiling = encodeDepthCeiling(fps);
+  // Same resolution at 60fps → half the in-flight frames of 30fps.
+  const byFpsScale = byPixels * (REF_FPS / Math.max(fps, REF_FPS));
+  return clampEncodeDepth(Math.min(byPixels, byFpsScale, ceiling), ceiling);
 }
 
 export type AdaptEncodeDepthInput = {
@@ -44,6 +66,8 @@ export type AdaptEncodeDepthInput = {
   emaCompositeMs: number;
   emaEncodeWaitMs: number;
   frameBudgetMs: number;
+  /** Session max (fps ceiling); defaults to {@link ENCODE_DEPTH_MAX}. */
+  maxDepth?: number;
 };
 
 /**
@@ -54,8 +78,15 @@ export type AdaptEncodeDepthInput = {
  * - Composite light and encode wait ~0 → deepen (hide encode latency).
  */
 export function adaptEncodeDepth(input: AdaptEncodeDepthInput): number {
-  const { depth, emaCompositeMs, emaEncodeWaitMs, frameBudgetMs } = input;
+  const {
+    depth,
+    emaCompositeMs,
+    emaEncodeWaitMs,
+    frameBudgetMs,
+    maxDepth = ENCODE_DEPTH_MAX,
+  } = input;
   const budget = Math.max(1e-3, frameBudgetMs);
+  const max = Math.max(ENCODE_DEPTH_MIN, Math.min(ENCODE_DEPTH_MAX, maxDepth));
 
   if (emaEncodeWaitMs > budget * 0.75) {
     return Math.max(ENCODE_DEPTH_MIN, depth - 1);
@@ -64,9 +95,9 @@ export function adaptEncodeDepth(input: AdaptEncodeDepthInput): number {
     return Math.max(ENCODE_DEPTH_MIN, depth - 1);
   }
   if (emaCompositeMs < budget * 0.4 && emaEncodeWaitMs < 1) {
-    return Math.min(ENCODE_DEPTH_MAX, depth + 1);
+    return Math.min(max, depth + 1);
   }
-  return depth;
+  return Math.min(max, depth);
 }
 
 function ema(prev: number, sample: number, framesBefore: number): number {
@@ -80,6 +111,7 @@ function ema(prev: number, sample: number, framesBefore: number): number {
  */
 export class AdaptiveEncodeQueue {
   depth: number;
+  private readonly maxDepth: number;
   private readonly frameBudgetMs: number;
   private readonly pending: Promise<void>[] = [];
   private emaCompositeMs = 0;
@@ -88,13 +120,15 @@ export class AdaptiveEncodeQueue {
   private encodeWaits = 0;
 
   constructor(width: number, height: number, fps: number) {
-    this.depth = seedEncodeDepth(width, height);
+    this.maxDepth = encodeDepthCeiling(fps);
+    this.depth = seedEncodeDepth(width, height, fps);
     this.frameBudgetMs = 1000 / Math.max(1, fps);
   }
 
   /** Snapshot for logging / diagnostics. */
   stats(): {
     depth: number;
+    maxDepth: number;
     pending: number;
     frames: number;
     emaCompositeMs: number;
@@ -103,6 +137,7 @@ export class AdaptiveEncodeQueue {
   } {
     return {
       depth: this.depth,
+      maxDepth: this.maxDepth,
       pending: this.pending.length,
       frames: this.frames,
       emaCompositeMs: this.emaCompositeMs,
@@ -137,6 +172,7 @@ export class AdaptiveEncodeQueue {
         emaCompositeMs: this.emaCompositeMs,
         emaEncodeWaitMs: this.emaEncodeWaitMs,
         frameBudgetMs: this.frameBudgetMs,
+        maxDepth: this.maxDepth,
       });
     }
   }

@@ -9,6 +9,7 @@ pub mod captions;
 mod capabilities;
 mod commands;
 mod proc;
+mod export_h264;
 mod webview_gpu;
 #[cfg(any(
     all(target_os = "macos", feature = "scap-capture"),
@@ -58,6 +59,7 @@ mod area_picker {
 mod backgrounds;
 mod cursor;
 mod error;
+mod error_log;
 mod media_protocol;
 mod permissions;
 mod project;
@@ -171,12 +173,20 @@ fn register_global_hotkey(app: &tauri::AppHandle) {
 }
 
 fn init_tracing() {
+    use tracing_subscriber::filter::LevelFilter;
+    use tracing_subscriber::fmt;
+    use tracing_subscriber::prelude::*;
     use tracing_subscriber::EnvFilter;
+
+    crate::error_log::init();
+
     let filter = EnvFilter::try_from_default_env()
         .unwrap_or_else(|_| EnvFilter::new("info,desktop_lib=debug"));
-    // `try_init` so tests / repeated inits don't panic.
-    let _ = tracing_subscriber::fmt()
-        .with_env_filter(filter)
-        .with_target(false)
+    // Console keeps normal verbosity for `tauri dev`; the file layer is ERROR-only.
+    let _ = tracing_subscriber::registry()
+        .with(fmt::layer().with_target(false).with_filter(filter))
+        .with(
+            crate::error_log::ErrorFileLayer.with_filter(LevelFilter::ERROR),
+        )
         .try_init();
 }
