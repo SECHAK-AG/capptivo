@@ -46,30 +46,45 @@ assert(
 // the property that stops a machine from having no working route at all.
 for (const annexBVerified of [true, false]) {
   for (const forceRgba of [true, false]) {
-    const routes = planMp4Routes({ annexBVerified, forceRgba });
-    assert(routes.length > 0, "a plan always has at least one route");
+    for (const windows of [true, false]) {
+      const routes = planMp4Routes({ windows, annexBVerified, forceRgba });
+      assert(routes.length > 0, "a plan always has at least one route");
+      assert(
+        routes[routes.length - 1] === "rgba-ffmpeg",
+        "every plan ends on the no-WebCodecs route",
+      );
+      assert(
+        new Set(routes).size === routes.length,
+        "a plan never repeats a route",
+      );
+    }
+  }
+}
+
+// Windows is unconditional: WebView2's encoder wedges partway through a real
+// export, so a verified probe result there is not evidence of anything.
+for (const annexBVerified of [true, false]) {
+  for (const forceRgba of [true, false]) {
     assert(
-      routes[routes.length - 1] === "rgba-ffmpeg",
-      "every plan ends on the no-WebCodecs route",
-    );
-    assert(
-      new Set(routes).size === routes.length,
-      "a plan never repeats a route",
+      planMp4Routes({ windows: true, annexBVerified, forceRgba }).join() ===
+        "rgba-ffmpeg",
+      "Windows never attempts Annex-B, even if an encoder verified",
     );
   }
 }
 
 assert(
-  planMp4Routes({ annexBVerified: true, forceRgba: false })[0] ===
+  planMp4Routes({ windows: false, annexBVerified: true, forceRgba: false })[0] ===
     "annexb-ffmpeg",
-  "a verified Annex-B encoder is used first",
+  "a verified Annex-B encoder is used first off Windows",
 );
 assert(
-  planMp4Routes({ annexBVerified: false, forceRgba: false }).length === 1,
+  planMp4Routes({ windows: false, annexBVerified: false, forceRgba: false })
+    .length === 1,
   "without a verified encoder there is nothing to try before RGBA",
 );
 assert(
-  planMp4Routes({ annexBVerified: true, forceRgba: true }).join() ===
+  planMp4Routes({ windows: false, annexBVerified: true, forceRgba: true }).join() ===
     "rgba-ffmpeg",
   "the force override skips WebCodecs entirely",
 );

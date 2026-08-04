@@ -71,13 +71,23 @@ export type Mp4Route = "annexb-ffmpeg" | "rgba-ffmpeg";
  * WebCodecs dependency, so it is the one that must not be reachable-only-
  * sometimes. A caller that exhausts this list has a genuine failure to report,
  * not another fallback to invent.
+ *
+ * Windows never attempts Annex-B. WebView2's H.264 encoder accepts
+ * `configure()` and frames and then stops emitting chunks partway into a real
+ * export, so the route cost ~9s of stall detection plus a discarded partial
+ * compose on every single export while never once succeeding. It is not
+ * probed, because probing it is the cost — the caller is expected to skip the
+ * probe entirely rather than discard its result.
  */
 export function planMp4Routes(input: {
+  /** Windows (WebView2) — Annex-B is known-dead there; see above. */
+  windows: boolean;
   /** A *verified* Annex-B encoder exists (not merely a declared one). */
   annexBVerified: boolean;
   /** Support/debug override: skip WebCodecs entirely. */
   forceRgba: boolean;
 }): readonly Mp4Route[] {
+  if (input.windows) return ["rgba-ffmpeg"];
   if (input.forceRgba) return ["rgba-ffmpeg"];
   if (input.annexBVerified) return ["annexb-ffmpeg", "rgba-ffmpeg"];
   return ["rgba-ffmpeg"];

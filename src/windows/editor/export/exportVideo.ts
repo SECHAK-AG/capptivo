@@ -348,11 +348,15 @@ async function exportMp4(
   signal: AbortSignal,
 ): Promise<void> {
   const forceRgba = import.meta.env.VITE_CAPPTIVO_RAWVIDEO_EXPORT === "1";
+  // Skipped outright, not merely ignored: the probe spins up a real encoder at
+  // full resolution, so paying for it and discarding the answer would keep most
+  // of the cost this skip exists to remove.
+  const skipAnnexB = isWindows || forceRgba;
 
   // Verified, not merely declared: this is a real encode of real frames with a
   // deadline, and it is the difference between failing in a few hundred
   // milliseconds and freezing an export at 1% forever.
-  const annexBTuning = forceRgba
+  const annexBTuning = skipAnnexB
     ? null
     : await probeAnnexBConfig(
         resolved.width,
@@ -364,6 +368,7 @@ async function exportMp4(
   throwIfAborted(signal);
 
   const routes = planMp4Routes({
+    windows: isWindows,
     annexBVerified: annexBTuning != null,
     forceRgba,
   });
