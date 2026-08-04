@@ -109,6 +109,32 @@ export type FrameCompositor = {
    * conversion it was already doing, instead of costing a full extra copy in JS.
    */
   readPixelsInto(target: Uint8Array): boolean;
+  /**
+   * Queue an asynchronous GPU→CPU read of the current output frame and return a
+   * ticket, or `null` when the renderer cannot do it (WebGPU backend, or no
+   * WebGL2 pixel-pack buffer) — the caller then falls back to
+   * {@link FrameCompositor.readPixelsInto}.
+   *
+   * Returns immediately: the pixels are *not* in CPU memory yet. Pair every
+   * ticket with {@link FrameCompositor.tryFinishReadPixels}; `dispose()` frees
+   * anything still outstanding.
+   *
+   * Same orientation contract as `readPixelsInto` — rows arrive bottom-up.
+   */
+  beginReadPixels(): number | null;
+  /**
+   * Poll a ticket from {@link FrameCompositor.beginReadPixels}.
+   *
+   * `"pending"` — the fence has not signalled; do other work and retry. Never
+   * block on it: waiting here reintroduces the stall the async path exists to
+   * remove. `"done"` — bottom-up RGBA has been copied into `target` and the slot
+   * is released. `"failed"` — unknown ticket, wrong `target` size, or the GL
+   * context is gone.
+   */
+  tryFinishReadPixels(
+    ticket: number,
+    target: Uint8Array,
+  ): "pending" | "done" | "failed";
   backend: "pixi";
   resize(
     width: number,

@@ -471,6 +471,9 @@ export async function createPixiFrameCompositor(
     // After CONTEXT_LOST, Pixi destroy can spam
     // INVALID_OPERATION: loseContext: context already lost — swallow and move on.
     try {
+      // Before the renderer goes: an outstanding fence or pack buffer would
+      // otherwise pin GPU memory for the life of the editor session.
+      releaseAllPackSlots();
       screenTexture.destroy();
       faceTexture.destroy();
       background.destroy();
@@ -538,6 +541,108 @@ export async function createPixiFrameCompositor(
     return true;
   }
 
+  /**
+   * One outstanding asynchronous read: a pixel-pack buffer holding the pixels
+   * and a fence that says when the GPU has actually finished writing them.
+   */
+  type PackSlot = {
+    pbo: WebGLBuffer;
+    sync: WebGLSync;
+    /** Bytes the slot was sized for — a resize mid-export invalidates it. */
+    byteLength: number;
+  };
+  const packSlots = new Map<number, PackSlot>();
+  let nextTicket = 1;
+
+  function releaseSlot(gl: WebGL2RenderingContext, ticket: number): void {
+    const slot = packSlots.get(ticket);
+    if (!slot) return;
+    packSlots.delete(ticket);
+    gl.deleteSync(slot.sync);
+    gl.deleteBuffer(slot.pbo);
+  }
+
+  function beginReadPixels(): number | null {
+    const gl = glContext();
+    if (!gl) return null;
+
+    const byteLength = outputWidth * outputHeight * 4;
+    const pbo = gl.createBuffer();
+    if (!pbo) return null;
+
+    const previousFbo = gl.getParameter(
+      gl.FRAMEBUFFER_BINDING,
+    ) as WebGLFramebuffer | null;
+    gl.bindBuffer(gl.PIXEL_PACK_BUFFER, pbo);
+    gl.bufferData(gl.PIXEL_PACK_BUFFER, byteLength, gl.STREAM_READ);
+    gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+    // With a pack buffer bound, the last argument is a byte *offset* into it,
+    // not a CPU array — this returns without waiting for the transfer.
+    gl.readPixels(
+      0,
+      0,
+      outputWidth,
+      outputHeight,
+      gl.RGBA,
+      gl.UNSIGNED_BYTE,
+      0,
+    );
+    const sync = gl.fenceSync(gl.SYNC_GPU_COMMANDS_COMPLETE, 0);
+    // Restore Pixi's bindings: it caches its own state and does not expect us
+    // to have changed either the framebuffer or the pack buffer.
+    gl.bindBuffer(gl.PIXEL_PACK_BUFFER, null);
+    gl.bindFramebuffer(gl.FRAMEBUFFER, previousFbo);
+
+    if (!sync) {
+      gl.deleteBuffer(pbo);
+      return null;
+    }
+
+    const ticket = nextTicket++;
+    packSlots.set(ticket, { pbo, sync, byteLength });
+    return ticket;
+  }
+
+  function tryFinishReadPixels(
+    ticket: number,
+    target: Uint8Array,
+  ): "pending" | "done" | "failed" {
+    const gl = glContext();
+    if (!gl) return "failed";
+    const slot = packSlots.get(ticket);
+    if (!slot) return "failed";
+    if (target.length !== slot.byteLength) {
+      releaseSlot(gl, ticket);
+      return "failed";
+    }
+
+    // Timeout 0 — poll, never block. A non-zero timeout here would put the
+    // synchronous stall straight back into the loop.
+    const status = gl.clientWaitSync(slot.sync, 0, 0);
+    if (status === gl.TIMEOUT_EXPIRED) return "pending";
+    if (status === gl.WAIT_FAILED) {
+      releaseSlot(gl, ticket);
+      return "failed";
+    }
+    // ALREADY_SIGNALED / CONDITION_SATISFIED — the pixels are there.
+
+    gl.bindBuffer(gl.PIXEL_PACK_BUFFER, slot.pbo);
+    gl.getBufferSubData(gl.PIXEL_PACK_BUFFER, 0, target);
+    gl.bindBuffer(gl.PIXEL_PACK_BUFFER, null);
+    releaseSlot(gl, ticket);
+    return "done";
+  }
+
+  /** Drop every outstanding pack buffer and fence — called from `dispose`. */
+  function releaseAllPackSlots(): void {
+    const gl = glContext();
+    if (!gl) {
+      packSlots.clear();
+      return;
+    }
+    for (const ticket of [...packSlots.keys()]) releaseSlot(gl, ticket);
+  }
+
   return {
     get canvas() {
       return readbackCanvas ?? pixiCanvas;
@@ -546,6 +651,8 @@ export async function createPixiFrameCompositor(
       return readbackCtx;
     },
     readPixelsInto,
+    beginReadPixels,
+    tryFinishReadPixels,
     backend: "pixi",
     resize,
     compose,

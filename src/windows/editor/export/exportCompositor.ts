@@ -46,6 +46,15 @@ export type ExportCompositor = {
    * `FrameCompositor.readPixelsInto` for the orientation contract.
    */
   readPixelsInto: (target: Uint8Array) => boolean;
+  /**
+   * Queue an asynchronous readback; `null` when unsupported. Pair with
+   * `tryFinishReadPixels`. See `FrameCompositor` for the full contract.
+   */
+  beginReadPixels: () => number | null;
+  tryFinishReadPixels: (
+    ticket: number,
+    target: Uint8Array,
+  ) => "pending" | "done" | "failed";
   /** Which compositor won — decode strategy tunes itself off this. */
   backend: FrameCompositor["backend"];
   video: HTMLVideoElement;
@@ -389,6 +398,9 @@ export async function createExportCompositorFromMedia(
     canvas: frame.canvas,
     ctx: frame.readback,
     readPixelsInto: (target) => frame.readPixelsInto(target),
+    beginReadPixels: () => frame.beginReadPixels(),
+    tryFinishReadPixels: (ticket, target) =>
+      frame.tryFinishReadPixels(ticket, target),
     backend: frame.backend,
     stats: () => frame.stats(),
     uploadStats: () => frame.uploadStats(),

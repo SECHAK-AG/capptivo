@@ -19,18 +19,14 @@ import { throwIfAborted } from "./exportCancel";
 import { FLUSH_STALL_MS, StallWatchdog, withDeadline } from "./exportStall";
 import { throttledProgress } from "./exportProgress";
 import { FramePool } from "./framePool";
+import {
+  ASYNC_READBACK_RING_SIZE,
+  FRAME_POOL_SIZE,
+  InFlightReadbacks,
+} from "./asyncReadbackRing";
 import type { ResolvedExportParams } from "./exportSettings";
 import { GpuContextLostError } from "../render/gpuLifecycle";
 import { describeError } from "../../recorder/store";
-
-/**
- * In-flight frames, and therefore the export's peak frame memory: this many
- * buffers of `width * height * 4`. Three is enough to keep the IPC pipe fed
- * while one frame is being composed and one is being written, and at 1080p it
- * caps frame memory at ~25 MB. The pool is the only limit — there is no
- * separate pending-write counter to drift out of agreement with it.
- */
-const FRAME_POOL_SIZE = 3;
 
 function throwIfGpuLost(isLost: () => boolean): void {
   if (isLost()) throw new GpuContextLostError();
@@ -83,6 +79,8 @@ export async function renderMp4ViaFfmpegRawvideo(
     : await createExportCompositor(screenUrl, faceCam, width, height);
   const {
     readPixelsInto,
+    beginReadPixels,
+    tryFinishReadPixels,
     video,
     camera,
     segments,
@@ -159,6 +157,54 @@ export async function renderMp4ViaFfmpegRawvideo(
     let readbackMs = 0;
     const loopStart = performance.now();
 
+    /**
+     * Frames whose pixels the GPU is still copying out. Composing frame N while
+     * frame N-1 drains is the whole point: a synchronous read has to flush the
+     * command queue and wait, which idles the GPU for the entire copy.
+     */
+    const inFlight = new InFlightReadbacks(ASYNC_READBACK_RING_SIZE);
+    /**
+     * Latched, not re-tested per frame: whether the renderer can do fenced reads
+     * is a property of the GL context, so a single `null` means every later call
+     * would also return `null`.
+     */
+    let asyncReadback = true;
+
+    /**
+     * Complete the oldest outstanding readback and hand it to ffmpeg. Blocks
+     * only on that one frame's fence — by the time we ask, the ring depth has
+     * usually given it long enough to have already signalled.
+     */
+    const collectOldest = async (): Promise<void> => {
+      const head = inFlight.peek();
+      if (!head) return;
+      const watchdog = new StallWatchdog("rawvideo GPU readback");
+      const waitStart = performance.now();
+      for (;;) {
+        const status = tryFinishReadPixels(head.ticket, head.buffer);
+        if (status === "done") {
+          readbackMs += performance.now() - waitStart;
+          inFlight.shift();
+          enqueueFrame(head.buffer);
+          framesEncoded += 1;
+          progress(framesEncoded);
+          return;
+        }
+        if (status === "failed") {
+          inFlight.shift();
+          pool.release(head.buffer);
+          throw new Error("rawvideo readback failed mid-export");
+        }
+        // Pending. Never spin on the fence with a blocking wait — that is the
+        // stall this path exists to remove.
+        watchdog.check(progressToken);
+        throwIfAborted(signal);
+        throwIfGpuLost(isGpuLost);
+        if (writeError) throw writeError;
+        await yieldToMain();
+      }
+    };
+
     for (const t of frameTimes) {
       throwIfAborted(signal);
       if (writeError) throw writeError;
@@ -185,6 +231,11 @@ export async function renderMp4ViaFfmpegRawvideo(
       drawAt(t);
       throwIfGpuLost(isGpuLost);
 
+      // Free a ring slot *before* taking a buffer, so the pool can never be
+      // drained by frames that are only waiting on a fence — the one shape of
+      // backpressure the write chain below cannot relieve.
+      if (inFlight.isFull) await collectOldest();
+
       // Backpressure is the pool running dry: every buffer is still in flight
       // to FFmpeg. Watched, because an ffmpeg child that stops draining its
       // stdin pipe would otherwise park this loop forever with the progress bar
@@ -201,16 +252,27 @@ export async function renderMp4ViaFfmpegRawvideo(
         if (!buf) await yieldToMain();
       }
 
-      const readStart = performance.now();
-      if (!readPixelsInto(buf)) {
-        pool.release(buf);
-        throw new Error("rawvideo readback failed mid-export");
+      const ticket = asyncReadback ? beginReadPixels() : null;
+      if (ticket == null) {
+        asyncReadback = false;
+        // Drain first if the fenced path is failing over mid-export: everything
+        // still in the ring was composed before this frame, and writing this one
+        // ahead of them would reorder the video.
+        while (inFlight.size > 0) await collectOldest();
+        const readStart = performance.now();
+        if (!readPixelsInto(buf)) {
+          pool.release(buf);
+          throw new Error("rawvideo readback failed mid-export");
+        }
+        readbackMs += performance.now() - readStart;
+        enqueueFrame(buf);
+        framesEncoded += 1;
+        progress(framesEncoded);
+      } else {
+        // Ordering is the contract: frames leave this ring in the order they
+        // were composed, so ffmpeg's stdin stays a straight frame sequence.
+        inFlight.push({ ticket, buffer: buf });
       }
-      readbackMs += performance.now() - readStart;
-
-      enqueueFrame(buf);
-      framesEncoded += 1;
-      progress(framesEncoded);
 
       const decision = shouldYieldNow(performance.now(), lastYieldAt);
       if (decision.shouldYield) {
@@ -223,6 +285,11 @@ export async function renderMp4ViaFfmpegRawvideo(
       }
     }
 
+    // Every composed frame must reach ffmpeg: the tail of the pipeline is still
+    // on the GPU when the last frame is drawn, and dropping it would truncate
+    // the video by the ring depth.
+    while (inFlight.size > 0) await collectOldest();
+
     await withDeadline(writeChain, FLUSH_STALL_MS, "rawvideo frame writes");
     if (writeError) throw writeError;
     if (framesEncoded === 0) {
@@ -234,7 +301,8 @@ export async function renderMp4ViaFfmpegRawvideo(
     console.info(
       `[export] ffmpeg-rawvideo done in ${(wallMs / 1000).toFixed(1)}s ` +
         `(${(framesEncoded / (wallMs / 1000)).toFixed(1)} fps) — ` +
-        `readback ${(readbackMs / Math.max(1, framesEncoded)).toFixed(2)}ms/frame ` +
+        `readback(${asyncReadback ? "async" : "sync"}) ` +
+        `${(readbackMs / Math.max(1, framesEncoded)).toFixed(2)}ms/frame ` +
         `(${((readbackMs / Math.max(1, wallMs)) * 100).toFixed(1)}% of wall), ` +
         `yields=${yields} yieldMs=${yieldMs.toFixed(0)}` +
         (uploads
