@@ -1,28 +1,62 @@
 /**
  * MP4 export route selection.
  *
- * Primary path everywhere (incl. Windows): WebCodecs Annex-B → ffmpeg `-c copy`
- * — compressed chunks over IPC, same shape as Recordly breeze. The old Windows
- * default (RGBA → ffmpeg re-encode) ships ~8 MB/frame and triggers WebView2 TDR.
- *
- * RGBA Path B is opt-in (`VITE_CAPPTIVO_RAWVIDEO_EXPORT=1`) or a last-resort
- * when Annex-B is unavailable. In-webview mediabunny MP4 mux is disabled on
- * Windows (documented failure mode).
+ * Contract:
+ * - Everywhere: Annex-B WebCodecs → ffmpeg `-c copy` (Breeze-style mux).
+ * - Windows (WebView2): software WebCodecs only, DOM canvas, stall → one
+ *   RGBA→ffmpeg escape, never in-webview mux. HW WebCodecs is unreliable.
+ * - macOS/Linux: prefer-hardware first; in-webview mux allowed as last resort.
  *
  * Pure on purpose — selfchecks run under plain Node without Vite aliases.
  */
 
-/** Force RGBA → ffmpeg encode as the first attempt. */
+export type AnnexBHwMode =
+  | "prefer-hardware"
+  | "no-preference"
+  | "prefer-software";
+
+/**
+ * WebCodecs hardwareAcceleration probe order for Annex-B export.
+ * Windows never probes prefer-hardware (WebView2 stalls mid-export).
+ */
+export function annexBHardwareProbeOrder(
+  windows: boolean,
+): readonly AnnexBHwMode[] {
+  if (windows) {
+    return ["prefer-software", "no-preference"];
+  }
+  return ["prefer-hardware", "no-preference", "prefer-software"];
+}
+
+/**
+ * OffscreenCanvas export surface. Off on Windows — dual GL + Offscreen is a
+ * WebView2 context-loss magnet; DOM canvas + GPU Pixi is the stable contract.
+ */
+export function shouldUseOffscreenExportCanvas(input: {
+  windows: boolean;
+  /** Session latch after a prior Offscreen/context-loss failure. */
+  sessionPreferDom: boolean;
+  /** Explicit caller override (`false` forces DOM). */
+  optionOffscreen?: boolean;
+}): boolean {
+  if (input.windows) return false;
+  if (input.sessionPreferDom) return false;
+  if (input.optionOffscreen === false) return false;
+  return true;
+}
+
+/** Force RGBA → ffmpeg encode as the first attempt (debug / support only). */
 export function shouldForceFfmpegRawvideoEncode(force: boolean): boolean {
   return force;
 }
 
 /**
- * After Annex-B is missing or fails, try RGBA → ffmpeg encode.
- * Always available as the native escape hatch (encode outside the webview).
+ * After Annex-B is missing or fails, try RGBA → ffmpeg encode once.
+ * Not retried if it was already forced as the first attempt.
  */
-export function shouldTryFfmpegRawvideoFallback(forceAlreadyTried: boolean): boolean {
-  // If the user forced Path B first and it failed, don't retry the same path.
+export function shouldTryFfmpegRawvideoFallback(
+  forceAlreadyTried: boolean,
+): boolean {
   return !forceAlreadyTried;
 }
 
