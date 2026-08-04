@@ -31,6 +31,8 @@ const BLOCKED_OWNER_BUNDLES: &[&str] = &[
 pub struct PickerWindow {
     pub id: u32,
     pub title: String,
+    pub width: u32,
+    pub height: u32,
 }
 
 pub fn parse_window_id(source_id: &str) -> Option<u32> {
@@ -122,34 +124,32 @@ pub fn display_for_window_frame(
     best.map(|(id, _)| id).or_else(|| display_for_rect(frame))
 }
 
-/// Pixel dimensions for a window at the display's backing scale (picker estimate).
-pub fn window_pixel_size(window_id: u32) -> Option<(u32, u32)> {
-    let content = shareable_content().ok()?;
-    let window = content.windows().into_iter().find(|w| w.get_window_id() == window_id)?;
-    let displays = content.displays();
-    let frame = window.get_frame();
-    let rect = CaptureRect {
-        x: frame.origin.x,
-        y: frame.origin.y,
-        width: frame.size.width,
-        height: frame.size.height,
-    };
-    let display_id = display_for_window_frame(&rect, &displays)?;
-    let scale = display_scale_factor(display_id);
-    Some(points_to_even_pixels(rect.width, rect.height, scale))
-}
-
 /// Windows a user would reasonably record — not desktop chrome or our own UI.
 pub fn recordable_windows() -> AppResult<Vec<PickerWindow>> {
     let content = shareable_content()?;
+    let displays = content.displays();
     let own_pid = std::process::id() as i32;
     let mut windows: Vec<PickerWindow> = content
         .windows()
         .iter()
         .filter(|w| is_recordable_window(w, own_pid))
-        .map(|w| PickerWindow {
-            id: w.get_window_id(),
-            title: window_label(w),
+        .map(|w| {
+            let frame = w.get_frame();
+            let rect = CaptureRect {
+                x: frame.origin.x,
+                y: frame.origin.y,
+                width: frame.size.width,
+                height: frame.size.height,
+            };
+            let (width, height) = display_for_window_frame(&rect, &displays)
+                .map(|id| points_to_even_pixels(rect.width, rect.height, display_scale_factor(id)))
+                .unwrap_or((0, 0));
+            PickerWindow {
+                id: w.get_window_id(),
+                title: window_label(w),
+                width,
+                height,
+            }
         })
         .collect();
 
