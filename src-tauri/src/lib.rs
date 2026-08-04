@@ -10,6 +10,7 @@ mod capabilities;
 mod commands;
 mod proc;
 mod export_h264;
+mod export_rawvideo;
 mod webview_gpu;
 #[cfg(any(
     all(target_os = "macos", feature = "scap-capture"),

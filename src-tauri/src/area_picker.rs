@@ -171,6 +171,19 @@ fn finish_area_pick(app: &AppHandle) {
 }
 
 fn virtual_desktop(app: &AppHandle) -> AppResult<VirtualDesktop> {
+    #[cfg(target_os = "windows")]
+    {
+        let _ = app;
+        return windows_virtual_desktop();
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        tauri_virtual_desktop(app)
+    }
+}
+
+#[cfg(not(target_os = "windows"))]
+fn tauri_virtual_desktop(app: &AppHandle) -> AppResult<VirtualDesktop> {
     let monitors = app
         .available_monitors()
         .map_err(|e| AppError::Other(format!("monitors: {e}")))?;
@@ -205,7 +218,34 @@ fn virtual_desktop(app: &AppHandle) -> AppResult<VirtualDesktop> {
     })
 }
 
-/// Map a top-left logical rect (Tauri monitor space) to `display:{id}` + crop.
+/// Windows: same Win32/`windows-capture` monitors as WGC crop conversion.
+#[cfg(target_os = "windows")]
+fn windows_virtual_desktop() -> AppResult<VirtualDesktop> {
+    let monitors = windows_logical_monitors();
+    if monitors.is_empty() {
+        return Err(AppError::Other("no displays found".into()));
+    }
+
+    let mut min_x = f64::MAX;
+    let mut min_y = f64::MAX;
+    let mut max_x = f64::MIN;
+    let mut max_y = f64::MIN;
+    for (_, x, y, w, h) in &monitors {
+        min_x = min_x.min(*x);
+        min_y = min_y.min(*y);
+        max_x = max_x.max(x + w);
+        max_y = max_y.max(y + h);
+    }
+
+    Ok(VirtualDesktop {
+        x: min_x,
+        y: min_y,
+        width: (max_x - min_x).max(1.0),
+        height: (max_y - min_y).max(1.0),
+    })
+}
+
+/// Map a top-left logical rect (picker window space) to `display:{id}` + crop.
 fn resolve_selection(
     x: f64,
     y: f64,
@@ -223,6 +263,94 @@ fn resolve_selection(
     let cx = x + width / 2.0;
     let cy = y + height / 2.0;
 
+    #[cfg(target_os = "windows")]
+    {
+        let _ = app;
+        return resolve_selection_windows(cx, cy, x, y, width, height, MIN);
+    }
+    #[cfg(target_os = "macos")]
+    {
+        resolve_selection_tauri(app, cx, cy, x, y, width, height, MIN)
+    }
+}
+
+#[cfg(target_os = "windows")]
+fn resolve_selection_windows(
+    cx: f64,
+    cy: f64,
+    x: f64,
+    y: f64,
+    width: f64,
+    height: f64,
+    min: f64,
+) -> AppResult<CaptureAreaSelection> {
+    for (id, mx, my, mw, mh) in windows_logical_monitors() {
+        if cx < mx || cx >= mx + mw || cy < my || cy >= my + mh {
+            continue;
+        }
+
+        let mut crop_x = x - mx;
+        let mut crop_y = y - my;
+        let mut crop_w = width;
+        let mut crop_h = height;
+
+        if crop_x < 0.0 {
+            crop_w += crop_x;
+            crop_x = 0.0;
+        }
+        if crop_y < 0.0 {
+            crop_h += crop_y;
+            crop_y = 0.0;
+        }
+        if crop_x + crop_w > mw {
+            crop_w = mw - crop_x;
+        }
+        if crop_y + crop_h > mh {
+            crop_h = mh - crop_y;
+        }
+
+        if crop_w < min || crop_h < min {
+            return Err(AppError::Other("selection too small after clamping".into()));
+        }
+
+        let selection = CaptureAreaSelection {
+            source_id: format!("display:{id}"),
+            crop: CaptureCrop {
+                x: crop_x,
+                y: crop_y,
+                width: crop_w,
+                height: crop_h,
+            },
+        };
+        tracing::info!(
+            source_id = %selection.source_id,
+            crop_x = selection.crop.x,
+            crop_y = selection.crop.y,
+            crop_w = selection.crop.width,
+            crop_h = selection.crop.height,
+            monitor_w = mw,
+            monitor_h = mh,
+            "area selection resolved (Win32 geometry)"
+        );
+        return Ok(selection);
+    }
+
+    Err(AppError::InvalidSource(
+        "selection is outside all displays".into(),
+    ))
+}
+
+#[cfg(target_os = "macos")]
+fn resolve_selection_tauri(
+    app: &AppHandle,
+    cx: f64,
+    cy: f64,
+    x: f64,
+    y: f64,
+    width: f64,
+    height: f64,
+    min: f64,
+) -> AppResult<CaptureAreaSelection> {
     let monitors = app
         .available_monitors()
         .map_err(|e| AppError::Other(format!("monitors: {e}")))?;
@@ -244,7 +372,6 @@ fn resolve_selection(
         let mut crop_w = width;
         let mut crop_h = height;
 
-        // Clamp to the monitor / display bounds.
         if crop_x < 0.0 {
             crop_w += crop_x;
             crop_x = 0.0;
@@ -260,11 +387,11 @@ fn resolve_selection(
             crop_h = mh - crop_y;
         }
 
-        if crop_w < MIN || crop_h < MIN {
+        if crop_w < min || crop_h < min {
             return Err(AppError::Other("selection too small after clamping".into()));
         }
 
-        return Ok(CaptureAreaSelection {
+        let selection = CaptureAreaSelection {
             source_id,
             crop: CaptureCrop {
                 x: crop_x,
@@ -272,15 +399,28 @@ fn resolve_selection(
                 width: crop_w,
                 height: crop_h,
             },
-        });
+        };
+        tracing::info!(
+            source_id = %selection.source_id,
+            crop_x = selection.crop.x,
+            crop_y = selection.crop.y,
+            crop_w = selection.crop.width,
+            crop_h = selection.crop.height,
+            monitor_w = mw,
+            monitor_h = mh,
+            scale,
+            "area selection resolved"
+        );
+        return Ok(selection);
     }
 
-    Err(AppError::InvalidSource("selection is outside all displays".into()))
+    Err(AppError::InvalidSource(
+        "selection is outside all displays".into(),
+    ))
 }
 
 /// Map a logical monitor rect (Tauri space) to the backend's `display:{id}`
-/// source id. This is the one genuinely per-OS piece of the picker: everything
-/// else runs on Tauri's monitor APIs.
+/// source id. macOS only — Windows resolve walks Win32 monitors directly.
 #[cfg(target_os = "macos")]
 fn match_display_source(mx: f64, my: f64, mw: f64, mh: f64) -> AppResult<String> {
     let mut best: Option<(u32, f64)> = None;
@@ -298,48 +438,10 @@ fn match_display_source(mx: f64, my: f64, mw: f64, mh: f64) -> AppResult<String>
         .ok_or_else(|| AppError::InvalidSource("no display matched selection".into()))
 }
 
-#[cfg(target_os = "windows")]
-fn match_display_source(mx: f64, my: f64, mw: f64, mh: f64) -> AppResult<String> {
-    let mut best: Option<(isize, f64)> = None;
-    for (id, lx, ly, lw, lh) in windows_logical_monitors() {
-        let overlap = rect_overlap(mx, my, mw, mh, lx, ly, lw, lh);
-        if overlap > 0.0 {
-            let prev = best.map(|(_, o)| o).unwrap_or(0.0);
-            if overlap > prev {
-                best = Some((id, overlap));
-            }
-        }
-    }
-    best.map(|(id, _)| format!("display:{id}"))
-        .ok_or_else(|| AppError::InvalidSource("no display matched selection".into()))
-}
-
-/// Every monitor as `(hmonitor, logical x/y/w/h)` — the same logical space the
-/// picker geometry above is computed in.
+/// Every monitor as `(hmonitor, logical x/y/w/h)` — same space as WGC crop.
 #[cfg(target_os = "windows")]
 fn windows_logical_monitors() -> Vec<(isize, f64, f64, f64, f64)> {
-    use crate::recorder::backend::win_preview;
-    use windows::Win32::Graphics::Gdi::HMONITOR;
-
-    let Ok(monitors) = windows_capture::monitor::Monitor::enumerate() else {
-        return Vec::new();
-    };
-    monitors
-        .into_iter()
-        .filter_map(|m| {
-            let id = m.as_raw_hmonitor() as isize;
-            let hmonitor = HMONITOR(m.as_raw_hmonitor());
-            let rect = win_preview::monitor_rect(hmonitor)?;
-            let scale = win_preview::monitor_scale(hmonitor);
-            Some((
-                id,
-                rect.x / scale,
-                rect.y / scale,
-                rect.width / scale,
-                rect.height / scale,
-            ))
-        })
-        .collect()
+    crate::recorder::backend::win_preview::logical_monitors()
 }
 
 fn rect_overlap(ax: f64, ay: f64, aw: f64, ah: f64, bx: f64, by: f64, bw: f64, bh: f64) -> f64 {
@@ -358,16 +460,31 @@ pub fn show_area_frame_guide(app: &AppHandle, selection: &CaptureAreaSelection) 
     let bounds = selection_frame_bounds(app, selection)?;
     open_area_frame_window(app, &bounds)?;
     let Some(win) = app.get_webview_window(AREA_FRAME_LABEL) else {
-        return Ok(());
+        return Err(AppError::Other("area frame window missing after open".into()));
     };
-    // Fail closed: an interactive always-on-top frame eats the desktop.
-    if let Err(e) = win.set_ignore_cursor_events(true) {
-        tracing::warn!(%e, "area frame click-through failed; hiding guide");
+    // Must be click-through: an interactive always-on-top frame eats the desktop.
+    win.set_ignore_cursor_events(true).map_err(|e| {
         hide_area_frame_guide(app);
-        return Ok(());
-    }
+        AppError::Other(format!(
+            "area guide could not enable click-through: {e}"
+        ))
+    })?;
     let _ = win.set_always_on_top(true);
     crate::windows::exclude_overlay_from_capture(&win);
+    let scale = win.scale_factor().unwrap_or(1.0);
+    tracing::info!(
+        source_id = %selection.source_id,
+        crop_x = selection.crop.x,
+        crop_y = selection.crop.y,
+        crop_w = selection.crop.width,
+        crop_h = selection.crop.height,
+        frame_x = bounds.x,
+        frame_y = bounds.y,
+        frame_w = bounds.width,
+        frame_h = bounds.height,
+        scale,
+        "area frame guide shown"
+    );
     let _ = win.show();
     Ok(())
 }

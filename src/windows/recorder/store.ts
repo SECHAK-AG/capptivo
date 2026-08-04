@@ -96,6 +96,8 @@ interface RecorderStore {
   requestCameraAccess: () => Promise<void>;
   setCaptureMode: (mode: CaptureMode) => void;
   pickArea: () => Promise<void>;
+  /** Hide crop guide and leave area mode (Esc / dismiss). */
+  clearAreaSelection: () => void;
   selectSource: (id: string) => void;
   setOption: <K extends keyof CaptureOptions>(
     key: K,
@@ -501,7 +503,13 @@ export const useRecorderStore = create<RecorderStore>((set, get) => {
         areaSelection: selection,
         selectedSourceId: selection.sourceId,
       });
-      await commands.showAreaFrameGuide(selection);
+      try {
+        await commands.showAreaFrameGuide(selection);
+      } catch (guideErr) {
+        // Selection is still valid for record — surface guide failure so friends
+        // can see click-through / DPI issues in the HUD + error log.
+        reportError(describeError(guideErr));
+      }
     } catch (e) {
       const message = describeError(e);
       if (!/cancel/i.test(message)) {
@@ -510,6 +518,11 @@ export const useRecorderStore = create<RecorderStore>((set, get) => {
         void commands.hideAreaFrameGuide().catch(() => undefined);
       }
     }
+  },
+
+  clearAreaSelection() {
+    void commands.hideAreaFrameGuide().catch(() => undefined);
+    resetAreaCapture(set, get);
   },
 
   selectSource(id) {

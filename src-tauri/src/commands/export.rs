@@ -7,6 +7,7 @@
 
 use crate::error::{AppError, AppResult};
 use crate::export_h264::H264StreamMuxer;
+use crate::export_rawvideo::RawvideoStreamEncoder;
 use crate::recorder::encoder::{
     attach_export_audio as run_attach_export_audio,
     mux_export_audio as run_mux_export_audio,
@@ -366,6 +367,81 @@ pub fn abort_export_h264_stream(
     if let Some(muxer) = state.h264_exports.lock().remove(&handle) {
         tracing::error!(handle, %reason, "h264 export aborted");
         muxer.abort();
+    }
+    Ok(())
+}
+
+// --- RGBA frames → ffmpeg H.264 encode (Path B; encode outside WebView) ------
+
+/// Start ffmpeg reading RGBA frames from IPC writes; encodes with the probed
+/// hardware encoder (same pick as recording).
+#[tauri::command(async)]
+pub fn begin_export_rawvideo_stream(
+    state: State<AppState>,
+    path: String,
+    width: u32,
+    height: u32,
+    fps: u32,
+    bitrate: u32,
+) -> AppResult<u64> {
+    let final_path = PathBuf::from(path);
+    let encoder = RawvideoStreamEncoder::spawn(&final_path, width, height, fps, bitrate)?;
+    let mut next = state.next_export_id.lock();
+    let handle = *next;
+    *next += 1;
+    drop(next);
+    state.rawvideo_exports.lock().insert(handle, encoder);
+    Ok(handle)
+}
+
+const RAWVIDEO_HANDLE_HEADER: &str = "x-export-handle";
+
+/// Append one full RGBA frame to the ffmpeg stdin pipe.
+#[tauri::command(async)]
+pub fn write_export_rawvideo_frame(
+    state: State<AppState>,
+    request: tauri::ipc::Request<'_>,
+) -> AppResult<()> {
+    let handle = export_header(&request, RAWVIDEO_HANDLE_HEADER)?;
+    let tauri::ipc::InvokeBody::Raw(chunk) = request.body() else {
+        return Err(AppError::Other(
+            "write_export_rawvideo_frame expects a raw byte body".into(),
+        ));
+    };
+    let mut exports = state.rawvideo_exports.lock();
+    let encoder = exports
+        .get_mut(&handle)
+        .ok_or_else(|| AppError::Other(format!("unknown rawvideo export handle {handle}")))?;
+    encoder.write_frame(chunk)
+}
+
+#[tauri::command]
+pub async fn finish_export_rawvideo_stream(
+    state: State<'_, AppState>,
+    handle: u64,
+) -> AppResult<String> {
+    let encoder = state
+        .rawvideo_exports
+        .lock()
+        .remove(&handle)
+        .ok_or_else(|| AppError::Other(format!("unknown rawvideo export handle {handle}")))?;
+    tauri::async_runtime::spawn_blocking(move || {
+        let path = encoder.finish()?;
+        Ok(path.to_string_lossy().into_owned())
+    })
+    .await
+    .map_err(|e| AppError::Other(format!("rawvideo export finish task failed: {e}")))?
+}
+
+#[tauri::command(async)]
+pub fn abort_export_rawvideo_stream(
+    state: State<AppState>,
+    handle: u64,
+    reason: String,
+) -> AppResult<()> {
+    if let Some(encoder) = state.rawvideo_exports.lock().remove(&handle) {
+        tracing::error!(handle, %reason, "rawvideo export aborted");
+        encoder.abort();
     }
     Ok(())
 }

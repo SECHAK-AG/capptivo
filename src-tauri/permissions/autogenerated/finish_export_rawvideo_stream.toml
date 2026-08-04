@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-finish-export-rawvideo-stream"
+description = "Enables the finish_export_rawvideo_stream command without any pre-configured scope."
+commands.allow = ["finish_export_rawvideo_stream"]
+
+[[permission]]
+identifier = "deny-finish-export-rawvideo-stream"
+description = "Denies the finish_export_rawvideo_stream command without any pre-configured scope."
+commands.deny = ["finish_export_rawvideo_stream"]

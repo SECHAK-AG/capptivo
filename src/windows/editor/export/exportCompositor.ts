@@ -36,7 +36,7 @@ import { useEditorStore } from "../store";
 export type ExportCompositor = {
   /** Output-sized bitmap: what the encoder captures. */
   canvas: FrameCompositorSurface;
-  /** Present when `cpuReadback` was requested (GIF). */
+  /** Present when `cpuReadback` was requested (GIF / Path B rawvideo). */
   ctx: CanvasRenderingContext2D | null;
   /** Which compositor won — decode strategy tunes itself off this. */
   backend: FrameCompositor["backend"];
@@ -78,9 +78,9 @@ export type CompositorMedia = {
 
 export type CompositorOptions = {
   /**
-   * Keep the output canvas CPU-resident for `getImageData` (GIF quantization).
-   * MP4/WebM never read pixels back — leaving this off keeps compositing and
-   * the encoder hand-off on the GPU (export-performance-audit.md §3).
+   * Keep the output canvas CPU-resident for `getImageData` (GIF quantization,
+   * Path B rawvideo → ffmpeg). MP4 WebCodecs paths leave this off so pixels
+   * stay on the GPU.
    */
   cpuReadback?: boolean;
   /**

@@ -49,6 +49,32 @@ pub fn monitor_scale(hmonitor: HMONITOR) -> f64 {
     }
 }
 
+/// Every monitor as `(hmonitor as isize, logical x/y/w/h)`.
+///
+/// Logical space matches the area picker / crop coords (physical ÷ effective DPI).
+/// Prefer this over Tauri's monitor list on Windows so pick + WGC share one source.
+pub fn logical_monitors() -> Vec<(isize, f64, f64, f64, f64)> {
+    let Ok(monitors) = Monitor::enumerate() else {
+        return Vec::new();
+    };
+    monitors
+        .into_iter()
+        .filter_map(|m| {
+            let id = m.as_raw_hmonitor() as isize;
+            let hmonitor = HMONITOR(m.as_raw_hmonitor());
+            let rect = monitor_rect(hmonitor)?;
+            let scale = monitor_scale(hmonitor);
+            Some((
+                id,
+                rect.x / scale,
+                rect.y / scale,
+                rect.width / scale,
+                rect.height / scale,
+            ))
+        })
+        .collect()
+}
+
 pub fn display_thumbnail(monitor: &Monitor) -> Option<SourcePreview> {
     let hmonitor = HMONITOR(monitor.as_raw_hmonitor());
     let rect = monitor_rect(hmonitor)?;
