@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-write-export-rawvideo-frame"
+description = "Enables the write_export_rawvideo_frame command without any pre-configured scope."
+commands.allow = ["write_export_rawvideo_frame"]
+
+[[permission]]
+identifier = "deny-write-export-rawvideo-frame"
+description = "Denies the write_export_rawvideo_frame command without any pre-configured scope."
+commands.deny = ["write_export_rawvideo_frame"]

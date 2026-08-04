@@ -170,6 +170,22 @@ export const commands = {
     invoke<string>("finish_export_h264_stream", { handle }),
   abortExportH264Stream: (handle: number, reason: string) =>
     invoke<void>("abort_export_h264_stream", { handle, reason }),
+  /** Pixi RGBA frames → ffmpeg H.264 encode (Path B; encode outside WebView). */
+  beginExportRawvideoStream: (args: {
+    path: string;
+    width: number;
+    height: number;
+    fps: number;
+    bitrate: number;
+  }) => invoke<number>("begin_export_rawvideo_stream", args),
+  writeExportRawvideoFrame: (handle: number, chunk: Uint8Array) =>
+    invoke<void>("write_export_rawvideo_frame", chunk, {
+      headers: { "x-export-handle": String(handle) },
+    }),
+  finishExportRawvideoStream: (handle: number) =>
+    invoke<string>("finish_export_rawvideo_stream", { handle }),
+  abortExportRawvideoStream: (handle: number, reason: string) =>
+    invoke<void>("abort_export_rawvideo_stream", { handle, reason }),
   /** Returns original dimensions and proxy filename when ready. */
   ensureProxy: (projectId: string) =>
     invoke<{ proxy: string | null; width: number; height: number }>(

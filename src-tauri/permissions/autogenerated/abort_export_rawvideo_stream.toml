@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-abort-export-rawvideo-stream"
+description = "Enables the abort_export_rawvideo_stream command without any pre-configured scope."
+commands.allow = ["abort_export_rawvideo_stream"]
+
+[[permission]]
+identifier = "deny-abort-export-rawvideo-stream"
+description = "Denies the abort_export_rawvideo_stream command without any pre-configured scope."
+commands.deny = ["abort_export_rawvideo_stream"]

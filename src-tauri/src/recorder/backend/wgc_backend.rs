@@ -18,6 +18,7 @@ use super::wasapi_audio::WasapiLoopback;
 use super::win_preview;
 use super::{CaptureBackend, CaptureHandle, RawFrame, CAPTURE_CHANNEL_CAP};
 use crate::error::{AppError, AppResult};
+use crate::recorder::area_crop::{clamp_crop_px, CropPx};
 use crate::recorder::types::{CaptureSource, CaptureSourceKind, RecorderConfig};
 use crossbeam_channel::Sender;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -277,16 +278,34 @@ fn capture_geometry(
             let rect = win_preview::monitor_rect(hmonitor)
                 .ok_or_else(|| AppError::Other("monitor bounds unavailable".into()))?;
             let scale = win_preview::monitor_scale(hmonitor);
+            let frame_w = rect.width.round().max(1.0) as u32;
+            let frame_h = rect.height.round().max(1.0) as u32;
 
             match config.crop {
                 Some(crop) => {
-                    // Area-picker crops are display-local logical points.
-                    let crop_px = CropPx {
+                    let raw = CropPx {
                         x: (crop.x * scale).round().max(0.0) as u32,
                         y: (crop.y * scale).round().max(0.0) as u32,
-                        width: (crop.width * scale).round().max(2.0) as u32,
-                        height: (crop.height * scale).round().max(2.0) as u32,
+                        width: (crop.width * scale).round().max(0.0) as u32,
+                        height: (crop.height * scale).round().max(0.0) as u32,
                     };
+                    let crop_px = clamp_crop_px(raw, frame_w, frame_h).ok_or_else(|| {
+                        AppError::Other(format!(
+                            "area crop is outside the display ({frame_w}x{frame_h} px, \
+                             requested {}x{}+{}x{} at scale {scale:.2})",
+                            raw.x, raw.y, raw.width, raw.height
+                        ))
+                    })?;
+                    tracing::info!(
+                        crop_x = crop_px.x,
+                        crop_y = crop_px.y,
+                        crop_w = crop_px.width,
+                        crop_h = crop_px.height,
+                        frame_w,
+                        frame_h,
+                        scale,
+                        "WGC area crop clamped to monitor"
+                    );
                     let capture_rect = crate::cursor::CaptureRect {
                         x: rect.x + f64::from(crop_px.x),
                         y: rect.y + f64::from(crop_px.y),
@@ -315,15 +334,6 @@ fn capture_geometry(
             Ok((rect, scale, None))
         }
     }
-}
-
-/// Crop rect in frame-local physical pixels (WGC `buffer_crop` bounds).
-#[derive(Clone, Copy)]
-struct CropPx {
-    x: u32,
-    y: u32,
-    width: u32,
-    height: u32,
 }
 
 struct ForwarderFlags {
@@ -390,7 +400,35 @@ impl GraphicsCaptureApiHandler for FrameForwarder {
         let ts_raw = frame.timestamp().map(|t| t.Duration).unwrap_or(0);
 
         let mut buffer = match self.flags.crop_px {
-            Some(c) => frame.buffer_crop(c.x, c.y, c.x + c.width, c.y + c.height)?,
+            Some(c) => {
+                // Re-clamp to the live frame size. Monitor geometry at start can
+                // disagree with the first WGC buffer (DPI, exclusive fullscreen).
+                // Out-of-range CopySubresourceRegion has crashed whole machines.
+                let Some(safe) = clamp_crop_px(c, frame.width(), frame.height()) else {
+                    return Err(format!(
+                        "area crop {}x{}+{}x{} does not fit capture frame {}x{}",
+                        c.x,
+                        c.y,
+                        c.width,
+                        c.height,
+                        frame.width(),
+                        frame.height()
+                    )
+                    .into());
+                };
+                if safe != c {
+                    tracing::warn!(
+                        requested = ?c,
+                        clamped = ?safe,
+                        frame_w = frame.width(),
+                        frame_h = frame.height(),
+                        "WGC crop re-clamped to first frame"
+                    );
+                    // Keep using the clamped rect for the rest of the session.
+                    self.flags.crop_px = Some(safe);
+                }
+                frame.buffer_crop(safe.x, safe.y, safe.x + safe.width, safe.y + safe.height)?
+            }
             None => frame.buffer()?,
         };
         let width = buffer.width();

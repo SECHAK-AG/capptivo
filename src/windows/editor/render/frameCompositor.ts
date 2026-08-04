@@ -28,7 +28,8 @@ export type FrameCompositorOptions = {
   outputHeight?: number;
   /**
    * Keep an output-sized CPU-readable copy of each frame, for GIF
-   * quantization — the only consumer that reads pixels back.
+   * quantization and Path B rawvideo → ffmpeg. Other MP4 paths leave this
+   * off so pixels stay on the GPU.
    */
   cpuReadback?: boolean;
   /**
@@ -87,7 +88,7 @@ export type FrameCompositor = {
   canvas: FrameCompositorSurface;
   /**
    * 2D context over `canvas` when `cpuReadback` is on, for `getImageData`.
-   * Null otherwise — the MP4/WebM path never reads pixels back.
+   * Null otherwise — WebCodecs MP4/WebM paths never read pixels back.
    */
   readback: CanvasRenderingContext2D | null;
   backend: "pixi";

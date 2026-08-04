@@ -1,9 +1,11 @@
 /**
  * Export: composite the timeline to MP4/WebM/GIF.
  *
- * MP4 prefers Pixi compose → WebCodecs Annex-B H.264 → Rust ffmpeg `-c copy`.
- * WebM (and Annex-B-unavailable) use mediabunny in-webview mux; GIF uses gifenc.
- * Export media is loaded as blob: URLs so the canvas is not tainted by media://.
+ * MP4 on Windows prefers Pixi compose → RGBA → Rust ffmpeg encode (Path B).
+ * Elsewhere MP4 prefers Pixi compose → WebCodecs Annex-B H.264 → Rust ffmpeg
+ * `-c copy`. WebM (and encode-unavailable) use mediabunny in-webview mux; GIF
+ * uses gifenc. Export media is loaded as blob: URLs so the canvas is not
+ * tainted by media://.
  */
 
 import { save } from "@tauri-apps/plugin-dialog";
@@ -27,7 +29,7 @@ import {
 
 import type { TrimSegment } from "@/engine";
 import { totalKeptDuration } from "@/engine";
-import { mediaUrl } from "@/lib/platform";
+import { isWindows, mediaUrl } from "@/lib/platform";
 import { commands } from "../../../ipc/bindings";
 import { describeError } from "../../recorder/store";
 import { logClientError } from "@/lib/errorLogging";
@@ -49,6 +51,8 @@ import {
   probeAnnexBConfig,
   renderMp4ViaFfmpegH264,
 } from "./exportH264Ffmpeg";
+import { renderMp4ViaFfmpegRawvideo } from "./exportRawvideoFfmpeg";
+import { shouldPreferFfmpegRawvideoEncode } from "./exportRouting";
 import {
   beginExportAbort,
   endExportAbort,
@@ -276,8 +280,58 @@ export async function exportProject(
     throwIfAborted(signal);
     audioAbsPath = prepared?.absPath ?? null;
 
-    // Prefer out-of-webview ffmpeg mux for MP4: WebCodecs emits Annex-B,
-    // Rust only stream-copies into the container (no re-encode).
+    const finishVideoOnly = async (videoPath: string) => {
+      store.setExportStatus(translateNow("export.status.saving"));
+      if (prepared) {
+        store.setExportStatus(translateNow("export.status.addingAudio"));
+        await commands
+          .attachExportAudio({
+            videoPath,
+            audioPath: prepared.absPath,
+          })
+          .catch(async (e) => {
+            console.warn("export audio attach failed; trying full mux", e);
+            await muxRecordedAudio(videoPath, settings.audioEnhance);
+          });
+      } else {
+        await muxRecordedAudio(videoPath, settings.audioEnhance).catch((e) =>
+          console.warn("export audio mux failed; keeping silent video", e),
+        );
+      }
+      await notifyDone(videoPath);
+    };
+
+    // Prefer Path B on Windows: Pixi compose + ffmpeg encode (no WebView2
+    // VideoEncoder). Elsewhere prefer Annex-B → ffmpeg `-c copy`. Either path
+    // falls through to in-webview mediabunny mux on failure.
+    if (
+      resolved.container === "mp4" &&
+      shouldPreferFfmpegRawvideoEncode(
+        isWindows,
+        import.meta.env.VITE_CAPPTIVO_RAWVIDEO_EXPORT === "1",
+      )
+    ) {
+      console.info("[export] path=ffmpeg-rawvideo (encode outside WebView)");
+      try {
+        await renderMp4ViaFfmpegRawvideo(
+          exportPath,
+          screenUrl,
+          faceCam,
+          resolved,
+          signal,
+        );
+        throwIfAborted(signal);
+        await finishVideoOnly(exportPath);
+        return;
+      } catch (e) {
+        if (isExportCancelled(e) || isGpuContextLostError(e)) throw e;
+        console.warn(
+          `[export] ffmpeg-rawvideo failed (${describeError(e)}); falling back`,
+        );
+        logClientError("export:ffmpeg-rawvideo", e);
+      }
+    }
+
     const annexBTuning =
       resolved.container === "mp4"
         ? await probeAnnexBConfig(
@@ -300,24 +354,7 @@ export async function exportProject(
           annexBTuning,
         );
         throwIfAborted(signal);
-        store.setExportStatus(translateNow("export.status.saving"));
-        if (prepared) {
-          store.setExportStatus(translateNow("export.status.addingAudio"));
-          await commands
-            .attachExportAudio({
-              videoPath: exportPath,
-              audioPath: prepared.absPath,
-            })
-            .catch(async (e) => {
-              console.warn("export audio attach failed; trying full mux", e);
-              await muxRecordedAudio(exportPath, settings.audioEnhance);
-            });
-        } else {
-          await muxRecordedAudio(exportPath, settings.audioEnhance).catch((e) =>
-            console.warn("export audio mux failed; keeping silent video", e),
-          );
-        }
-        await notifyDone(exportPath);
+        await finishVideoOnly(exportPath);
         return;
       } catch (e) {
         if (isExportCancelled(e) || isGpuContextLostError(e)) throw e;

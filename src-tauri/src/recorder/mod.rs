@@ -3,6 +3,7 @@
 //! the synthetic backend; the `commands` layer injects the event `emit` closure
 //! and the project directory, and finalizes the returned artifacts into a project.
 
+pub mod area_crop;
 pub mod backend;
 pub mod encoder;
 pub mod hw_encoder;

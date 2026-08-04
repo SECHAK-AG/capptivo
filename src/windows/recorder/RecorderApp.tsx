@@ -104,13 +104,13 @@ export function RecorderApp() {
   // HUD is on screen the instant the countdown ends.
   const showHud = live || starting;
 
-  // Esc dismisses the crop guide (click-through window can't take keys itself).
+  // Esc dismisses the crop guide and leaves area mode (require re-pick).
   useEffect(() => {
     if (captureMode !== "area" || !areaSelection || counting || showHud) return;
     const onKey = (e: KeyboardEvent) => {
       if (e.key !== "Escape") return;
       e.preventDefault();
-      void commands.hideAreaFrameGuide().catch(() => undefined);
+      useRecorderStore.getState().clearAreaSelection();
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
