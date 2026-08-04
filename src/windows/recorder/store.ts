@@ -20,6 +20,12 @@ import type {
   RecorderConfig,
   RecorderState,
 } from "../../ipc/types";
+import {
+  getStoredCaptureFps,
+  isCaptureFps,
+  storeCaptureFps,
+  type CaptureFps,
+} from "./captureFps";
 import { probeCameraPermission } from "./cameraAccess";
 import { flushCameraCaptureWithTimeout } from "./flushCamera";
 import { logClientError, logClientInfo } from "@/lib/errorLogging";
@@ -28,7 +34,7 @@ export type CaptureMode = CaptureSourceKind | "area" | "device";
 
 /** Local capture options (everything in RecorderConfig except the source id). */
 interface CaptureOptions {
-  fps: number;
+  fps: CaptureFps;
   showCursor: boolean;
   captureSystemAudio: boolean;
   quality: QualityPreset;
@@ -125,7 +131,10 @@ interface RecorderStore {
 }
 
 const DEFAULT_OPTIONS: CaptureOptions = {
-  fps: 30,
+  // Read at module load rather than baked in: the rate a take is captured at
+  // cannot be changed afterwards, so a user who picked 60 must not silently get
+  // 30 back on the next launch.
+  fps: getStoredCaptureFps(),
   showCursor: true,
   captureSystemAudio: false,
   quality: "balanced",
@@ -530,6 +539,7 @@ export const useRecorderStore = create<RecorderStore>((set, get) => {
   },
 
   setOption(key, value) {
+    if (key === "fps" && isCaptureFps(value)) storeCaptureFps(value);
     set((s) => ({ options: { ...s.options, [key]: value } }));
   },
 

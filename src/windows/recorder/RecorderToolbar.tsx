@@ -34,6 +34,7 @@ import { useI18n } from "@/lib/settings";
 import { cn } from "@/lib/utils";
 import { commands } from "../../ipc/bindings";
 import type { CaptureSource } from "../../ipc/types";
+import { CAPTURE_FPS_OPTIONS } from "./captureFps";
 import { RecorderMenu } from "./RecorderMenu";
 import { useBarDrag } from "./menuSurface";
 import type { BarOffset } from "./barOffset";
@@ -716,6 +717,11 @@ function SettingsMenu({
   onOpenChange: (open: boolean) => void;
 }) {
   const { t, language, setLanguage } = useI18n();
+  const fps = useRecorderStore((s) => s.options.fps);
+  const setOption = useRecorderStore((s) => s.setOption);
+  // Frame rate is fixed for the whole take — offering it mid-recording would
+  // promise a switch the encoder cannot make.
+  const idle = useRecorderStore((s) => s.state.status === "idle");
 
   return (
     <RecorderMenu
@@ -747,6 +753,23 @@ function SettingsMenu({
       >
         {t("recorder.settings.checkUpdates")}
       </DropdownMenuItem>
+      {idle ? (
+        <>
+          <DropdownMenuSeparator />
+          <p className="mb-1 px-2 pt-0.5 text-[10px] font-medium tracking-wider text-muted-foreground uppercase">
+            {t("recorder.frameRate")}
+          </p>
+          {CAPTURE_FPS_OPTIONS.map((option) => (
+            <SelectMenuItem
+              key={option}
+              selected={fps === option}
+              onSelect={() => setOption("fps", option)}
+            >
+              {t("recorder.frameRate.value", { fps: option })}
+            </SelectMenuItem>
+          ))}
+        </>
+      ) : null}
       <DropdownMenuSeparator />
       <p className="mb-1 px-2 pt-0.5 text-[10px] font-medium tracking-wider text-muted-foreground uppercase">
         {t("recorder.language")}

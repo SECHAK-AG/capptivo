@@ -302,6 +302,7 @@ export function EditorApp() {
           onOpenChange={setExportOpen}
           stageWidth={stage.width}
           stageHeight={stage.height}
+          sourceFps={project?.capture?.fps ?? null}
           exporting={exporting}
           onConfirm={runExport}
         />

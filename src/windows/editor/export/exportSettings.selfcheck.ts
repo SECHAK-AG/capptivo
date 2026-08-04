@@ -70,6 +70,29 @@ assert(
   `2× should halve wall-clock (got ${playbackSec}s for ${sourceSec}s @ ${fps}fps)`,
 );
 
+// exceedsSourceFps — mirrored per the note at the top of this file.
+function exceedsSourceFps(
+  requested: number,
+  sourceFps: number | null | undefined,
+): boolean {
+  if (typeof sourceFps !== "number") return false;
+  if (!Number.isFinite(sourceFps) || sourceFps <= 0) return false;
+  return requested > sourceFps;
+}
+
+assert(exceedsSourceFps(60, 30), "60 out of a 30fps take repeats screen frames");
+assert(!exceedsSourceFps(30, 30), "matching the capture rate is not a warning");
+assert(!exceedsSourceFps(24, 30), "below the capture rate is not a warning");
+assert(!exceedsSourceFps(60, 60), "a real 60fps take exports 60 cleanly");
+// Old projects and broken manifests must stay silent — an unactionable warning
+// on every export is worse than none.
+for (const unknown of [null, undefined, 0, -30, Number.NaN, Number.POSITIVE_INFINITY]) {
+  assert(
+    !exceedsSourceFps(60, unknown),
+    `unknown source fps (${String(unknown)}) must not warn`,
+  );
+}
+
 console.log("exportSettings.selfcheck: ok");
 
 export {};

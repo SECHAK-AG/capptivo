@@ -75,6 +75,29 @@ export function gifFpsForPreset(fps: ExportFps): number {
   return GIF_FPS_FOR_PRESET[fps];
 }
 
+/**
+ * True when the requested export rate is higher than the rate the take was
+ * captured at.
+ *
+ * Export does not resample the screen video — it composes one output frame per
+ * requested slot — so above the capture rate the screen content repeats while
+ * the encode cost keeps rising. Overlay motion (zoom, cursor, captions) is
+ * still evaluated per output frame and does get genuinely smoother, which is
+ * why this reports rather than clamps: the choice is a real tradeoff, not a
+ * mistake to correct silently.
+ *
+ * Returns `false` for an unknown or nonsensical source rate — old projects have
+ * no reliable capture fps, and a warning nobody can act on is just noise.
+ */
+export function exceedsSourceFps(
+  requested: number,
+  sourceFps: number | null | undefined,
+): boolean {
+  if (typeof sourceFps !== "number") return false;
+  if (!Number.isFinite(sourceFps) || sourceFps <= 0) return false;
+  return requested > sourceFps;
+}
+
 const GIF_COLORS_FOR_ENCODING: Record<ExportEncoding, number> = {
   fast: 128,
   balanced: 256,

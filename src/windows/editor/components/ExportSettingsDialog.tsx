@@ -15,6 +15,7 @@ import { useI18n } from "@/lib/settings";
 import type { TranslationKey } from "@/lib/i18n";
 
 import {
+  exceedsSourceFps,
   exportDimensionsFor,
   formatGifSpeed,
   gifFpsForPreset,
@@ -46,6 +47,8 @@ type ExportSettingsDialogProps = {
   /** Composition stage — output size follows the timeline's ratio picker. */
   stageWidth: number;
   stageHeight: number;
+  /** Rate the take was captured at, or null for projects that never recorded it. */
+  sourceFps: number | null;
   exporting: boolean;
   onConfirm: (settings: ExportSettings) => void;
 };
@@ -66,6 +69,7 @@ export function ExportSettingsDialog({
   onOpenChange,
   stageWidth,
   stageHeight,
+  sourceFps,
   exporting,
   onConfirm,
 }: ExportSettingsDialogProps) {
@@ -91,6 +95,9 @@ export function ExportSettingsDialog({
   };
 
   const isGif = settings.format === "gif";
+  // GIF rates are mapped down from the preset (see gifFpsForPreset), so they
+  // can never outrun the source.
+  const aboveSource = !isGif && exceedsSourceFps(settings.fps, sourceFps);
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -146,6 +153,13 @@ export function ExportSettingsDialog({
               label: String(isGif ? gifFpsForPreset(fps) : fps),
             }))}
           />
+          {/* Say what a rate above the capture rate actually buys, rather than
+              clamping it away — overlay motion really does get smoother. */}
+          {aboveSource ? (
+            <p className="text-[11px] leading-snug text-muted-foreground">
+              {t("export.fps.aboveSource", { fps: sourceFps ?? 0 })}
+            </p>
+          ) : null}
         </Field>
 
         {!isGif ? (
