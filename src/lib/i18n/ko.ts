@@ -8,6 +8,15 @@ export const ko: Record<TranslationKey, string> = {
 
   "titleBar.export": "내보내기",
 
+  "feedback.open": "피드백",
+  "feedback.title": "피드백 및 연락처",
+  "feedback.description":
+    "문제가 있거나 빠진 기능이 있으면 직접 연락하거나 이슈를 열어 주세요.",
+  "feedback.email": "이메일",
+  "feedback.linkedin": "LinkedIn",
+  "feedback.x": "X",
+  "feedback.reportIssue": "문제 신고 / 피드백 보내기",
+
   "panel.look.title": "모양",
   "panel.look.subtitle": "배경과 구도",
   "panel.cursor.title": "커서",

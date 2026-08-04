@@ -6,6 +6,15 @@ export const fr: Record<TranslationKey, string> = {
   "app.untitled": "Enregistrement sans titre",
 
   "titleBar.export": "Exporter",
+
+  "feedback.open": "Retour",
+  "feedback.title": "Retour et contact",
+  "feedback.description":
+    "Contactez-nous directement ou ouvrez une issue si quelque chose ne va pas.",
+  "feedback.email": "E-mail",
+  "feedback.linkedin": "LinkedIn",
+  "feedback.x": "X",
+  "feedback.reportIssue": "Signaler un problème / envoyer un retour",
   "app.loading": "Chargement…",
 
   "panel.look.title": "Apparence",

@@ -102,7 +102,9 @@ macro_rules! command_handlers {
             $crate::commands::export::remove_temp_file,
             // error log (friend-install diagnostics)
             $crate::commands::error_log::log_client_error,
+            $crate::commands::error_log::log_client_info,
             $crate::commands::error_log::reveal_error_log,
+            $crate::commands::error_log::reveal_logs_dir,
             $crate::commands::error_log::error_log_path,
             // updater
             $crate::updater::check_for_updates,

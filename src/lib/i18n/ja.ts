@@ -8,6 +8,15 @@ export const ja: Record<TranslationKey, string> = {
 
   "titleBar.export": "書き出し",
 
+  "feedback.open": "フィードバック",
+  "feedback.title": "フィードバックと連絡先",
+  "feedback.description":
+    "不具合や不足があれば、直接連絡するか Issue を開いてください。",
+  "feedback.email": "メール",
+  "feedback.linkedin": "LinkedIn",
+  "feedback.x": "X",
+  "feedback.reportIssue": "問題を報告 / フィードバックを送る",
+
   "panel.look.title": "外観",
   "panel.look.subtitle": "背景と構図",
   "panel.cursor.title": "カーソル",

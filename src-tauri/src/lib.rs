@@ -71,7 +71,12 @@ mod updater;
 mod windows;
 
 use state::AppState;
+use std::sync::OnceLock;
 use tauri::Manager;
+use tracing_appender::non_blocking::WorkerGuard;
+
+/// Keeps the non-blocking rolling-file writer alive for the process lifetime.
+static LOG_GUARD: OnceLock<WorkerGuard> = OnceLock::new();
 
 /// Global start/stop-and-show hotkey for the recorder popover.
 const RECORDER_HOTKEY: &str = "Alt+Shift+R";
@@ -181,13 +186,29 @@ fn init_tracing() {
 
     crate::error_log::init();
 
-    let filter = EnvFilter::try_from_default_env()
-        .unwrap_or_else(|_| EnvFilter::new("info,desktop_lib=debug"));
-    // Console keeps normal verbosity for `tauri dev`; the file layer is ERROR-only.
+    let dir = crate::error_log::logs_dir();
+    let _ = std::fs::create_dir_all(&dir);
+    let file_appender = tracing_appender::rolling::daily(&dir, "capptivo");
+    let (non_blocking, guard) = tracing_appender::non_blocking(file_appender);
+    let _ = LOG_GUARD.set(guard);
+
+    let env = std::env::var("RUST_LOG").unwrap_or_else(|_| "info,desktop_lib=debug".into());
+    let console_filter = EnvFilter::new(&env);
+    let rolling_filter = EnvFilter::new(&env);
+
+    // Console for `tauri dev`; rolling `capptivo.YYYY-MM-DD` for installs;
+    // `errors.log` keeps warn+ for support triage.
     let _ = tracing_subscriber::registry()
-        .with(fmt::layer().with_target(false).with_filter(filter))
+        .with(fmt::layer().with_target(false).with_filter(console_filter))
         .with(
-            crate::error_log::ErrorFileLayer.with_filter(LevelFilter::ERROR),
+            fmt::layer()
+                .with_ansi(false)
+                .with_target(true)
+                .with_writer(non_blocking)
+                .with_filter(rolling_filter),
         )
+        .with(crate::error_log::ErrorFileLayer.with_filter(LevelFilter::WARN))
         .try_init();
+
+    tracing::info!(dir = %dir.display(), "file logging enabled");
 }

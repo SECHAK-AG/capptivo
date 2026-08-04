@@ -8,6 +8,15 @@ export const ru: Record<TranslationKey, string> = {
 
   "titleBar.export": "Экспорт",
 
+  "feedback.open": "Обратная связь",
+  "feedback.title": "Обратная связь и контакты",
+  "feedback.description":
+    "Напишите напрямую или откройте issue, если что-то сломано или отсутствует.",
+  "feedback.email": "Email",
+  "feedback.linkedin": "LinkedIn",
+  "feedback.x": "X",
+  "feedback.reportIssue": "Сообщить о проблеме / отправить отзыв",
+
   "panel.look.title": "Оформление",
   "panel.look.subtitle": "Фон и композиция",
   "panel.cursor.title": "Курсор",

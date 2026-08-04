@@ -1,22 +1,38 @@
-/** Selfcheck: Path B export routing (pure). */
+/** Selfcheck: MP4 export routing (pure). */
 
-import { shouldPreferFfmpegRawvideoEncode } from "./exportRouting.ts";
+import {
+  shouldAllowInWebviewMp4Mux,
+  shouldForceFfmpegRawvideoEncode,
+  shouldTryFfmpegRawvideoFallback,
+} from "./exportRouting.ts";
 
 function assert(cond: boolean, msg: string): void {
   if (!cond) throw new Error(msg);
 }
 
 assert(
-  shouldPreferFfmpegRawvideoEncode(false, true),
-  "force flag selects Path B on non-Windows",
+  shouldForceFfmpegRawvideoEncode(true),
+  "force flag selects rawvideo first",
 );
 assert(
-  shouldPreferFfmpegRawvideoEncode(true, false),
-  "Windows prefers Path B",
+  !shouldForceFfmpegRawvideoEncode(false),
+  "rawvideo is not the default without force",
 );
 assert(
-  !shouldPreferFfmpegRawvideoEncode(false, false),
-  "non-Windows keeps WebCodecs-first",
+  shouldTryFfmpegRawvideoFallback(false),
+  "rawvideo remains a fallback when not already forced",
+);
+assert(
+  !shouldTryFfmpegRawvideoFallback(true),
+  "do not retry rawvideo after a forced attempt",
+);
+assert(
+  !shouldAllowInWebviewMp4Mux(true),
+  "Windows must not fall into in-webview MP4 mux",
+);
+assert(
+  shouldAllowInWebviewMp4Mux(false),
+  "non-Windows may use in-webview MP4 mux",
 );
 
 console.log("exportRouting.selfcheck: ok");

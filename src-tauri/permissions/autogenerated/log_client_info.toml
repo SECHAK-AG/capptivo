@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-log-client-info"
+description = "Enables the log_client_info command without any pre-configured scope."
+commands.allow = ["log_client_info"]
+
+[[permission]]
+identifier = "deny-log-client-info"
+description = "Denies the log_client_info command without any pre-configured scope."
+commands.deny = ["log_client_info"]

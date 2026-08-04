@@ -1,7 +1,9 @@
-//! Error-only persistent log for friend installs / support.
+//! Persistent logs for friend installs / support.
 //!
-//! Path: `{app_data}/logs/errors.log` (Windows: `%APPDATA%\com.capptivo.desktop\logs\errors.log`).
-//! Captures `tracing::error!`, Rust panics, and JS `log_client_error` — never info/warn.
+//! - `{app_data}/logs/capptivo.YYYY-MM-DD` — rolling daily file (`info`/`debug`)
+//! - `{app_data}/logs/errors.log` — `warn`+ / panics / JS `log_client_error`
+//!
+//! Windows: `%APPDATA%\com.capptivo.desktop\logs\…`
 
 use crate::error::{AppError, AppResult};
 use parking_lot::Mutex;
@@ -15,7 +17,7 @@ use tracing_subscriber::layer::Context;
 use tracing_subscriber::Layer;
 
 const APP_ID: &str = "com.capptivo.desktop";
-const LOG_NAME: &str = "errors.log";
+const ERROR_LOG_NAME: &str = "errors.log";
 /// Soft cap — rewrite keeping the tail when exceeded.
 const MAX_BYTES: u64 = 2 * 1024 * 1024;
 const KEEP_TAIL: u64 = 512 * 1024;
@@ -23,9 +25,9 @@ const KEEP_TAIL: u64 = 512 * 1024;
 static LOG_PATH: OnceLock<PathBuf> = OnceLock::new();
 static WRITE_LOCK: Mutex<()> = Mutex::new(());
 
-/// Resolve + create the log file; install panic hook. Safe to call once at boot.
+/// Resolve + create the error log file; install panic hook. Safe to call once at boot.
 pub fn init() {
-    let path = default_log_path();
+    let path = default_error_log_path();
     if let Some(parent) = path.parent() {
         let _ = fs::create_dir_all(parent);
     }
@@ -45,24 +47,34 @@ pub fn init() {
         } else {
             "Box<Any>".into()
         };
-        append("panic", &format!("{payload} @ {loc}"));
+        append_line("ERROR", "panic", &format!("{payload} @ {loc}"));
         previous(info);
     }));
 }
 
+/// Directory that holds `capptivo.*` and `errors.log`.
+pub fn logs_dir() -> PathBuf {
+    app_data_root().join("logs")
+}
+
 pub fn log_path() -> PathBuf {
-    LOG_PATH.get().cloned().unwrap_or_else(default_log_path)
+    LOG_PATH.get().cloned().unwrap_or_else(default_error_log_path)
 }
 
 /// Append one error line. Never panics; failures are silent.
 pub fn append(source: &str, message: &str) {
+    append_line("ERROR", source, message);
+}
+
+fn append_line(level: &str, source: &str, message: &str) {
     let msg = message.trim();
     if msg.is_empty() {
         return;
     }
     let line = format!(
-        "{} ERROR [{}] {}\n",
+        "{} {} [{}] {}\n",
         chrono::Utc::now().format("%Y-%m-%dT%H:%M:%S%.3fZ"),
+        level,
         sanitize(source),
         sanitize_message(msg),
     );
@@ -85,6 +97,15 @@ pub fn reveal() -> AppResult<PathBuf> {
     Ok(path)
 }
 
+/// Reveal the logs folder (both `capptivo.*` and `errors.log`).
+pub fn reveal_dir() -> AppResult<PathBuf> {
+    let dir = logs_dir();
+    fs::create_dir_all(&dir)?;
+    let _ = ensure_file();
+    opener_reveal_dir(&dir)?;
+    Ok(dir)
+}
+
 fn ensure_file() -> AppResult<PathBuf> {
     let path = log_path();
     if let Some(parent) = path.parent() {
@@ -96,8 +117,8 @@ fn ensure_file() -> AppResult<PathBuf> {
     Ok(path)
 }
 
-fn default_log_path() -> PathBuf {
-    app_data_root().join("logs").join(LOG_NAME)
+fn default_error_log_path() -> PathBuf {
+    logs_dir().join(ERROR_LOG_NAME)
 }
 
 fn app_data_root() -> PathBuf {
@@ -179,7 +200,6 @@ fn opener_reveal(path: &Path) -> AppResult<()> {
     }
     #[cfg(target_os = "windows")]
     {
-        // `explorer /select,path` highlights the file.
         std::process::Command::new("explorer")
             .arg(format!("/select,{}", path.display()))
             .spawn()
@@ -203,7 +223,39 @@ fn opener_reveal(path: &Path) -> AppResult<()> {
     }
 }
 
-/// Tracing layer: only [`Level::ERROR`] events hit the file.
+fn opener_reveal_dir(dir: &Path) -> AppResult<()> {
+    #[cfg(target_os = "macos")]
+    {
+        std::process::Command::new("open")
+            .arg(dir)
+            .spawn()
+            .map_err(|e| AppError::Other(format!("reveal logs dir failed: {e}")))?;
+        return Ok(());
+    }
+    #[cfg(target_os = "windows")]
+    {
+        std::process::Command::new("explorer")
+            .arg(dir)
+            .spawn()
+            .map_err(|e| AppError::Other(format!("reveal logs dir failed: {e}")))?;
+        return Ok(());
+    }
+    #[cfg(target_os = "linux")]
+    {
+        std::process::Command::new("xdg-open")
+            .arg(dir)
+            .spawn()
+            .map_err(|e| AppError::Other(format!("reveal logs dir failed: {e}")))?;
+        return Ok(());
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "windows", target_os = "linux")))]
+    {
+        let _ = dir;
+        Err(AppError::Unsupported)
+    }
+}
+
+/// Tracing layer: [`Level::WARN`] and [`Level::ERROR`] hit `errors.log`.
 pub struct ErrorFileLayer;
 
 impl<S> Layer<S> for ErrorFileLayer
@@ -211,9 +263,12 @@ where
     S: Subscriber,
 {
     fn on_event(&self, event: &Event<'_>, _ctx: Context<'_, S>) {
-        if *event.metadata().level() != Level::ERROR {
+        let level = *event.metadata().level();
+        // tracing Ord: ERROR > WARN > INFO — keep warn+.
+        if level < Level::WARN {
             return;
         }
+        let level_label = if level == Level::ERROR { "ERROR" } else { "WARN" };
         let mut visitor = ErrorVisitor::default();
         event.record(&mut visitor);
         let target = event.metadata().target();
@@ -224,7 +279,7 @@ where
         } else {
             format!("{} {}", visitor.message, visitor.fields)
         };
-        append(target, &msg);
+        append_line(level_label, target, &msg);
     }
 }
 
@@ -246,7 +301,6 @@ impl Visit for ErrorVisitor {
     fn record_debug(&mut self, field: &Field, value: &dyn std::fmt::Debug) {
         if field.name() == "message" {
             self.message = format!("{value:?}");
-            // Prefer unquoted Display-ish for String debug
             if self.message.starts_with('"') && self.message.ends_with('"') && self.message.len() >= 2
             {
                 self.message = self.message[1..self.message.len() - 1].to_string();

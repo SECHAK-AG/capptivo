@@ -1,8 +1,8 @@
-//! Path B export: RGBA frames on stdin → H.264 MP4 via the ffmpeg sidecar.
+//! Escape-hatch export: RGBA frames on stdin → H.264 MP4 via the ffmpeg sidecar.
 //!
-//! The editor WebView still composes with Pixi (WYSIWYG with preview); Rust
-//! encodes with the same [`hw_encoder`] pick used for recording so Windows
-//! never depends on WebView2 `VideoEncoder`.
+//! Primary MP4 path is Annex-B → `-c copy` (see `export_h264`). This path is
+//! opt-in / last-resort when WebCodecs Annex-B is unavailable — shipping full
+//! frames over IPC is expensive and stresses WebView2 GPU readback.
 
 use crate::error::{AppError, AppResult};
 use crate::proc;

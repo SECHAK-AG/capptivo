@@ -1,6 +1,7 @@
 /**
- * Persist JS errors to the on-disk error log (Rust `logs/errors.log`).
- * Errors only — never info/warn.
+ * Persist JS diagnostics to on-disk logs.
+ * - `logClientError` → `errors.log` (+ tracing error)
+ * - `logClientInfo` → rolling `capptivo.log` (info only; targeted call sites)
  */
 
 import { commands } from "../ipc/bindings";
@@ -25,11 +26,18 @@ function describe(e: unknown): string {
 
 let installed = false;
 
-/** Fire-and-forget append; never throws into UI. */
+/** Fire-and-forget append to `errors.log`; never throws into UI. */
 export function logClientError(source: string, error: unknown): void {
   const message = describe(error);
   if (!message) return;
   void commands.logClientError(source, message).catch(() => undefined);
+}
+
+/** Fire-and-forget info line into rolling `capptivo.log`. */
+export function logClientInfo(source: string, message: string): void {
+  const msg = message.trim();
+  if (!msg) return;
+  void commands.logClientInfo(source, msg).catch(() => undefined);
 }
 
 /** Install once per webview: uncaught errors + rejected promises. */

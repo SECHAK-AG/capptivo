@@ -92,7 +92,9 @@ fn main() {
         "remove_temp_file",
         // error log
         "log_client_error",
+        "log_client_info",
         "reveal_error_log",
+        "reveal_logs_dir",
         "error_log_path",
         // updater
         "check_for_updates",

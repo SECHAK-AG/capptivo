@@ -6,14 +6,17 @@
  */
 
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import { Minus, Square, X } from "lucide-react";
+import { Bug, Minus, Square, X } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 
+import { Button } from "@/components/ui/button";
 import { isMacOS as isMacOs } from "@/lib/platform";
+import { useI18n } from "@/lib/settings";
 import { cn } from "@/lib/utils";
 
-import { ExportVideoButton } from "./ExportVideoButton";
 import { EditorPresetsControl } from "./EditorPresetsControl";
+import { ExportVideoButton } from "./ExportVideoButton";
+import { FeedbackDialog } from "./FeedbackDialog";
 
 /** Must stay in sync with `EDITOR_TITLE_BAR_HEIGHT` in `src-tauri/src/windows.rs` (44px). */
 const EDITOR_TITLE_BAR_HEIGHT_CLASS = "h-11";
@@ -195,6 +198,9 @@ export function EditorTitleBar({
   showExport = false,
   showPresets = false,
 }: Props) {
+  const { t } = useI18n();
+  const [feedbackOpen, setFeedbackOpen] = useState(false);
+
   useEffect(() => {
     void getCurrentWindow()
       .setTitle(title)
@@ -249,6 +255,17 @@ export function EditorTitleBar({
           </p>
         ) : null}
         {showPresets ? <EditorPresetsControl /> : null}
+        <Button
+          type="button"
+          variant="outline"
+          size="icon"
+          className="size-8 shrink-0"
+          aria-label={t("feedback.open")}
+          title={t("feedback.open")}
+          onClick={() => setFeedbackOpen(true)}
+        >
+          <Bug className="size-4" aria-hidden />
+        </Button>
         {showExport && onExport ? (
           <ExportVideoButton
             exporting={exporting}
@@ -258,6 +275,8 @@ export function EditorTitleBar({
         ) : null}
         {!isMacOs ? <WindowControls /> : null}
       </div>
+
+      <FeedbackDialog open={feedbackOpen} onOpenChange={setFeedbackOpen} />
     </header>
   );
 }

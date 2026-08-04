@@ -322,6 +322,9 @@ pub fn begin_export_h264_stream(
 const H264_HANDLE_HEADER: &str = "x-export-handle";
 
 /// Append one Annex-B chunk to the ffmpeg stdin pipe.
+///
+/// Take the muxer out of the map for the duration of the (blocking) pipe write
+/// so abort/finish are not stuck behind a full OS pipe.
 #[tauri::command(async)]
 pub fn write_export_h264_chunk(
     state: State<AppState>,
@@ -333,11 +336,22 @@ pub fn write_export_h264_chunk(
             "write_export_h264_chunk expects a raw byte body".into(),
         ));
     };
-    let mut exports = state.h264_exports.lock();
-    let muxer = exports
-        .get_mut(&handle)
+    let mut muxer = state
+        .h264_exports
+        .lock()
+        .remove(&handle)
         .ok_or_else(|| AppError::Other(format!("unknown h264 export handle {handle}")))?;
-    muxer.write_chunk(chunk)
+    let result = muxer.write_chunk(chunk);
+    // Abort may have removed the slot while we held the muxer — drop ours.
+    let mut exports = state.h264_exports.lock();
+    if exports.contains_key(&handle) {
+        muxer.abort();
+    } else if result.is_ok() {
+        exports.insert(handle, muxer);
+    } else {
+        muxer.abort();
+    }
+    result
 }
 
 #[tauri::command]
@@ -397,6 +411,9 @@ pub fn begin_export_rawvideo_stream(
 const RAWVIDEO_HANDLE_HEADER: &str = "x-export-handle";
 
 /// Append one full RGBA frame to the ffmpeg stdin pipe.
+///
+/// Take the encoder out of the map for the duration of the (blocking) pipe write
+/// so abort/finish are not stuck behind a full OS pipe.
 #[tauri::command(async)]
 pub fn write_export_rawvideo_frame(
     state: State<AppState>,
@@ -408,11 +425,21 @@ pub fn write_export_rawvideo_frame(
             "write_export_rawvideo_frame expects a raw byte body".into(),
         ));
     };
-    let mut exports = state.rawvideo_exports.lock();
-    let encoder = exports
-        .get_mut(&handle)
+    let mut encoder = state
+        .rawvideo_exports
+        .lock()
+        .remove(&handle)
         .ok_or_else(|| AppError::Other(format!("unknown rawvideo export handle {handle}")))?;
-    encoder.write_frame(chunk)
+    let result = encoder.write_frame(chunk);
+    let mut exports = state.rawvideo_exports.lock();
+    if exports.contains_key(&handle) {
+        encoder.abort();
+    } else if result.is_ok() {
+        exports.insert(handle, encoder);
+    } else {
+        encoder.abort();
+    }
+    result
 }
 
 #[tauri::command]

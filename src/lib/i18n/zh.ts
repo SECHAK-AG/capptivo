@@ -8,6 +8,14 @@ export const zh: Record<TranslationKey, string> = {
 
   "titleBar.export": "导出",
 
+  "feedback.open": "反馈",
+  "feedback.title": "反馈与联系",
+  "feedback.description": "如有问题或缺失功能，请直接联系我们或提交 Issue。",
+  "feedback.email": "邮箱",
+  "feedback.linkedin": "LinkedIn",
+  "feedback.x": "X",
+  "feedback.reportIssue": "报告问题 / 发送反馈",
+
   "panel.look.title": "外观",
   "panel.look.subtitle": "背景与构图",
   "panel.cursor.title": "光标",

@@ -22,7 +22,7 @@ import type {
 } from "../../ipc/types";
 import { probeCameraPermission } from "./cameraAccess";
 import { flushCameraCaptureWithTimeout } from "./flushCamera";
-import { logClientError } from "@/lib/errorLogging";
+import { logClientError, logClientInfo } from "@/lib/errorLogging";
 
 export type CaptureMode = CaptureSourceKind | "area" | "device";
 
@@ -575,6 +575,10 @@ export const useRecorderStore = create<RecorderStore>((set, get) => {
 
   setAnnotationVisible(visible) {
     set({ annotationVisible: visible });
+    logClientInfo(
+      "recorder:annotation",
+      visible ? "pencil: show requested" : "pencil: hide requested",
+    );
     if (visible) {
       // First open builds the WebView — if the user hides before that finishes,
       // the late `show()` would resurrect the bar (felt like needing 2–3 clicks).
@@ -582,10 +586,16 @@ export const useRecorderStore = create<RecorderStore>((set, get) => {
         .showAnnotationOverlay()
         .then(() => {
           if (!get().annotationVisible) {
+            logClientInfo(
+              "recorder:annotation",
+              "pencil: hide won race after show returned",
+            );
             void commands.hideAnnotationOverlay().catch(() => undefined);
           }
         })
-        .catch(() => undefined);
+        .catch((e) => {
+          logClientError("recorder:annotation", e);
+        });
     } else {
       void commands.hideAnnotationOverlay().catch(() => undefined);
     }

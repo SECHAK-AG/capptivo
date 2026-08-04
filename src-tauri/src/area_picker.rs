@@ -12,6 +12,7 @@ use crate::recorder::backend::picker_sources;
 #[cfg(target_os = "macos")]
 use core_graphics::display::CGDisplay;
 use tauri::{AppHandle, Emitter, Manager, PhysicalPosition, PhysicalSize, WebviewUrl, WebviewWindowBuilder};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc;
 
 pub const AREA_PICKER_LABEL: &str = "area-picker";
@@ -20,6 +21,10 @@ pub const AREA_FRAME_LABEL: &str = "area-frame";
 /// Outset so the CSS border isn’t clipped by the HWND.
 const FRAME_OUTSET: f64 = 3.0;
 
+/// Bumped on every show/hide so a deferred Windows create can’t resurrect a
+/// guide the user already dismissed (or a newer show replaced).
+static FRAME_EPOCH: AtomicU64 = AtomicU64::new(0);
+
 struct VirtualDesktop {
     x: f64,
     y: f64,
@@ -27,6 +32,7 @@ struct VirtualDesktop {
     height: f64,
 }
 
+#[derive(Clone, Copy)]
 struct FrameBounds {
     x: f64,
     y: f64,
@@ -456,12 +462,84 @@ fn rect_overlap(ax: f64, ay: f64, aw: f64, ah: f64, bx: f64, by: f64, bw: f64, b
 
 /// Click-through border around the crop. Sized to the selection only — a
 /// fullscreen dim WebView was freezing Windows (GPU + input sink).
+///
+/// New WebView creation is deferred (`defer_on_ui`) — same Windows WebView2
+/// rule as camera/library/editor (blank HWND if built inside sync IPC).
 pub fn show_area_frame_guide(app: &AppHandle, selection: &CaptureAreaSelection) -> AppResult<()> {
+    let epoch = FRAME_EPOCH.fetch_add(1, Ordering::AcqRel) + 1;
     let bounds = selection_frame_bounds(app, selection)?;
-    open_area_frame_window(app, &bounds)?;
+
+    if let Some(win) = app.get_webview_window(AREA_FRAME_LABEL) {
+        apply_frame_geometry(&win, &bounds)?;
+        return present_area_frame(app, &win, selection, &bounds);
+    }
+
+    let selection = selection.clone();
+    let app = app.clone();
+    crate::windows::defer_on_ui(app, move |app| {
+        if FRAME_EPOCH.load(Ordering::Acquire) != epoch {
+            return;
+        }
+        if let Err(e) = create_and_present_area_frame(app, &selection, epoch) {
+            tracing::warn!(%e, "area frame guide: create failed");
+        }
+    });
+    Ok(())
+}
+
+fn create_and_present_area_frame(
+    app: &AppHandle,
+    selection: &CaptureAreaSelection,
+    epoch: u64,
+) -> AppResult<()> {
+    if FRAME_EPOCH.load(Ordering::Acquire) != epoch {
+        return Ok(());
+    }
+    let bounds = selection_frame_bounds(app, selection)?;
+    // Race: another deferred create may have won.
+    if app.get_webview_window(AREA_FRAME_LABEL).is_none() {
+        let win = crate::webview_gpu::apply_gpu_args(
+            WebviewWindowBuilder::new(
+                app,
+                AREA_FRAME_LABEL,
+                WebviewUrl::App("frame.html".into()),
+            )
+            .title("Area guide")
+            .inner_size(bounds.width, bounds.height)
+            .position(bounds.x, bounds.y)
+            .resizable(false)
+            .decorations(false)
+            .transparent(true)
+            .shadow(false)
+            .always_on_top(true)
+            .skip_taskbar(true)
+            .focused(false)
+            .visible(false),
+        )
+        .build()
+        .map_err(|e| AppError::Other(format!("failed to open area frame: {e}")))?;
+        apply_frame_geometry(&win, &bounds)?;
+    } else if let Some(win) = app.get_webview_window(AREA_FRAME_LABEL) {
+        apply_frame_geometry(&win, &bounds)?;
+    }
+    if FRAME_EPOCH.load(Ordering::Acquire) != epoch {
+        // Don't bump epoch — a newer show/hide owns it. Just park if we raced
+        // a hide that ran before the HWND existed.
+        park_area_frame(app);
+        return Ok(());
+    }
     let Some(win) = app.get_webview_window(AREA_FRAME_LABEL) else {
         return Err(AppError::Other("area frame window missing after open".into()));
     };
+    present_area_frame(app, &win, selection, &bounds)
+}
+
+fn present_area_frame(
+    app: &AppHandle,
+    win: &tauri::WebviewWindow,
+    selection: &CaptureAreaSelection,
+    bounds: &FrameBounds,
+) -> AppResult<()> {
     // Must be click-through: an interactive always-on-top frame eats the desktop.
     win.set_ignore_cursor_events(true).map_err(|e| {
         hide_area_frame_guide(app);
@@ -470,7 +548,7 @@ pub fn show_area_frame_guide(app: &AppHandle, selection: &CaptureAreaSelection) 
         ))
     })?;
     let _ = win.set_always_on_top(true);
-    crate::windows::exclude_overlay_from_capture(&win);
+    crate::windows::exclude_overlay_from_capture(win);
     let scale = win.scale_factor().unwrap_or(1.0);
     tracing::info!(
         source_id = %selection.source_id,
@@ -490,43 +568,17 @@ pub fn show_area_frame_guide(app: &AppHandle, selection: &CaptureAreaSelection) 
 }
 
 pub fn hide_area_frame_guide(app: &AppHandle) {
+    FRAME_EPOCH.fetch_add(1, Ordering::AcqRel);
+    park_area_frame(app);
+}
+
+fn park_area_frame(app: &AppHandle) {
     if let Some(win) = app.get_webview_window(AREA_FRAME_LABEL) {
         let _ = win.hide();
         // Park off-screen so a transient show/reuse cannot flash the old crop.
         let _ = win.set_position(tauri::Position::Physical(PhysicalPosition::new(-10_000, -10_000)));
         let _ = win.set_size(tauri::Size::Physical(PhysicalSize::new(1, 1)));
     }
-}
-
-fn open_area_frame_window(app: &AppHandle, bounds: &FrameBounds) -> AppResult<()> {
-    if let Some(win) = app.get_webview_window(AREA_FRAME_LABEL) {
-        apply_frame_geometry(&win, bounds)?;
-        return Ok(());
-    }
-
-    let win = crate::webview_gpu::apply_gpu_args(
-        WebviewWindowBuilder::new(
-            app,
-            AREA_FRAME_LABEL,
-            WebviewUrl::App("frame.html".into()),
-        )
-        .title("Area guide")
-        .inner_size(bounds.width, bounds.height)
-        .position(bounds.x, bounds.y)
-        .resizable(false)
-        .decorations(false)
-        .transparent(true)
-        .shadow(false)
-        .always_on_top(true)
-        .skip_taskbar(true)
-        .focused(false)
-        .visible(false),
-    )
-    .build()
-    .map_err(|e| AppError::Other(format!("failed to open area frame: {e}")))?;
-
-    apply_frame_geometry(&win, bounds)?;
-    Ok(())
 }
 
 fn apply_frame_geometry(win: &tauri::WebviewWindow, bounds: &FrameBounds) -> AppResult<()> {

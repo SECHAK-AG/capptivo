@@ -1,11 +1,11 @@
 /**
  * Export: composite the timeline to MP4/WebM/GIF.
  *
- * MP4 on Windows prefers Pixi compose → RGBA → Rust ffmpeg encode (Path B).
- * Elsewhere MP4 prefers Pixi compose → WebCodecs Annex-B H.264 → Rust ffmpeg
- * `-c copy`. WebM (and encode-unavailable) use mediabunny in-webview mux; GIF
- * uses gifenc. Export media is loaded as blob: URLs so the canvas is not
- * tainted by media://.
+ * MP4 prefers Pixi compose → WebCodecs Annex-B H.264 → Rust ffmpeg `-c copy`
+ * (Recordly breeze shape: compressed IPC, no RGBA pipe). RGBA → ffmpeg
+ * re-encode is opt-in / last-resort. WebM uses mediabunny in-webview mux; GIF
+ * uses gifenc. Windows never falls through to in-webview MP4 mux. Export media
+ * is loaded as blob: URLs so the canvas is not tainted by media://.
  */
 
 import { save } from "@tauri-apps/plugin-dialog";
@@ -52,7 +52,11 @@ import {
   renderMp4ViaFfmpegH264,
 } from "./exportH264Ffmpeg";
 import { renderMp4ViaFfmpegRawvideo } from "./exportRawvideoFfmpeg";
-import { shouldPreferFfmpegRawvideoEncode } from "./exportRouting";
+import {
+  shouldAllowInWebviewMp4Mux,
+  shouldForceFfmpegRawvideoEncode,
+  shouldTryFfmpegRawvideoFallback,
+} from "./exportRouting";
 import {
   beginExportAbort,
   endExportAbort,
@@ -301,17 +305,19 @@ export async function exportProject(
       await notifyDone(videoPath);
     };
 
-    // Prefer Path B on Windows: Pixi compose + ffmpeg encode (no WebView2
-    // VideoEncoder). Elsewhere prefer Annex-B → ffmpeg `-c copy`. Either path
-    // falls through to in-webview mediabunny mux on failure.
-    if (
+    // MP4: Annex-B → ffmpeg `-c copy` first (compressed IPC). RGBA Path B only
+    // when forced or as native escape hatch. Windows never enters in-webview
+    // MP4 mux — that path is the documented WebView2 failure mode.
+    const forceRawvideo =
       resolved.container === "mp4" &&
-      shouldPreferFfmpegRawvideoEncode(
-        isWindows,
+      shouldForceFfmpegRawvideoEncode(
         import.meta.env.VITE_CAPPTIVO_RAWVIDEO_EXPORT === "1",
-      )
-    ) {
-      console.info("[export] path=ffmpeg-rawvideo (encode outside WebView)");
+      );
+    let mp4NativeDone = false;
+    let lastNativeError: unknown = null;
+
+    const tryRawvideo = async (why: string) => {
+      console.info(`[export] path=ffmpeg-rawvideo (${why})`);
       try {
         await renderMp4ViaFfmpegRawvideo(
           exportPath,
@@ -322,48 +328,78 @@ export async function exportProject(
         );
         throwIfAborted(signal);
         await finishVideoOnly(exportPath);
-        return;
+        mp4NativeDone = true;
       } catch (e) {
         if (isExportCancelled(e) || isGpuContextLostError(e)) throw e;
+        lastNativeError = e;
         console.warn(
           `[export] ffmpeg-rawvideo failed (${describeError(e)}); falling back`,
         );
         logClientError("export:ffmpeg-rawvideo", e);
       }
+    };
+
+    if (forceRawvideo) {
+      await tryRawvideo("forced via VITE_CAPPTIVO_RAWVIDEO_EXPORT");
     }
 
-    const annexBTuning =
-      resolved.container === "mp4"
-        ? await probeAnnexBConfig(
-            resolved.width,
-            resolved.height,
-            resolved.bitrate,
-            resolved.fps,
-          )
-        : null;
+    if (resolved.container === "mp4" && !mp4NativeDone) {
+      const annexBTuning = await probeAnnexBConfig(
+        resolved.width,
+        resolved.height,
+        resolved.bitrate,
+        resolved.fps,
+      );
 
-    if (annexBTuning) {
-      console.info("[export] path=ffmpeg-h264-stream (mux outside WebView)");
-      try {
-        await renderMp4ViaFfmpegH264(
-          exportPath,
-          screenUrl,
-          faceCam,
-          resolved,
-          signal,
-          annexBTuning,
+      if (annexBTuning) {
+        console.info("[export] path=ffmpeg-h264-stream (mux outside WebView)");
+        try {
+          await renderMp4ViaFfmpegH264(
+            exportPath,
+            screenUrl,
+            faceCam,
+            resolved,
+            signal,
+            annexBTuning,
+          );
+          throwIfAborted(signal);
+          await finishVideoOnly(exportPath);
+          mp4NativeDone = true;
+        } catch (e) {
+          if (isExportCancelled(e) || isGpuContextLostError(e)) throw e;
+          lastNativeError = e;
+          console.warn(
+            `[export] ffmpeg-h264 failed (${describeError(e)}); trying native fallback`,
+          );
+          logClientError("export:ffmpeg-h264", e);
+        }
+      }
+
+      if (
+        !mp4NativeDone &&
+        shouldTryFfmpegRawvideoFallback(forceRawvideo)
+      ) {
+        await tryRawvideo(
+          annexBTuning
+            ? "Annex-B failed; RGBA encode escape hatch"
+            : "Annex-B unavailable; RGBA encode escape hatch",
         );
-        throwIfAborted(signal);
-        await finishVideoOnly(exportPath);
-        return;
-      } catch (e) {
-        if (isExportCancelled(e) || isGpuContextLostError(e)) throw e;
-        console.warn(
-          `[export] ffmpeg-h264 failed (${describeError(e)}); falling back to in-webview mux`,
-        );
-        logClientError("export:ffmpeg-h264", e);
+      }
+
+      if (mp4NativeDone) return;
+
+      if (!shouldAllowInWebviewMp4Mux(isWindows)) {
+        throw lastNativeError instanceof Error
+          ? lastNativeError
+          : new Error(
+              lastNativeError
+                ? describeError(lastNativeError)
+                : "MP4 export failed: no working native encoder path on Windows",
+            );
       }
     }
+
+    if (mp4NativeDone) return;
 
     sink = await ExportSink.open(exportPath);
     const audioMuxed = await renderVideoToSink(

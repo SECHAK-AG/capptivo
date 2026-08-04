@@ -8,6 +8,15 @@ export const pt: Record<TranslationKey, string> = {
 
   "titleBar.export": "Exportar",
 
+  "feedback.open": "Feedback",
+  "feedback.title": "Feedback e contacto",
+  "feedback.description":
+    "Contacta-nos diretamente ou abre um issue se algo estiver em falta ou avariado.",
+  "feedback.email": "Email",
+  "feedback.linkedin": "LinkedIn",
+  "feedback.x": "X",
+  "feedback.reportIssue": "Reportar problema / enviar feedback",
+
   "panel.look.title": "Aparência",
   "panel.look.subtitle": "Fundo e composição",
   "panel.cursor.title": "Cursor",

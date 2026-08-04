@@ -8,6 +8,15 @@ export const ar: Record<TranslationKey, string> = {
 
   "titleBar.export": "تصدير",
 
+  "feedback.open": "ملاحظات",
+  "feedback.title": "الملاحظات والتواصل",
+  "feedback.description":
+    "تواصل معنا مباشرة أو افتح Issue إذا كان هناك خلل أو شيء ناقص.",
+  "feedback.email": "البريد",
+  "feedback.linkedin": "LinkedIn",
+  "feedback.x": "X",
+  "feedback.reportIssue": "الإبلاغ عن مشكلة / إرسال ملاحظات",
+
   "panel.look.title": "المظهر",
   "panel.look.subtitle": "الخلفية والتركيب",
   "panel.cursor.title": "المؤشر",

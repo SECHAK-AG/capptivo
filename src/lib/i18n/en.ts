@@ -6,6 +6,15 @@ export const en = {
 
   "titleBar.export": "Export",
 
+  "feedback.open": "Feedback",
+  "feedback.title": "Feedback & contact",
+  "feedback.description":
+    "Reach out directly or open an issue if something is broken or missing.",
+  "feedback.email": "Email",
+  "feedback.linkedin": "LinkedIn",
+  "feedback.x": "X",
+  "feedback.reportIssue": "Report issue / send feedback",
+
   "panel.look.title": "Appearance",
   "panel.look.subtitle": "Background and composition",
   "panel.cursor.title": "Cursor",

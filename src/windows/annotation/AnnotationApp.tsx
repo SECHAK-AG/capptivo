@@ -45,6 +45,7 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { Slider } from "@/components/ui/slider";
 import { commands } from "@/ipc/bindings";
+import { logClientInfo } from "@/lib/errorLogging";
 import { cn } from "@/lib/utils";
 
 const ANNOTATION_ESCAPE_EVENT = "annotation://escape";
@@ -220,6 +221,10 @@ export function AnnotationApp() {
     let disposed = false;
     void listen<boolean>("annotation://visibility", (e) => {
       setOverlayVisible(e.payload);
+      logClientInfo(
+        "annotation:visibility",
+        e.payload ? "shown" : "hidden",
+      );
       if (!e.payload) {
         setTool("select");
         setPanel(null);
@@ -232,6 +237,10 @@ export function AnnotationApp() {
       disposed = true;
       unlisten?.();
     };
+  }, []);
+
+  useEffect(() => {
+    logClientInfo("annotation", "webview mounted");
   }, []);
 
   // Tell Rust whether monitor-hopping is safe. The native follow loop (not a
