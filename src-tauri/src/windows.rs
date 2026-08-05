@@ -209,17 +209,8 @@ fn geometry() -> std::sync::MutexGuard<'static, RecorderGeometry> {
 static MENU_LIVE: AtomicBool = AtomicBool::new(false);
 /// Setup pill is being dragged (CSS drag — window size stays put).
 static RECORDER_DRAGGING: AtomicBool = AtomicBool::new(false);
-/// The setup click-through poller has been started for this process.
-///
-/// Set once and never cleared: the poller is long-lived and idles cheaply when
-/// the setup overlay is down. It used to be spawned and torn down per layout
-/// change, guarded by a flag the dying thread cleared *after* it had already
-/// decided to exit — so a re-arm landing in that gap saw "already running",
-/// spawned nothing, and left a work-area-sized, always-on-top, transparent
-/// window permanently interactive. That window swallows every click on the
-/// desktop until the process exits. One thread that cannot race is worth far
-/// more than the wakeups it costs.
 static CLICK_THROUGH_STARTED: AtomicBool = AtomicBool::new(false);
+static CLICK_THROUGH_IGNORING: AtomicBool = AtomicBool::new(false);
 
 /// Webview-local hitbox of the setup/HUD chrome (x, y, w, h). Used so the
 /// work-area overlay can click-through everywhere except the pill + menus.
@@ -970,6 +961,9 @@ pub fn set_recorder_layout(app: AppHandle, layout: String) -> tauri::Result<()> 
         ensure_setup_click_through(app.clone());
     } else {
         MENU_LIVE.store(false, Ordering::Relaxed);
+        // Compact HUD/countdown frames must take clicks; clear the shared flag
+        // so a later return to setup does not believe click-through is already on.
+        CLICK_THROUGH_IGNORING.store(false, Ordering::Relaxed);
         let _ = win.set_ignore_cursor_events(false);
     }
     Ok(())
@@ -1038,7 +1032,7 @@ pub fn begin_recorder_drag(app: AppHandle) -> tauri::Result<String> {
         return Ok("top".into());
     };
     RECORDER_DRAGGING.store(true, Ordering::Relaxed);
-    let _ = win.set_ignore_cursor_events(false);
+    apply_click_through(&win, false);
     Ok(side_str(geometry().menu_side))
 }
 
@@ -1071,7 +1065,7 @@ fn ensure_setup_click_through(app: AppHandle) {
     // interactive even for one idle tick means clicks meant for the desktop
     // land on an invisible window instead.
     if let Some(win) = app.get_webview_window(RECORDER_LABEL) {
-        let _ = win.set_ignore_cursor_events(!overlay_wants_clicks(&app, &win));
+        apply_click_through(&win, !overlay_wants_clicks(&app, &win));
     }
 }
 
@@ -1084,6 +1078,14 @@ const CLICK_THROUGH_IDLE_POLL: Duration = Duration::from_millis(150);
 /// the pill edge cannot toggle `ignore_cursor_events` every tick (that toggle
 /// redraws the transparent window and reads as flicker).
 const CLICK_THROUGH_LEAVE_TICKS: u8 = 3;
+
+/// Flip `ignore_cursor_events` only when the desired state changes, and keep
+/// [`CLICK_THROUGH_IGNORING`] in lockstep so the poller cannot desync.
+fn apply_click_through(win: &tauri::WebviewWindow, ignore: bool) {
+    if CLICK_THROUGH_IGNORING.swap(ignore, Ordering::Relaxed) != ignore {
+        let _ = win.set_ignore_cursor_events(ignore);
+    }
+}
 
 /// Whether the setup overlay must accept clicks right now.
 ///
@@ -1121,14 +1123,13 @@ fn start_click_through_poller(app: AppHandle) {
 }
 
 fn run_click_through_poll(app: AppHandle) {
-    let mut ignoring = false;
     let mut leave_ticks: u8 = 0;
 
     loop {
         let Some(win) = app.get_webview_window(RECORDER_LABEL) else {
             // Not built yet, or torn down. Keep polling so a rebuilt bar is
             // picked up — an early `return` here used to strand the overlay.
-            ignoring = false;
+            CLICK_THROUGH_IGNORING.store(false, Ordering::Relaxed);
             leave_ticks = 0;
             std::thread::sleep(CLICK_THROUGH_IDLE_POLL);
             continue;
@@ -1137,17 +1138,17 @@ fn run_click_through_poll(app: AppHandle) {
         let setup = geometry().layout.is_setup_bar();
         if overlay_wants_clicks(&app, &win) {
             leave_ticks = 0;
-            if ignoring {
-                let _ = win.set_ignore_cursor_events(false);
-                ignoring = false;
-            }
-        } else if !ignoring {
+            apply_click_through(&win, false);
+        } else if !CLICK_THROUGH_IGNORING.load(Ordering::Relaxed) {
+            // Only debounce the interactive → ignore transition. If we are
+            // already ignoring (or ensure_setup just forced ignore on), stay put.
             leave_ticks = leave_ticks.saturating_add(1);
             if leave_ticks >= CLICK_THROUGH_LEAVE_TICKS {
-                let _ = win.set_ignore_cursor_events(true);
-                ignoring = true;
+                apply_click_through(&win, true);
                 leave_ticks = 0;
             }
+        } else {
+            leave_ticks = 0;
         }
 
         std::thread::sleep(if setup {

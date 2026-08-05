@@ -71,12 +71,12 @@ mod updater;
 mod windows;
 
 use state::AppState;
-use std::sync::OnceLock;
 use tauri::Manager;
-use tracing_appender::non_blocking::WorkerGuard;
 
-/// Keeps the non-blocking rolling-file writer alive for the process lifetime.
-static LOG_GUARD: OnceLock<WorkerGuard> = OnceLock::new();
+// ponytail: file logging disabled for release — re-enable with the block in `init_tracing`.
+// use std::sync::OnceLock;
+// use tracing_appender::non_blocking::WorkerGuard;
+// static LOG_GUARD: OnceLock<WorkerGuard> = OnceLock::new();
 
 /// Global start/stop-and-show hotkey for the recorder popover.
 const RECORDER_HOTKEY: &str = "Alt+Shift+R";
@@ -179,36 +179,37 @@ fn register_global_hotkey(app: &tauri::AppHandle) {
 }
 
 fn init_tracing() {
-    use tracing_subscriber::filter::LevelFilter;
     use tracing_subscriber::fmt;
     use tracing_subscriber::prelude::*;
     use tracing_subscriber::EnvFilter;
 
-    crate::error_log::init();
-
-    let dir = crate::error_log::logs_dir();
-    let _ = std::fs::create_dir_all(&dir);
-    let file_appender = tracing_appender::rolling::daily(&dir, "capptivo");
-    let (non_blocking, guard) = tracing_appender::non_blocking(file_appender);
-    let _ = LOG_GUARD.set(guard);
+    // ponytail: persistent file logs + errors.log off for release builds.
+    // Uncomment the block below (and LOG_GUARD above) to re-enable friend-install diagnostics.
+    //
+    // use tracing_subscriber::filter::LevelFilter;
+    // crate::error_log::init();
+    // let dir = crate::error_log::logs_dir();
+    // let _ = std::fs::create_dir_all(&dir);
+    // let file_appender = tracing_appender::rolling::daily(&dir, "capptivo");
+    // let (non_blocking, guard) = tracing_appender::non_blocking(file_appender);
+    // let _ = LOG_GUARD.set(guard);
+    // let rolling_filter = EnvFilter::new(&env);
 
     let env = std::env::var("RUST_LOG").unwrap_or_else(|_| "info,desktop_lib=debug".into());
     let console_filter = EnvFilter::new(&env);
-    let rolling_filter = EnvFilter::new(&env);
 
-    // Console for `tauri dev`; rolling `capptivo.YYYY-MM-DD` for installs;
-    // `errors.log` keeps warn+ for support triage.
+    // Console only (`tauri dev` / stderr). No on-disk `capptivo.*` / `errors.log`.
     let _ = tracing_subscriber::registry()
         .with(fmt::layer().with_target(false).with_filter(console_filter))
-        .with(
-            fmt::layer()
-                .with_ansi(false)
-                .with_target(true)
-                .with_writer(non_blocking)
-                .with_filter(rolling_filter),
-        )
-        .with(crate::error_log::ErrorFileLayer.with_filter(LevelFilter::WARN))
+        // .with(
+        //     fmt::layer()
+        //         .with_ansi(false)
+        //         .with_target(true)
+        //         .with_writer(non_blocking)
+        //         .with_filter(rolling_filter),
+        // )
+        // .with(crate::error_log::ErrorFileLayer.with_filter(LevelFilter::WARN))
         .try_init();
 
-    tracing::info!(dir = %dir.display(), "file logging enabled");
+    // tracing::info!(dir = %dir.display(), "file logging enabled");
 }

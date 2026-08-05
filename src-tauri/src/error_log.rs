@@ -4,6 +4,11 @@
 //! - `{app_data}/logs/errors.log` — `warn`+ / panics / JS `log_client_error`
 //!
 //! Windows: `%APPDATA%\com.capptivo.desktop\logs\…`
+//!
+//! ponytail: file logging currently off in `lib.rs::init_tracing` for release — keep
+//! this module so friend-install diagnostics can be flipped back on without rewrite.
+
+#![allow(dead_code)]
 
 use crate::error::{AppError, AppResult};
 use parking_lot::Mutex;
