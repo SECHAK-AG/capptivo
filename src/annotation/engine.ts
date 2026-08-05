@@ -9,6 +9,10 @@ import type {
 } from "./types";
 
 const HIGHLIGHTER_ALPHA = 0.35;
+// PowerPoint model: ink stays while the button is held, evaporates on release.
+const LASER_FADE_MS = 900;
+// A held drag grows the stroke unbounded, so cap it (oldest points drop first).
+const LASER_STROKE_MAX_POINTS = 2000;
 const TEXT_LINE_HEIGHT_MULTIPLIER = 1.2;
 const TEXT_HIT_PADDING_X = 8;
 const TEXT_HIT_PADDING_Y = 6;
@@ -38,6 +42,16 @@ const TEXT_RESIZE_HANDLES: TextResizeHandle[] = ["nw", "ne", "se", "sw"];
 
 function clamp(value: number, min: number, max: number): number {
   return Math.max(min, Math.min(max, value));
+}
+
+/** Parse a #rrggbb color; falls back to laser red for anything else. */
+function hexToRgb(color: string): { r: number; g: number; b: number } {
+  const m = /^#([0-9a-fA-F]{6})$/.exec(color);
+  if (!m) {
+    return { r: 239, g: 68, b: 68 };
+  }
+  const v = parseInt(m[1], 16);
+  return { r: (v >> 16) & 0xff, g: (v >> 8) & 0xff, b: v & 0xff };
 }
 
 function getResizeCursor(handle: TextResizeHandle): string {
@@ -268,6 +282,11 @@ export class AnnotationEngine {
 
   private drawing = false;
   private currentPoints: Point[] = [];
+  // Laser state is transient — never enters history, so undo/redo stay clean.
+  private laserStroke: Point[] = [];
+  private laserFading: { points: Point[]; t: number }[] = [];
+  private laserPressed = false;
+  private laserAt: Point | null = null;
   private shapeStart: Point | null = null;
   private textEditor: HTMLDivElement | null = null;
   private textEditorOpenTimer: number | null = null;
@@ -361,6 +380,10 @@ export class AnnotationEngine {
     }
     if (this.tool === "select") {
       this.viewCanvas.style.cursor = "default";
+      return;
+    }
+    if (this.tool === "laser") {
+      this.viewCanvas.style.cursor = "none";
       return;
     }
     this.viewCanvas.style.cursor = "crosshair";
@@ -617,6 +640,10 @@ export class AnnotationEngine {
       }
     }
 
+    if (this.tool === "laser") {
+      this.renderLaser(scrollX, scrollY);
+    }
+
     if (!this.drawing) {
       return;
     }
@@ -708,6 +735,81 @@ export class AnnotationEngine {
     }
   }
 
+  private drawLaserInk(points: Point[], alpha: number, dotRadius: number) {
+    if (points.length < 2 || alpha <= 0) {
+      return;
+    }
+    const { r, g, b } = hexToRgb(this.color);
+    const ctx = this.viewCtx;
+    ctx.lineCap = "round";
+    ctx.lineJoin = "round";
+    // Two passes: wide soft glow under a bright core.
+    ctx.strokeStyle = `rgba(${r},${g},${b},${0.28 * alpha})`;
+    ctx.lineWidth = dotRadius * 2.6;
+    drawSmoothPath(ctx, points);
+    ctx.stroke();
+    ctx.strokeStyle = `rgba(${r},${g},${b},${0.9 * alpha})`;
+    ctx.lineWidth = dotRadius * 0.9;
+    drawSmoothPath(ctx, points);
+    ctx.stroke();
+  }
+
+  private renderLaser(scrollX: number, scrollY: number) {
+    const now = performance.now();
+    this.laserFading = this.laserFading.filter(
+      (s) => now - s.t < LASER_FADE_MS,
+    );
+
+    const { r, g, b } = hexToRgb(this.color);
+    const dotRadius = Math.max(5, this.brushSize * 1.1);
+    const ctx = this.viewCtx;
+
+    ctx.save();
+    ctx.translate(-scrollX, -scrollY);
+    // Additive blending makes overlapping glow read as heat, not mud.
+    ctx.globalCompositeOperation = "lighter";
+
+    for (const stroke of this.laserFading) {
+      const life = 1 - (now - stroke.t) / LASER_FADE_MS;
+      this.drawLaserInk(stroke.points, life * life, dotRadius);
+    }
+    this.drawLaserInk(this.laserStroke, 1, dotRadius);
+
+    if (this.laserAt) {
+      const { x, y } = this.laserAt;
+      const halo = ctx.createRadialGradient(x, y, 0, x, y, dotRadius * 3);
+      halo.addColorStop(0, `rgba(${r},${g},${b},0.55)`);
+      halo.addColorStop(0.4, `rgba(${r},${g},${b},0.22)`);
+      halo.addColorStop(1, `rgba(${r},${g},${b},0)`);
+      ctx.fillStyle = halo;
+      ctx.beginPath();
+      ctx.arc(x, y, dotRadius * 3, 0, Math.PI * 2);
+      ctx.fill();
+
+      const core = ctx.createRadialGradient(x, y, 0, x, y, dotRadius);
+      core.addColorStop(0, "rgba(255,255,255,0.95)");
+      core.addColorStop(0.35, `rgba(${r},${g},${b},0.95)`);
+      core.addColorStop(1, `rgba(${r},${g},${b},0.35)`);
+      ctx.fillStyle = core;
+      ctx.beginPath();
+      ctx.arc(x, y, dotRadius, 0, Math.PI * 2);
+      ctx.fill();
+    }
+
+    ctx.restore();
+
+    if (this.laserFading.length > 0) {
+      this.scheduleFrame();
+    }
+  }
+
+  private clearLaser() {
+    this.laserStroke = [];
+    this.laserFading = [];
+    this.laserPressed = false;
+    this.laserAt = null;
+  }
+
   clientToCanvas(clientX: number, clientY: number): Point {
     const r = this.viewCanvas.getBoundingClientRect();
     return { x: clientX - r.left, y: clientY - r.top };
@@ -729,6 +831,9 @@ export class AnnotationEngine {
     }
     this.removeTextEditor();
     this.clearTextSelection();
+    if (t !== "laser") {
+      this.clearLaser();
+    }
     this.tool = t;
     this.applyToolCursor();
     this.scheduleFrame();
@@ -861,6 +966,17 @@ export class AnnotationEngine {
       this.selectedTextResizeStartHandlePoint = null;
       this.selectedTextResizeStartFontSize = null;
       this.viewCanvas.style.cursor = "grabbing";
+      (e.target as HTMLElement).setPointerCapture?.(e.pointerId);
+      this.scheduleFrame();
+      return;
+    }
+
+    if (this.tool === "laser") {
+      this.pickScrollRoot(e.clientX, e.clientY);
+      const p = this.clientToPage(e.clientX, e.clientY);
+      this.laserAt = p;
+      this.laserPressed = true;
+      this.laserStroke = [p];
       (e.target as HTMLElement).setPointerCapture?.(e.pointerId);
       this.scheduleFrame();
       return;
@@ -1024,6 +1140,22 @@ export class AnnotationEngine {
       return;
     }
 
+    if (this.tool === "laser") {
+      const p = this.clientToPage(e.clientX, e.clientY);
+      this.laserAt = p;
+      if (this.laserPressed) {
+        this.laserStroke.push(p);
+        if (this.laserStroke.length > LASER_STROKE_MAX_POINTS) {
+          this.laserStroke.splice(
+            0,
+            this.laserStroke.length - LASER_STROKE_MAX_POINTS,
+          );
+        }
+      }
+      this.scheduleFrame();
+      return;
+    }
+
     if (!this.drawing || this.tool === "text") {
       return;
     }
@@ -1067,6 +1199,24 @@ export class AnnotationEngine {
         }
         this.scheduleFrame();
       }
+      return;
+    }
+
+    if (this.tool === "laser") {
+      try {
+        (e.target as HTMLElement).releasePointerCapture?.(e.pointerId);
+      } catch {
+        // ignore
+      }
+      this.laserPressed = false;
+      if (this.laserStroke.length >= 2) {
+        this.laserFading.push({
+          points: this.laserStroke,
+          t: performance.now(),
+        });
+      }
+      this.laserStroke = [];
+      this.scheduleFrame();
       return;
     }
 
