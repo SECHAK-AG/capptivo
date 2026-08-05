@@ -260,6 +260,9 @@ pub struct FrameBufferPool {
 }
 
 impl FrameBufferPool {
+    // Only the Windows capture backend builds and fills a pool; elsewhere the
+    // tests below are the only callers, which `dead_code` analysis ignores.
+    #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
     pub fn new() -> Self {
         Self::default()
     }
@@ -273,6 +276,7 @@ impl FrameBufferPool {
     /// drop) and leaves the capacity in place, so the copy lands straight into
     /// already-resident pages. It also sets the length from `src`, so a
     /// recycled buffer can never leak bytes of the frame before it.
+    #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
     pub fn fill_from(&self, src: &[u8]) -> Vec<u8> {
         let mut buf = self.buffers.lock().pop().unwrap_or_default();
         buf.clear();

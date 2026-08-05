@@ -209,8 +209,17 @@ fn geometry() -> std::sync::MutexGuard<'static, RecorderGeometry> {
 static MENU_LIVE: AtomicBool = AtomicBool::new(false);
 /// Setup pill is being dragged (CSS drag — window size stays put).
 static RECORDER_DRAGGING: AtomicBool = AtomicBool::new(false);
-/// Setup click-through poller is running.
-static CLICK_THROUGH_ON: AtomicBool = AtomicBool::new(false);
+/// The setup click-through poller has been started for this process.
+///
+/// Set once and never cleared: the poller is long-lived and idles cheaply when
+/// the setup overlay is down. It used to be spawned and torn down per layout
+/// change, guarded by a flag the dying thread cleared *after* it had already
+/// decided to exit — so a re-arm landing in that gap saw "already running",
+/// spawned nothing, and left a work-area-sized, always-on-top, transparent
+/// window permanently interactive. That window swallows every click on the
+/// desktop until the process exits. One thread that cannot race is worth far
+/// more than the wakeups it costs.
+static CLICK_THROUGH_STARTED: AtomicBool = AtomicBool::new(false);
 
 /// Webview-local hitbox of the setup/HUD chrome (x, y, w, h). Used so the
 /// work-area overlay can click-through everywhere except the pill + menus.
@@ -1055,81 +1064,159 @@ fn side_str(side: MenuSide) -> String {
 /// so a cursor jittering on the pill edge cannot toggle `ignore_cursor_events`
 /// every poll (that toggle redraws the transparent window and looks like flicker).
 fn ensure_setup_click_through(app: AppHandle) {
-    if CLICK_THROUGH_ON.swap(true, Ordering::SeqCst) {
-        return;
-    }
-    let _ = std::thread::Builder::new()
-        .name("recorder-click-through".into())
-        .spawn(move || {
-            let mut ignoring = false;
-            let mut leave_ticks: u8 = 0;
-            // ~100ms at 32ms poll — enough hysteresis without feeling sticky.
-            const LEAVE_DEBOUNCE_TICKS: u8 = 3;
-            loop {
-                let Some(win) = app.get_webview_window(RECORDER_LABEL) else {
-                    break;
-                };
-                let setup = geometry().layout.is_setup_bar();
-                if !setup || !win.is_visible().unwrap_or(false) {
-                    if ignoring {
-                        let _ = win.set_ignore_cursor_events(false);
-                        ignoring = false;
-                    }
-                    leave_ticks = 0;
-                    if !setup {
-                        break;
-                    }
-                    std::thread::sleep(Duration::from_millis(100));
-                    continue;
-                }
+    start_click_through_poller(app.clone());
 
-                let interactive = RECORDER_DRAGGING.load(Ordering::Relaxed)
-                    || MENU_LIVE.load(Ordering::Relaxed)
-                    || cursor_over_recorder_bar(&app, &win);
-                if interactive {
-                    leave_ticks = 0;
-                    if ignoring {
-                        let _ = win.set_ignore_cursor_events(false);
-                        ignoring = false;
-                    }
-                } else if !ignoring {
-                    leave_ticks = leave_ticks.saturating_add(1);
-                    if leave_ticks >= LEAVE_DEBOUNCE_TICKS {
-                        let _ = win.set_ignore_cursor_events(true);
-                        ignoring = true;
-                        leave_ticks = 0;
-                    }
-                }
-                std::thread::sleep(Duration::from_millis(32));
-            }
-            CLICK_THROUGH_ON.store(false, Ordering::SeqCst);
-        });
+    // Apply the correct state *synchronously*. The poller may be mid-sleep, and
+    // the overlay has just been inflated to the full work area — leaving it
+    // interactive even for one idle tick means clicks meant for the desktop
+    // land on an invisible window instead.
+    if let Some(win) = app.get_webview_window(RECORDER_LABEL) {
+        let _ = win.set_ignore_cursor_events(!overlay_wants_clicks(&app, &win));
+    }
 }
 
-fn cursor_over_recorder_bar(app: &AppHandle, win: &tauri::WebviewWindow) -> bool {
-    let Ok(cursor) = app.cursor_position() else {
-        return true;
-    };
-    let Ok(scale) = win.scale_factor() else {
-        return true;
-    };
-    let Ok(rect) = window_rect(win) else {
-        return true;
-    };
-    let cx = cursor.x / scale - rect.x;
-    let cy = cursor.y / scale - rect.y;
-    const PAD: f64 = 4.0;
+/// Poll cadence while the setup overlay covers the work area.
+const CLICK_THROUGH_ACTIVE_POLL: Duration = Duration::from_millis(32);
+/// Cadence while it does not (HUD, countdown, no window yet). The overlay is not
+/// covering anything in these states, so this only needs to notice it coming back.
+const CLICK_THROUGH_IDLE_POLL: Duration = Duration::from_millis(150);
+/// ~100ms at the active cadence — enough hysteresis that a cursor jittering on
+/// the pill edge cannot toggle `ignore_cursor_events` every tick (that toggle
+/// redraws the transparent window and reads as flicker).
+const CLICK_THROUGH_LEAVE_TICKS: u8 = 3;
 
-    if let Some((x, y, w, h)) = *BAR_HITBOX.lock().unwrap_or_else(|e| e.into_inner()) {
-        return cx >= x - PAD
-            && cx <= x + w + PAD
-            && cy >= y - PAD
-            && cy <= y + h + PAD;
+/// Whether the setup overlay must accept clicks right now.
+///
+/// Deliberately conservative: anything we cannot determine resolves to `false`,
+/// i.e. click-through stays on. See [`cursor_over_recorder_bar`].
+fn overlay_wants_clicks(app: &AppHandle, win: &tauri::WebviewWindow) -> bool {
+    if !geometry().layout.is_setup_bar() {
+        // HUD / mini-HUD / countdown are small docked frames, not overlays —
+        // they cover nothing and must always take their own clicks.
+        return true;
+    }
+    win.is_visible().unwrap_or(false)
+        && (RECORDER_DRAGGING.load(Ordering::Relaxed)
+            || MENU_LIVE.load(Ordering::Relaxed)
+            || cursor_over_recorder_bar(app, win))
+}
+
+/// Start the single, process-lifetime click-through poller. Idempotent.
+fn start_click_through_poller(app: AppHandle) {
+    if CLICK_THROUGH_STARTED.swap(true, Ordering::SeqCst) {
+        return;
+    }
+    let spawned = std::thread::Builder::new()
+        .name("recorder-click-through".into())
+        .spawn(move || run_click_through_poll(app));
+
+    if let Err(e) = spawned {
+        // Nothing will manage the overlay, so it must never become an overlay.
+        // Leave the flag set: retrying per layout change would spawn-storm, and
+        // the recorder bar is unusable either way. Loud, because the bar being
+        // dead is a support call and this is the only trace of why.
+        CLICK_THROUGH_STARTED.store(false, Ordering::SeqCst);
+        tracing::error!(%e, "recorder click-through poller failed to spawn");
+    }
+}
+
+fn run_click_through_poll(app: AppHandle) {
+    let mut ignoring = false;
+    let mut leave_ticks: u8 = 0;
+
+    loop {
+        let Some(win) = app.get_webview_window(RECORDER_LABEL) else {
+            // Not built yet, or torn down. Keep polling so a rebuilt bar is
+            // picked up — an early `return` here used to strand the overlay.
+            ignoring = false;
+            leave_ticks = 0;
+            std::thread::sleep(CLICK_THROUGH_IDLE_POLL);
+            continue;
+        };
+
+        let setup = geometry().layout.is_setup_bar();
+        if overlay_wants_clicks(&app, &win) {
+            leave_ticks = 0;
+            if ignoring {
+                let _ = win.set_ignore_cursor_events(false);
+                ignoring = false;
+            }
+        } else if !ignoring {
+            leave_ticks = leave_ticks.saturating_add(1);
+            if leave_ticks >= CLICK_THROUGH_LEAVE_TICKS {
+                let _ = win.set_ignore_cursor_events(true);
+                ignoring = true;
+                leave_ticks = 0;
+            }
+        }
+
+        std::thread::sleep(if setup {
+            CLICK_THROUGH_ACTIVE_POLL
+        } else {
+            CLICK_THROUGH_IDLE_POLL
+        });
+    }
+}
+
+/// Slack around the reported hitbox, so a cursor a pixel off the pill's edge
+/// still counts as on it.
+const BAR_HITBOX_PAD: f64 = 4.0;
+
+/// Whether a webview-local point sits on the bar chrome.
+///
+/// Split out from [`cursor_over_recorder_bar`] because it is the whole decision
+/// minus the platform lookups, which makes the padding and the pre-hitbox
+/// fallback testable without a window.
+fn point_on_bar(
+    cx: f64,
+    cy: f64,
+    hitbox: Option<(f64, f64, f64, f64)>,
+    win_height: f64,
+    chrome_height: f64,
+) -> bool {
+    if let Some((x, y, w, h)) = hitbox {
+        return cx >= x - BAR_HITBOX_PAD
+            && cx <= x + w + BAR_HITBOX_PAD
+            && cy >= y - BAR_HITBOX_PAD
+            && cy <= y + h + BAR_HITBOX_PAD;
     }
 
     // Before the first hitbox report: bottom strip so the pill is reachable.
-    let chrome = geometry().layout.chrome_height();
-    cy >= rect.h - chrome - RECORDER_BOTTOM_MARGIN - PAD
+    cy >= win_height - chrome_height - RECORDER_BOTTOM_MARGIN - BAR_HITBOX_PAD
+}
+
+/// Whether the cursor is on the recorder bar's chrome.
+///
+/// **Fails closed.** Every early return here means "we could not work out where
+/// the cursor is", and the safe answer to that is "not on the bar" — which
+/// leaves click-through *on*. These used to return `true`, i.e. "make the window
+/// interactive": in the setup layout that window spans the whole monitor work
+/// area and sits always-on-top, so answering `true` on a failed lookup swallows
+/// every click on the desktop until Capptivo is killed. `app.cursor_position()`
+/// is `GetCursorPos` on Windows, which fails on a locked session, behind a UAC
+/// secure desktop, and across some remote-desktop transitions — all states a
+/// user returns from expecting a working machine.
+///
+/// The cost of the conservative answer is bounded and local: the bar ignores
+/// clicks for one poll tick until the next lookup succeeds.
+fn cursor_over_recorder_bar(app: &AppHandle, win: &tauri::WebviewWindow) -> bool {
+    let Ok(cursor) = app.cursor_position() else {
+        return false;
+    };
+    let Ok(scale) = win.scale_factor() else {
+        return false;
+    };
+    let Ok(rect) = window_rect(win) else {
+        return false;
+    };
+
+    point_on_bar(
+        cursor.x / scale - rect.x,
+        cursor.y / scale - rect.y,
+        *BAR_HITBOX.lock().unwrap_or_else(|e| e.into_inner()),
+        rect.h,
+        geometry().layout.chrome_height(),
+    )
 }
 
 /// Cover the current (or primary) monitor work area so the pill can CSS-drag
@@ -2124,5 +2211,79 @@ mod tests {
         assert_eq!(shell & fullscreen_bits::AUXILIARY, 0);
         assert_eq!(overlay & fullscreen_bits::PRIMARY, 0);
         assert_ne!(shell & fullscreen_bits::PRIMARY, 0);
+    }
+}
+
+/// Hit-testing for the setup overlay's click-through.
+///
+/// The stakes are asymmetric and worth restating: in the setup layout the
+/// recorder window spans the monitor work area and is always-on-top, so a
+/// wrong `true` here does not make a small toolbar greedy — it makes an
+/// invisible window eat every click on the desktop until Capptivo is killed.
+#[cfg(test)]
+mod click_through_tests {
+    use super::{point_on_bar, BAR_HITBOX_PAD, RECORDER_BOTTOM_MARGIN};
+
+    /// A pill roughly where the setup bar sits: 300x44 near the bottom.
+    const HITBOX: Option<(f64, f64, f64, f64)> = Some((500.0, 900.0, 300.0, 44.0));
+    const WIN_H: f64 = 1000.0;
+    const CHROME: f64 = 56.0;
+
+    #[test]
+    fn point_inside_the_hitbox_is_on_the_bar() {
+        assert!(point_on_bar(650.0, 920.0, HITBOX, WIN_H, CHROME));
+    }
+
+    #[test]
+    fn point_just_outside_is_still_on_the_bar_within_the_pad() {
+        // Half a pad past the right edge — the slack that stops edge jitter
+        // toggling click-through every poll.
+        let x = 500.0 + 300.0 + BAR_HITBOX_PAD / 2.0;
+        assert!(point_on_bar(x, 920.0, HITBOX, WIN_H, CHROME));
+    }
+
+    #[test]
+    fn point_beyond_the_pad_is_off_the_bar() {
+        let x = 500.0 + 300.0 + BAR_HITBOX_PAD + 1.0;
+        assert!(!point_on_bar(x, 920.0, HITBOX, WIN_H, CHROME));
+    }
+
+    #[test]
+    fn point_far_from_the_pill_is_off_the_bar() {
+        // The middle of the screen must always pass clicks through, or the
+        // overlay swallows them.
+        assert!(!point_on_bar(100.0, 100.0, HITBOX, WIN_H, CHROME));
+    }
+
+    #[test]
+    fn without_a_hitbox_the_bottom_strip_is_reachable() {
+        // Before the webview reports its chrome, the pill must still be
+        // clickable — `BAR_HITBOX` is cleared on every layout change.
+        let inside_strip = WIN_H - CHROME - RECORDER_BOTTOM_MARGIN;
+        assert!(point_on_bar(640.0, inside_strip, None, WIN_H, CHROME));
+        assert!(point_on_bar(640.0, WIN_H - 1.0, None, WIN_H, CHROME));
+    }
+
+    #[test]
+    fn without_a_hitbox_everything_above_the_strip_passes_through() {
+        let above_strip = WIN_H - CHROME - RECORDER_BOTTOM_MARGIN - BAR_HITBOX_PAD - 1.0;
+        assert!(!point_on_bar(640.0, above_strip, None, WIN_H, CHROME));
+        assert!(!point_on_bar(640.0, 0.0, None, WIN_H, CHROME));
+    }
+
+    #[test]
+    fn the_fallback_strip_is_a_strip_not_the_whole_window() {
+        // Regression guard: if this ever became "always true" the overlay would
+        // be permanently interactive, which is the desktop-wide freeze.
+        let mut passthrough = 0;
+        for y in 0..WIN_H as u32 {
+            if !point_on_bar(640.0, f64::from(y), None, WIN_H, CHROME) {
+                passthrough += 1;
+            }
+        }
+        assert!(
+            passthrough > WIN_H as u32 / 2,
+            "most of the overlay must pass clicks through, got {passthrough} of {WIN_H} rows"
+        );
     }
 }
