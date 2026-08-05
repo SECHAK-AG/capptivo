@@ -354,7 +354,13 @@ fn spawn_encode_loop(
             // stay aligned); `pause_mark` records where the current pause began.
             // `pause_spans` keeps the raw (start, end) pairs so the cursor track
             // can be folded onto the exact same pause-free timeline at the end.
-            let mut pacer = FramePacer::new(fps);
+            // Only pooling backends get the recycle hook. Wiring it up
+            // unconditionally would have the pacer park buffers no producer
+            // ever reclaims — a retention, not a saving.
+            let mut pacer = match &capture.pool {
+                Some(pool) => FramePacer::new(fps).with_pool(pool.clone()),
+                None => FramePacer::new(fps),
+            };
             let mut paused_accum = 0.0f64;
             let mut pause_mark: Option<f64> = None;
             let mut pause_spans: Vec<(f64, f64)> = Vec::new();
@@ -869,6 +875,9 @@ struct FramePacer {
     max_fill: u64,
     next_index: u64,
     last: Option<(Vec<u8>, u32)>,
+    /// Where displaced frame buffers go to be reused by the producer. `None`
+    /// for backends that don't pool, and in tests.
+    pool: Option<crate::recorder::backend::FrameBufferPool>,
 }
 
 impl FramePacer {
@@ -879,7 +888,15 @@ impl FramePacer {
             max_fill: (fps as u64) * 5,
             next_index: 0,
             last: None,
+            pool: None,
         }
+    }
+
+    /// Return displaced buffers to `pool` so the capture producer can refill
+    /// them instead of allocating. See `FrameBufferPool`.
+    fn with_pool(mut self, pool: crate::recorder::backend::FrameBufferPool) -> Self {
+        self.pool = Some(pool);
+        self
     }
 
     /// Encode the frame captured at `ts_secs` (active-recording seconds), first
@@ -920,6 +937,12 @@ impl FramePacer {
     /// move, not a copy: the buffer arrived fresh from the capture backend and
     /// would otherwise be dropped at the end of this tick.
     fn remember(&mut self, data: Vec<u8>, bytes_per_row: u32) {
+        // The frame being displaced has already been written to the encoder
+        // (`write_frame` copies into the pipe and flushes before returning), so
+        // nothing references it any more and it is safe to recycle.
+        if let (Some(pool), Some((old, _))) = (&self.pool, self.last.take()) {
+            pool.put(old);
+        }
         self.last = Some((data, bytes_per_row));
     }
 
@@ -1305,6 +1328,31 @@ mod tests {
         let p = plan_frame(10_000.0, 30, 0, 150);
         assert_eq!(p.repeats, 150);
         assert!(p.write_current);
+    }
+
+    #[test]
+    fn pacer_returns_displaced_buffers_to_the_pool() {
+        let pool = crate::recorder::backend::FrameBufferPool::new();
+        let mut pacer = FramePacer::new(30).with_pool(pool.clone());
+
+        pacer.remember(vec![1u8; 16], 4);
+        assert_eq!(pool.len(), 0, "the first frame is still held for gap-fill");
+
+        pacer.remember(vec![2u8; 16], 4);
+        assert_eq!(pool.len(), 1, "the displaced frame must come back for reuse");
+
+        // And the retained frame is the new one, not the recycled one.
+        assert_eq!(pacer.last_frame().map(|(d, _)| d[0]), Some(2));
+    }
+
+    #[test]
+    fn pacer_without_a_pool_still_works() {
+        // Non-Windows backends construct the pacer with no pool; displaced
+        // buffers are simply freed as before.
+        let mut pacer = FramePacer::new(30);
+        pacer.remember(vec![1u8; 8], 4);
+        pacer.remember(vec![2u8; 8], 4);
+        assert_eq!(pacer.last_frame().map(|(d, _)| d[0]), Some(2));
     }
 
     #[test]

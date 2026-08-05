@@ -120,6 +120,14 @@ pub struct CaptureHandle {
     pub mic: Option<Receiver<RawAudio>>,
     /// Frames the producer had to drop because the channel was full.
     pub dropped: std::sync::Arc<std::sync::atomic::AtomicU64>,
+    /// Shared with the producer so the encode loop can hand finished frame
+    /// buffers back for reuse.
+    ///
+    /// `None` for backends that allocate their own frames, and it must stay
+    /// that way for them: the pacer would otherwise park up to
+    /// [`FRAME_POOL_CAP`] buffers (~330 MB at 4K) that no producer ever draws
+    /// back out, turning a free into a leak-shaped retention.
+    pub pool: Option<FrameBufferPool>,
     /// Captured source rect in global points, for cursor-sample normalization.
     /// Defaults to the pixel size at scale 1.0 (fine for the synthetic backend).
     pub capture_rect: crate::cursor::CaptureRect,
@@ -155,6 +163,7 @@ impl CaptureHandle {
             audio: None,
             mic: None,
             dropped,
+            pool: None,
             capture_rect: crate::cursor::CaptureRect {
                 x: 0.0,
                 y: 0.0,
@@ -224,6 +233,78 @@ impl Drop for CaptureHandle {
 /// case; the encoder normally keeps this near-empty).
 pub const CAPTURE_CHANNEL_CAP: usize = 8;
 
+/// Buffers the pool will hold: the channel's depth, plus the one the pacer
+/// retains for gap-fill, plus the one the producer is filling. That is exactly
+/// how many the pipeline already has in hand at peak, so pooling does not raise
+/// the high-water mark — it just stops the allocator seeing the churn.
+const FRAME_POOL_CAP: usize = CAPTURE_CHANNEL_CAP + 2;
+
+/// Recycles capture frame buffers so the hot path stops hitting the allocator.
+///
+/// A 4K BGRA frame is ~33 MB. Allocations that size skip the heap's free lists
+/// and go straight to `VirtualAlloc`/`VirtualFree`, and every page of a fresh
+/// mapping faults on first touch — so `to_vec()`-ing one frame costs ~8100 page
+/// faults on top of the copy, and the pipeline does that 60 times a second.
+/// Faulting in the pages costs several times the `memcpy` that follows it.
+/// Recycled buffers are already mapped and resident, so the per-frame cost
+/// drops to the copy alone, which is irreducible.
+///
+/// Bounded at [`FRAME_POOL_CAP`] and never blocking: an empty pool allocates,
+/// because stalling a capture callback is worse than one allocation.
+///
+/// Cheap to clone — every clone shares one pool. The producer and the encode
+/// loop run on different threads and both hold one.
+#[derive(Clone, Default)]
+pub struct FrameBufferPool {
+    buffers: std::sync::Arc<parking_lot::Mutex<Vec<Vec<u8>>>>,
+}
+
+impl FrameBufferPool {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// A buffer holding a copy of `src`, reusing a pooled allocation when one
+    /// is available.
+    ///
+    /// `clear` + `extend_from_slice` rather than `resize`/`vec![0; n]` on
+    /// purpose: those zero-fill, which would write every byte twice — once with
+    /// zeros and once with the frame. `clear` is free for `u8` (nothing to
+    /// drop) and leaves the capacity in place, so the copy lands straight into
+    /// already-resident pages. It also sets the length from `src`, so a
+    /// recycled buffer can never leak bytes of the frame before it.
+    pub fn fill_from(&self, src: &[u8]) -> Vec<u8> {
+        let mut buf = self.buffers.lock().pop().unwrap_or_default();
+        buf.clear();
+        buf.extend_from_slice(src);
+        buf
+    }
+
+    /// Hand a finished buffer back. Dropped on the floor once the pool is full,
+    /// which is what keeps the bound hard.
+    ///
+    /// Only call this where the buffer is provably finished — the frame the
+    /// pacer just displaced, or one the channel refused. Returning a buffer the
+    /// encoder still references would let the next frame overwrite it mid-write.
+    pub fn put(&self, mut buffer: Vec<u8>) {
+        if buffer.capacity() == 0 {
+            return;
+        }
+        let mut pool = self.buffers.lock();
+        if pool.len() >= FRAME_POOL_CAP {
+            return;
+        }
+        buffer.clear();
+        pool.push(buffer);
+    }
+
+    /// Buffers currently parked in the pool. Test-only.
+    #[cfg(test)]
+    pub fn len(&self) -> usize {
+        self.buffers.lock().len()
+    }
+}
+
 /// Audio packets are tiny vs video frames; allow more slack so a brief encode
 /// stall doesn't drop system audio.
 pub const AUDIO_CHANNEL_CAP: usize = 64;
@@ -261,4 +342,69 @@ pub trait CaptureBackend: Send + Sync {
     /// Begin capturing. Spawns the producer thread and returns immediately with a
     /// live [`CaptureHandle`].
     fn start(&self, config: &RecorderConfig) -> AppResult<CaptureHandle>;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn pool_allocates_when_empty_and_copies_the_source() {
+        let pool = FrameBufferPool::new();
+        let got = pool.fill_from(&[1, 2, 3, 4]);
+        assert_eq!(got, vec![1, 2, 3, 4]);
+    }
+
+    #[test]
+    fn pool_reuses_the_same_allocation() {
+        let pool = FrameBufferPool::new();
+        let first = pool.fill_from(&[7u8; 4096]);
+        let addr = first.as_ptr();
+        pool.put(first);
+
+        let second = pool.fill_from(&[9u8; 4096]);
+        assert_eq!(
+            second.as_ptr(),
+            addr,
+            "a pooled buffer must be handed back, not reallocated"
+        );
+        assert!(second.iter().all(|b| *b == 9), "contents must be the new frame");
+    }
+
+    #[test]
+    fn pool_never_leaks_bytes_of_the_previous_frame() {
+        // The regression that would corrupt video: a recycled buffer must be
+        // truncated to the new frame, never padded with the old one's tail.
+        let pool = FrameBufferPool::new();
+        pool.put(pool.fill_from(&[0xAAu8; 64]));
+        let shorter = pool.fill_from(&[0xBBu8; 8]);
+        assert_eq!(shorter.len(), 8, "length must follow the source exactly");
+        assert!(shorter.iter().all(|b| *b == 0xBB), "no stale bytes may survive");
+    }
+
+    #[test]
+    fn pool_is_bounded() {
+        let pool = FrameBufferPool::new();
+        for _ in 0..FRAME_POOL_CAP * 3 {
+            pool.put(vec![0u8; 16]);
+        }
+        assert_eq!(pool.len(), FRAME_POOL_CAP, "the pool must not grow without bound");
+    }
+
+    #[test]
+    fn pool_ignores_empty_buffers() {
+        let pool = FrameBufferPool::new();
+        pool.put(Vec::new());
+        assert_eq!(pool.len(), 0, "a zero-capacity buffer is not worth parking");
+    }
+
+    #[test]
+    fn pool_clones_share_one_set_of_buffers() {
+        // The producer and the encode loop hold separate clones; a buffer
+        // returned by one must be visible to the other.
+        let producer = FrameBufferPool::new();
+        let consumer = producer.clone();
+        consumer.put(vec![0u8; 32]);
+        assert_eq!(producer.len(), 1);
+    }
 }

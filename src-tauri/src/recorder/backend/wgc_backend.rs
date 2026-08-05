@@ -16,7 +16,7 @@
 
 use super::wasapi_audio::WasapiLoopback;
 use super::win_preview;
-use super::{CaptureBackend, CaptureHandle, RawFrame, CAPTURE_CHANNEL_CAP};
+use super::{CaptureBackend, CaptureHandle, FrameBufferPool, RawFrame, CAPTURE_CHANNEL_CAP};
 use crate::error::{AppError, AppResult};
 use crate::recorder::area_crop::{clamp_crop_px, CropPx};
 use crate::recorder::types::{CaptureSource, CaptureSourceKind, RecorderConfig};
@@ -140,12 +140,15 @@ impl CaptureBackend for WgcBackend {
         // Capture geometry (physical px) + scale, before frames start flowing.
         let (capture_rect, scale_factor, crop_px) = capture_geometry(&target, config)?;
 
+        let pool = FrameBufferPool::new();
+
         let flags = ForwarderFlags {
             tx,
             meta_tx,
             dropped: dropped.clone(),
             crop_px,
             fps,
+            pool: pool.clone(),
         };
 
         // Feature-support probes: requesting an unsupported toggle fails the
@@ -208,6 +211,7 @@ impl CaptureBackend for WgcBackend {
             }
         };
         let mut handle = CaptureHandle::new(width, height, fps, rx, dropped, stop);
+        handle.pool = Some(pool);
         handle.capture_rect = capture_rect;
         handle.scale_factor = scale_factor;
         handle.epoch = epoch;
@@ -344,6 +348,8 @@ struct ForwarderFlags {
     crop_px: Option<CropPx>,
     /// Target capture rate, used to gate frames before the GPU readback.
     fps: u32,
+    /// Recycled frame buffers, shared with the encode loop.
+    pool: FrameBufferPool,
 }
 
 /// Current QPC time in 100 ns units — the clock WGC frame timestamps
@@ -503,14 +509,20 @@ impl GraphicsCaptureApiHandler for FrameForwarder {
             width,
             height,
             bytes_per_row,
-            data: buffer.as_raw_buffer().to_vec(),
+            // Recycled rather than freshly allocated: a 4K frame is ~33 MB, and
+            // faulting in that many new pages costs several times the copy
+            // itself. See `FrameBufferPool`.
+            data: self.flags.pool.fill_from(buffer.as_raw_buffer()),
             timestamp,
         };
 
         match self.flags.tx.try_send(raw) {
             Ok(()) => {}
-            Err(crossbeam_channel::TrySendError::Full(_)) => {
+            Err(crossbeam_channel::TrySendError::Full(frame)) => {
                 self.flags.dropped.fetch_add(1, Ordering::Relaxed);
+                // The channel handed the frame back, so nothing else can be
+                // holding this buffer — recycle it instead of freeing it.
+                self.flags.pool.put(frame.data);
             }
             Err(crossbeam_channel::TrySendError::Disconnected(_)) => {
                 // Encoder is gone — the session is being torn down.
