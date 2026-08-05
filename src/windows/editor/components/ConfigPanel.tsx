@@ -19,6 +19,7 @@ import { cn } from "@/lib/utils";
 import { LANGUAGES, type Language, type TranslationKey } from "@/lib/i18n";
 import { useI18n, useTheme } from "@/lib/settings";
 import type { ThemeMode } from "@/lib/theme";
+import { commands } from "@/ipc/bindings";
 
 import { SectionLabel } from "./ui";
 
@@ -103,6 +104,15 @@ export function ConfigPanel({ visible = true }: { visible?: boolean }) {
             {t("config.about.version", { version })}
           </p>
         ) : null}
+        <button
+          type="button"
+          className="h-9 w-full rounded-lg border border-border bg-muted/40 px-3 text-sm font-medium text-foreground transition-colors hover:border-foreground/30 hover:bg-muted"
+          onClick={() => {
+            void commands.checkForUpdates();
+          }}
+        >
+          {t("config.about.checkUpdates")}
+        </button>
       </section>
     </div>
   );

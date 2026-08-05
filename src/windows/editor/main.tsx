@@ -2,6 +2,7 @@ import React from "react";
 import ReactDOM from "react-dom/client";
 import { setCursorDebugOverlay } from "@/engine";
 import { AppToaster } from "@/lib/toast";
+import { UpdateNotifier } from "@/lib/updateToast";
 import { SettingsProvider } from "@/lib/settings";
 import { initTheme } from "@/lib/theme";
 import { installErrorLogging } from "@/lib/errorLogging";
@@ -26,6 +27,7 @@ ReactDOM.createRoot(document.getElementById("root")!).render(
   <React.StrictMode>
     <SettingsProvider>
       <EditorApp />
+      <UpdateNotifier />
       <AppToaster />
     </SettingsProvider>
   </React.StrictMode>,

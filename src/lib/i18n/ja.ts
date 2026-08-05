@@ -250,6 +250,20 @@ export const ja: Record<TranslationKey, string> = {
   "config.language.desc": "言語を選択してください。",
   "config.about.title": "情報",
   "config.about.version": "バージョン {version}",
+  "config.about.checkUpdates": "アップデートを確認…",
+
+  "updater.available.title": "アップデートがあります",
+  "updater.available.detail": "バージョン {version} の準備ができました（現在 {current}）。",
+  "updater.later": "あとで",
+  "updater.install": "アップデート",
+  "updater.dismiss": "閉じる",
+  "updater.installing": "アップデートをインストール中…",
+  "updater.installing.detail": "バージョン {version} をダウンロードしてインストールしています。Capptivo が再起動します。",
+  "updater.checking": "アップデートを確認中…",
+  "updater.upToDate": "Capptivo は最新です。",
+  "updater.busyRecording": "アップデートの前に録画を終了または停止してください。",
+  "updater.error": "アップデートを確認できませんでした。",
+
 
   "captions.desc":
     "画面録画の音声（マイクが多重化されている場合）を文字起こしします。有効時はプレビュー表示と書き出しに焼き込みます。",
@@ -319,7 +333,6 @@ export const ja: Record<TranslationKey, string> = {
   "recorder.sources.windows": "ウィンドウ",
   "recorder.sources.empty": "ソースが見つかりません。",
   "recorder.settings.open": "設定",
-  "recorder.settings.checkUpdates": "アップデートを確認…",
   "recorder.language": "言語",
   "recorder.hud.pause": "一時停止",
   "recorder.hud.resume": "再開",

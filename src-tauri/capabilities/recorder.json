@@ -44,7 +44,6 @@
     "allow-hide-annotation-overlay",
     "allow-open-library",
     "allow-open-editor",
-    "allow-check-for-updates",
     "allow-reveal-error-log",
     "allow-reveal-logs-dir",
     "notification:allow-is-permission-granted"

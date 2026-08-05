@@ -253,6 +253,20 @@ export const ru: Record<TranslationKey, string> = {
   "config.language.desc": "Выберите язык.",
   "config.about.title": "О программе",
   "config.about.version": "Версия {version}",
+  "config.about.checkUpdates": "Проверить обновления…",
+
+  "updater.available.title": "Доступно обновление",
+  "updater.available.detail": "Версия {version} готова (у вас {current}).",
+  "updater.later": "Позже",
+  "updater.install": "Обновить",
+  "updater.dismiss": "Закрыть",
+  "updater.installing": "Установка обновления…",
+  "updater.installing.detail": "Загрузка и установка версии {version}. Capptivo перезапустится.",
+  "updater.checking": "Проверка обновлений…",
+  "updater.upToDate": "Capptivo обновлён.",
+  "updater.busyRecording": "Завершите или остановите текущую запись перед обновлением.",
+  "updater.error": "Не удалось проверить обновления.",
+
 
   "captions.desc":
     "Распознаёт речь из записи экрана (где смикширован микрофон). Показывается в превью и вшивается в экспорт, если включено.",
@@ -322,7 +336,6 @@ export const ru: Record<TranslationKey, string> = {
   "recorder.sources.windows": "Окна",
   "recorder.sources.empty": "Источники не найдены.",
   "recorder.settings.open": "Настройки",
-  "recorder.settings.checkUpdates": "Проверить обновления…",
   "recorder.language": "Язык",
   "recorder.hud.pause": "Пауза",
   "recorder.hud.resume": "Продолжить",

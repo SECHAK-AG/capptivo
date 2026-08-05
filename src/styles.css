@@ -195,3 +195,17 @@ html.editor-shell [data-slot="dropdown-menu-trigger"][data-state="open"] {
   outline: none;
   --tw-ring-shadow: 0 0 #0000;
 }
+
+/* Indeterminate download bar when the update server omits Content-Length. */
+@keyframes updater-indeterminate {
+  0% {
+    transform: translateX(-100%);
+  }
+  100% {
+    transform: translateX(400%);
+  }
+}
+
+.updater-indeterminate {
+  animation: updater-indeterminate 1.2s ease-in-out infinite;
+}

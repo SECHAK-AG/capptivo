@@ -38,8 +38,21 @@ export const commands = {
   openScreenRecordingSettings: () =>
     invoke<void>("open_screen_recording_settings"),
   relaunch: () => invoke<void>("relaunch"),
-  /** Opens the native update dialog flow (same as tray → Check for Updates). */
+  /** Opens check → editor/library toast (never the recorder bar). */
   checkForUpdates: () => invoke<void>("check_for_updates"),
+  /** Install the update stashed after a successful check. */
+  installUpdate: () => invoke<void>("install_update"),
+  /** "Later" — drop the stashed update for this session. */
+  dismissUpdate: () => invoke<void>("dismiss_update"),
+  /** Close during download — skip apply/restart; can retry later. */
+  cancelInstall: () => invoke<void>("cancel_install"),
+  /** Peek a pending update (shell opened after a quiet startup check). */
+  pendingUpdate: () =>
+    invoke<{
+      version: string;
+      currentVersion: string;
+      notes: string;
+    } | null>("pending_update"),
   recorderState: () => invoke<RecorderState>("recorder_state"),
   /** macOS: unminimize / raise a window source during the countdown. */
   prepareWindowCapture: (sourceId: string) =>

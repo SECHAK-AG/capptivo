@@ -98,6 +98,10 @@ fn main() {
         "error_log_path",
         // updater
         "check_for_updates",
+        "install_update",
+        "dismiss_update",
+        "cancel_install",
+        "pending_update",
     ];
 
     tauri_build::try_build(

@@ -250,6 +250,20 @@ export const ko: Record<TranslationKey, string> = {
   "config.language.desc": "언어를 선택하세요.",
   "config.about.title": "정보",
   "config.about.version": "버전 {version}",
+  "config.about.checkUpdates": "업데이트 확인…",
+
+  "updater.available.title": "업데이트 가능",
+  "updater.available.detail": "버전 {version}이(가) 준비되었습니다(현재 {current}).",
+  "updater.later": "나중에",
+  "updater.install": "업데이트",
+  "updater.dismiss": "닫기",
+  "updater.installing": "업데이트 설치 중…",
+  "updater.installing.detail": "버전 {version}을(를) 다운로드하고 설치합니다. Capptivo가 다시 시작됩니다.",
+  "updater.checking": "업데이트 확인 중…",
+  "updater.upToDate": "Capptivo가 최신 상태입니다.",
+  "updater.busyRecording": "업데이트하기 전에 현재 녹화를 끝내거나 중지하세요.",
+  "updater.error": "업데이트를 확인할 수 없습니다.",
+
 
   "captions.desc":
     "화면 녹화 오디오(마이크가 포함된 경우)를 받아씁니다. 켜면 미리보기에 표시되고 내보내기에 굽습니다.",
@@ -319,7 +333,6 @@ export const ko: Record<TranslationKey, string> = {
   "recorder.sources.windows": "창",
   "recorder.sources.empty": "소스를 찾을 수 없습니다.",
   "recorder.settings.open": "설정",
-  "recorder.settings.checkUpdates": "업데이트 확인…",
   "recorder.language": "언어",
   "recorder.hud.pause": "일시 정지",
   "recorder.hud.resume": "다시 시작",

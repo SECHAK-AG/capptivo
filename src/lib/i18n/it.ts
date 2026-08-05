@@ -260,6 +260,20 @@ export const it: Record<TranslationKey, string> = {
   "config.language.desc": "Scegli la tua lingua.",
   "config.about.title": "Informazioni",
   "config.about.version": "Versione {version}",
+  "config.about.checkUpdates": "Verifica aggiornamenti…",
+
+  "updater.available.title": "Aggiornamento disponibile",
+  "updater.available.detail": "La versione {version} è pronta (hai la {current}).",
+  "updater.later": "Più tardi",
+  "updater.install": "Aggiorna",
+  "updater.dismiss": "Chiudi",
+  "updater.installing": "Installazione aggiornamento…",
+  "updater.installing.detail": "Download e installazione della versione {version}. Capptivo si riavvierà.",
+  "updater.checking": "Controllo aggiornamenti…",
+  "updater.upToDate": "Capptivo è aggiornato.",
+  "updater.busyRecording": "Termina o interrompi la registrazione corrente prima di aggiornare.",
+  "updater.error": "Impossibile controllare gli aggiornamenti.",
+
 
   "captions.desc":
     "Trascrive l’audio della registrazione schermo (dove il microfono è mixato). Mostrato in anteprima e masterizzato nell’export se attivo.",
@@ -329,7 +343,6 @@ export const it: Record<TranslationKey, string> = {
   "recorder.sources.windows": "Finestre",
   "recorder.sources.empty": "Nessuna sorgente trovata.",
   "recorder.settings.open": "Impostazioni",
-  "recorder.settings.checkUpdates": "Verifica aggiornamenti…",
   "recorder.language": "Lingua",
   "recorder.hud.pause": "Pausa",
   "recorder.hud.resume": "Riprendi",

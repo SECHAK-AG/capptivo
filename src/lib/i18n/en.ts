@@ -250,6 +250,19 @@ export const en = {
   "config.language.desc": "Choose your language.",
   "config.about.title": "About",
   "config.about.version": "Version {version}",
+  "config.about.checkUpdates": "Check for Updates…",
+
+  "updater.available.title": "Update available",
+  "updater.available.detail": "Version {version} is ready (you have {current}).",
+  "updater.later": "Later",
+  "updater.install": "Update",
+  "updater.dismiss": "Dismiss",
+  "updater.installing": "Installing update…",
+  "updater.installing.detail": "Downloading and installing version {version}. Capptivo will restart.",
+  "updater.checking": "Checking for updates…",
+  "updater.upToDate": "Capptivo is up to date.",
+  "updater.busyRecording": "Finish or stop the current recording before updating.",
+  "updater.error": "Couldn't check for updates.",
 
   "captions.desc":
     "Transcribes audio from the screen recording (where the mic is muxed). Shown in preview and burned into export when enabled.",
@@ -318,7 +331,6 @@ export const en = {
   "recorder.sources.windows": "Windows",
   "recorder.sources.empty": "No sources found.",
   "recorder.settings.open": "Settings",
-  "recorder.settings.checkUpdates": "Check for Updates…",
   "recorder.language": "Language",
   "recorder.hud.pause": "Pause",
   "recorder.hud.resume": "Resume",

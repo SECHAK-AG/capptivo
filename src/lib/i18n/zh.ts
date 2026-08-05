@@ -242,6 +242,20 @@ export const zh: Record<TranslationKey, string> = {
   "config.language.desc": "选择你的语言。",
   "config.about.title": "关于",
   "config.about.version": "版本 {version}",
+  "config.about.checkUpdates": "检查更新…",
+
+  "updater.available.title": "有可用更新",
+  "updater.available.detail": "版本 {version} 已就绪（当前为 {current}）。",
+  "updater.later": "稍后",
+  "updater.install": "更新",
+  "updater.dismiss": "关闭",
+  "updater.installing": "正在安装更新…",
+  "updater.installing.detail": "正在下载并安装版本 {version}。Capptivo 将重新启动。",
+  "updater.checking": "正在检查更新…",
+  "updater.upToDate": "Capptivo 已是最新版本。",
+  "updater.busyRecording": "请先结束或停止当前录制再更新。",
+  "updater.error": "无法检查更新。",
+
 
   "captions.desc":
     "从屏幕录制的音频（麦克风混音处）生成字幕。启用后会显示在预览中并写入导出。",
@@ -309,7 +323,6 @@ export const zh: Record<TranslationKey, string> = {
   "recorder.sources.windows": "窗口",
   "recorder.sources.empty": "未找到来源。",
   "recorder.settings.open": "设置",
-  "recorder.settings.checkUpdates": "检查更新…",
   "recorder.language": "语言",
   "recorder.hud.pause": "暂停",
   "recorder.hud.resume": "继续",

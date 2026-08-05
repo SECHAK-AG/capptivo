@@ -108,6 +108,10 @@ macro_rules! command_handlers {
             $crate::commands::error_log::error_log_path,
             // updater
             $crate::updater::check_for_updates,
+            $crate::updater::install_update,
+            $crate::updater::dismiss_update,
+            $crate::updater::cancel_install,
+            $crate::updater::pending_update,
         ]
     };
 }

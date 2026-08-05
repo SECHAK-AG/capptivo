@@ -254,6 +254,20 @@ export const ar: Record<TranslationKey, string> = {
   "config.language.desc": "اختر لغتك.",
   "config.about.title": "حول",
   "config.about.version": "الإصدار {version}",
+  "config.about.checkUpdates": "التحقق من التحديثات…",
+
+  "updater.available.title": "يتوفر تحديث",
+  "updater.available.detail": "الإصدار {version} جاهز (لديك {current}).",
+  "updater.later": "لاحقاً",
+  "updater.install": "تحديث",
+  "updater.dismiss": "إغلاق",
+  "updater.installing": "جارٍ تثبيت التحديث…",
+  "updater.installing.detail": "جارٍ تنزيل وتثبيت الإصدار {version}. ستُعاد تشغيل Capptivo.",
+  "updater.checking": "جارٍ التحقق من التحديثات…",
+  "updater.upToDate": "Capptivo محدّث.",
+  "updater.busyRecording": "أنهِ أو أوقف التسجيل الحالي قبل التحديث.",
+  "updater.error": "تعذّر التحقق من التحديثات.",
+
 
   "captions.desc":
     "يفرغ صوت تسجيل الشاشة (حيث يُدمج الميكروفون). يظهر في المعاينة ويُدمَج في التصدير عند التفعيل.",
@@ -322,7 +336,6 @@ export const ar: Record<TranslationKey, string> = {
   "recorder.sources.windows": "النوافذ",
   "recorder.sources.empty": "لم يتم العثور على مصادر.",
   "recorder.settings.open": "الإعدادات",
-  "recorder.settings.checkUpdates": "التحقق من التحديثات…",
   "recorder.language": "اللغة",
   "recorder.hud.pause": "إيقاف مؤقت",
   "recorder.hud.resume": "متابعة",

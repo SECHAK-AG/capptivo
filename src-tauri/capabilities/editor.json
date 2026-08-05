@@ -53,6 +53,11 @@
     "allow-present-window",
     "allow-open-editor",
     "allow-reveal-error-log",
-    "allow-reveal-logs-dir"
+    "allow-reveal-logs-dir",
+    "allow-check-for-updates",
+    "allow-install-update",
+    "allow-dismiss-update",
+    "allow-cancel-install",
+    "allow-pending-update"
   ]
 }
