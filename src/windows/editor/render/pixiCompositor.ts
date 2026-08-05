@@ -598,6 +598,11 @@ export async function createPixiFrameCompositor(
       return null;
     }
 
+    // Without an explicit flush, ANGLE/WebView2 often never submits the pack +
+    // fence when nothing is presenting — `clientWaitSync` then stays
+    // TIMEOUT_EXPIRED forever and export dies on the stall watchdog.
+    gl.flush();
+
     const ticket = nextTicket++;
     packSlots.set(ticket, { pbo, sync, byteLength });
     return ticket;
@@ -606,6 +611,7 @@ export async function createPixiFrameCompositor(
   function tryFinishReadPixels(
     ticket: number,
     target: Uint8Array,
+    force = false,
   ): "pending" | "done" | "failed" {
     const gl = glContext();
     if (!gl) return "failed";
@@ -616,15 +622,22 @@ export async function createPixiFrameCompositor(
       return "failed";
     }
 
-    // Timeout 0 — poll, never block. A non-zero timeout here would put the
-    // synchronous stall straight back into the loop.
-    const status = gl.clientWaitSync(slot.sync, 0, 0);
-    if (status === gl.TIMEOUT_EXPIRED) return "pending";
-    if (status === gl.WAIT_FAILED) {
-      releaseSlot(gl, ticket);
-      return "failed";
+    if (!force) {
+      // Timeout 0 — poll, never block. A non-zero timeout here would put the
+      // synchronous stall straight back into the loop.
+      const status = gl.clientWaitSync(slot.sync, 0, 0);
+      if (status === gl.TIMEOUT_EXPIRED) return "pending";
+      if (status === gl.WAIT_FAILED) {
+        releaseSlot(gl, ticket);
+        return "failed";
+      }
+      // ALREADY_SIGNALED / CONDITION_SATISFIED — the pixels are there.
+    } else {
+      // Rare WebView2 path: fence never polls as signalled. `finish()` drains
+      // the queue so the pack buffer is safe to map; caller latches to sync
+      // readback after this so we only pay the stall once.
+      gl.finish();
     }
-    // ALREADY_SIGNALED / CONDITION_SATISFIED — the pixels are there.
 
     gl.bindBuffer(gl.PIXEL_PACK_BUFFER, slot.pbo);
     gl.getBufferSubData(gl.PIXEL_PACK_BUFFER, 0, target);

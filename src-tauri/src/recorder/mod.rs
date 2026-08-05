@@ -354,7 +354,13 @@ fn spawn_encode_loop(
             // stay aligned); `pause_mark` records where the current pause began.
             // `pause_spans` keeps the raw (start, end) pairs so the cursor track
             // can be folded onto the exact same pause-free timeline at the end.
-            let mut pacer = FramePacer::new(fps);
+            // Only pooling backends get the recycle hook. Wiring it up
+            // unconditionally would have the pacer park buffers no producer
+            // ever reclaims — a retention, not a saving.
+            let mut pacer = match &capture.pool {
+                Some(pool) => FramePacer::new(fps).with_pool(pool.clone()),
+                None => FramePacer::new(fps),
+            };
             let mut paused_accum = 0.0f64;
             let mut pause_mark: Option<f64> = None;
             let mut pause_spans: Vec<(f64, f64)> = Vec::new();
@@ -825,6 +831,40 @@ fn plan_frame(ts_secs: f64, fps: u32, next_index: u64, max_fill: u64) -> FramePl
     }
 }
 
+/// The CFR slot a frame presented at `ts_secs` of capture time belongs to.
+///
+/// Deliberately the same arithmetic as [`plan_frame`]'s `target`. The two must
+/// agree on what a slot is — see [`capture_slot_gate`].
+// Called only from the Windows capture backend. Elsewhere the tests below are
+// its only caller, which `dead_code` analysis does not count.
+#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
+fn frame_slot(ts_secs: f64, fps: u32) -> u64 {
+    (ts_secs * f64::from(fps.max(1))).round().max(0.0) as u64
+}
+
+/// [`plan_frame`]'s drop rule, hoisted so a *capture backend* can apply it
+/// before paying to read a frame back off the GPU.
+///
+/// Returns the next unfilled slot when the frame opens a new one, or `None`
+/// when its slot is already filled — the case [`plan_frame`] answers with
+/// `write_current: false`. A backend that consults this drops exactly the
+/// frames the encoder would have discarded anyway, so the encoded result is
+/// unchanged; what it saves is the readback.
+///
+/// This lives next to [`plan_frame`] on purpose. The guarantee "the gate never
+/// starves a slot the encoder wanted" holds only while both use the same slot
+/// arithmetic, so the two functions must be edited together.
+// Called only from the Windows capture backend — see `frame_slot`.
+#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
+pub(crate) fn capture_slot_gate(ts_secs: f64, fps: u32, next_slot: u64) -> Option<u64> {
+    let slot = frame_slot(ts_secs, fps);
+    if slot < next_slot {
+        None
+    } else {
+        Some(slot + 1)
+    }
+}
+
 /// Drives the encoder at a steady cadence off real frame timestamps, holding the
 /// last frame to bridge dropped-frame gaps. Retains that frame by *moving* the
 /// capture buffer in — no per-frame copy (a 4K BGRA frame is ~33 MB, so copying
@@ -835,6 +875,9 @@ struct FramePacer {
     max_fill: u64,
     next_index: u64,
     last: Option<(Vec<u8>, u32)>,
+    /// Where displaced frame buffers go to be reused by the producer. `None`
+    /// for backends that don't pool, and in tests.
+    pool: Option<crate::recorder::backend::FrameBufferPool>,
 }
 
 impl FramePacer {
@@ -845,7 +888,15 @@ impl FramePacer {
             max_fill: (fps as u64) * 5,
             next_index: 0,
             last: None,
+            pool: None,
         }
+    }
+
+    /// Return displaced buffers to `pool` so the capture producer can refill
+    /// them instead of allocating. See `FrameBufferPool`.
+    fn with_pool(mut self, pool: crate::recorder::backend::FrameBufferPool) -> Self {
+        self.pool = Some(pool);
+        self
     }
 
     /// Encode the frame captured at `ts_secs` (active-recording seconds), first
@@ -886,6 +937,12 @@ impl FramePacer {
     /// move, not a copy: the buffer arrived fresh from the capture backend and
     /// would otherwise be dropped at the end of this tick.
     fn remember(&mut self, data: Vec<u8>, bytes_per_row: u32) {
+        // The frame being displaced has already been written to the encoder
+        // (`write_frame` copies into the pipe and flushes before returning), so
+        // nothing references it any more and it is safe to recycle.
+        if let (Some(pool), Some((old, _))) = (&self.pool, self.last.take()) {
+            pool.put(old);
+        }
         self.last = Some((data, bytes_per_row));
     }
 
@@ -1130,10 +1187,172 @@ mod tests {
     }
 
     #[test]
+    fn capture_gate_admits_the_first_frame() {
+        // The session's dimension rendezvous rides on the first frame — gating
+        // it away would hang `start` on its 5s `meta_rx` timeout.
+        assert_eq!(capture_slot_gate(0.0, 60, 0), Some(1));
+    }
+
+    #[test]
+    fn capture_gate_passes_everything_when_arrivals_match_the_target() {
+        // 60 Hz display, 60 fps target: nothing is surplus, so nothing is gated.
+        let mut next = 0;
+        let mut admitted = 0;
+        for i in 0..60 {
+            if let Some(n) = capture_slot_gate(f64::from(i) / 60.0, 60, next) {
+                next = n;
+                admitted += 1;
+            }
+        }
+        assert_eq!(admitted, 60, "a 60 Hz arrival stream must pass untouched");
+    }
+
+    #[test]
+    fn capture_gate_passes_everything_when_arrivals_are_slower_than_target() {
+        // A mostly-static screen: WGC delivers on change, well under 60 fps.
+        let mut next = 0;
+        let mut admitted = 0;
+        for i in 0..10 {
+            if let Some(n) = capture_slot_gate(f64::from(i) / 8.0, 60, next) {
+                next = n;
+                admitted += 1;
+            }
+        }
+        assert_eq!(admitted, 10, "the gate must never drop a frame the encoder wants");
+    }
+
+    #[test]
+    fn capture_gate_decimates_high_refresh_arrivals_to_the_target_rate() {
+        // The case this gate exists for: 144 Hz display, 60 fps encode.
+        const SECONDS: u32 = 5;
+        const HZ: u32 = 144;
+        let mut next = 0;
+        let mut admitted: u32 = 0;
+        for i in 0..HZ * SECONDS {
+            if let Some(n) = capture_slot_gate(f64::from(i) / f64::from(HZ), 60, next) {
+                next = n;
+                admitted += 1;
+            }
+        }
+        // One readback per CFR slot: 60/s, ±1 for where the window's edges fall
+        // relative to a slot centre. Never fewer, or the encoder would have to
+        // repeat frames to fill slots the gate starved.
+        let expected = 60 * SECONDS;
+        assert!(
+            admitted.abs_diff(expected) <= 1,
+            "144 Hz in must yield ~{expected} readbacks over {SECONDS}s, got {admitted}"
+        );
+        // And the point of the exercise: most arrivals never reach the GPU.
+        assert!(
+            admitted < HZ * SECONDS / 2,
+            "the gate must eliminate the majority of a 144 Hz stream"
+        );
+    }
+
+    #[test]
+    fn capture_gate_drops_exactly_what_plan_frame_would_have_dropped() {
+        // The load-bearing invariant: the gate is `plan_frame`'s drop rule moved
+        // to the producer. If these two ever disagree, the gate is either
+        // wasting readbacks or starving the timeline.
+        let mut gate_next = 0;
+        let mut pacer_next = 0;
+        for i in 0..500 {
+            let ts = f64::from(i) / 165.0; // 165 Hz, an ordinary gaming monitor
+            let gate = capture_slot_gate(ts, 60, gate_next);
+            let plan = plan_frame(ts, 60, pacer_next, 300);
+            assert_eq!(
+                gate.is_some(),
+                plan.write_current,
+                "gate and plan_frame disagreed at frame {i} (t={ts})"
+            );
+            if let Some(n) = gate {
+                gate_next = n;
+            }
+            pacer_next = plan.next_index;
+        }
+    }
+
+    #[test]
+    fn capture_gate_matches_plan_frame_through_a_timestamp_glitch() {
+        // A single wild timestamp advances the slot cursor far ahead, which
+        // suppresses everything until real time catches up. That is not a
+        // regression the gate introduces: `plan_frame` reacts the same way, so
+        // the affected frames were never going to be encoded. Proving the two
+        // stay in lockstep here is what makes it safe to drop them earlier.
+        let mut gate_next = 0;
+        let mut pacer_next = 0;
+        let feed: Vec<f64> = (0..30)
+            .map(|i| f64::from(i) / 144.0)
+            // The glitch, then a return to a normal cadence.
+            .chain(std::iter::once(9_000.0))
+            .chain((30..90).map(|i| f64::from(i) / 144.0))
+            .collect();
+
+        for (i, ts) in feed.into_iter().enumerate() {
+            let gate = capture_slot_gate(ts, 60, gate_next);
+            let plan = plan_frame(ts, 60, pacer_next, 300);
+            assert_eq!(
+                gate.is_some(),
+                plan.write_current,
+                "gate and plan_frame diverged at feed index {i} (t={ts})"
+            );
+            if let Some(n) = gate {
+                gate_next = n;
+            }
+            pacer_next = plan.next_index;
+        }
+    }
+
+    #[test]
+    fn capture_gate_never_latches_shut() {
+        // A frozen clock must not wedge the gate closed forever: once time
+        // advances past the filled slot, frames flow again.
+        let mut next = 0;
+        next = capture_slot_gate(1.0, 60, next).expect("first frame admitted");
+        assert!(capture_slot_gate(1.0, 60, next).is_none(), "same slot is surplus");
+        assert!(capture_slot_gate(1.0, 60, next).is_none(), "still surplus");
+        assert!(
+            capture_slot_gate(1.0 + 1.0 / 60.0, 60, next).is_some(),
+            "the next slot must reopen the gate"
+        );
+    }
+
+    #[test]
+    fn capture_gate_survives_a_zero_fps_argument() {
+        // `fps` is clamped by the caller, but the function must stay total.
+        assert!(capture_slot_gate(0.5, 0, 0).is_some());
+    }
+
+    #[test]
     fn pacing_caps_repeats_against_glitched_timestamps() {
         let p = plan_frame(10_000.0, 30, 0, 150);
         assert_eq!(p.repeats, 150);
         assert!(p.write_current);
+    }
+
+    #[test]
+    fn pacer_returns_displaced_buffers_to_the_pool() {
+        let pool = crate::recorder::backend::FrameBufferPool::new();
+        let mut pacer = FramePacer::new(30).with_pool(pool.clone());
+
+        pacer.remember(vec![1u8; 16], 4);
+        assert_eq!(pool.len(), 0, "the first frame is still held for gap-fill");
+
+        pacer.remember(vec![2u8; 16], 4);
+        assert_eq!(pool.len(), 1, "the displaced frame must come back for reuse");
+
+        // And the retained frame is the new one, not the recycled one.
+        assert_eq!(pacer.last_frame().map(|(d, _)| d[0]), Some(2));
+    }
+
+    #[test]
+    fn pacer_without_a_pool_still_works() {
+        // Non-Windows backends construct the pacer with no pool; displaced
+        // buffers are simply freed as before.
+        let mut pacer = FramePacer::new(30);
+        pacer.remember(vec![1u8; 8], 4);
+        pacer.remember(vec![2u8; 8], 4);
+        assert_eq!(pacer.last_frame().map(|(d, _)| d[0]), Some(2));
     }
 
     #[test]

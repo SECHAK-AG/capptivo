@@ -67,7 +67,9 @@ pub fn extract_from_mp4(screen_mp4: &Path, thumbnail_jpg: &Path) -> AppResult<()
     let tmp = thumbnail_jpg.with_extension("jpg.tmp");
     let _ = std::fs::remove_file(&tmp);
     let ffmpeg = ffmpeg_path();
-    let output = crate::proc::command(&ffmpeg)
+    // Backfill on a detached thread after a recording ends — no thread cap, it
+    // decodes a single frame, but it should not compete with the foreground.
+    let output = crate::proc::background_command(&ffmpeg)
         .args([
             "-hide_banner",
             "-loglevel",

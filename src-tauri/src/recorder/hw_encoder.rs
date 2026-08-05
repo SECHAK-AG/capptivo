@@ -70,7 +70,6 @@ impl EncoderChoice {
 /// and the lookahead buffer; `-multipass disabled` and `-rc-lookahead 0` say so
 /// explicitly rather than trusting a driver default. `-surfaces 32` gives the
 /// encoder a deeper input pool so it does not stall waiting on our pipe. This is
-/// the set Recordly ships for the same rawvideo-over-pipe pipeline.
 #[cfg(any(target_os = "windows", target_os = "linux"))]
 const NVENC_TUNING: &[&str] = &[
     "-preset",

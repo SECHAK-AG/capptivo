@@ -130,10 +130,15 @@ export type FrameCompositor = {
    * remove. `"done"` — bottom-up RGBA has been copied into `target` and the slot
    * is released. `"failed"` — unknown ticket, wrong `target` size, or the GL
    * context is gone.
+   *
+   * `force` drains the GPU (`gl.finish`) and copies out even when the fence
+   * never polls as signalled — WebView2 escape hatch only. Does not return
+   * `"pending"`.
    */
   tryFinishReadPixels(
     ticket: number,
     target: Uint8Array,
+    force?: boolean,
   ): "pending" | "done" | "failed";
   backend: "pixi";
   resize(

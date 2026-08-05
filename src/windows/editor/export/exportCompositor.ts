@@ -54,6 +54,7 @@ export type ExportCompositor = {
   tryFinishReadPixels: (
     ticket: number,
     target: Uint8Array,
+    force?: boolean,
   ) => "pending" | "done" | "failed";
   /** Which compositor won — decode strategy tunes itself off this. */
   backend: FrameCompositor["backend"];
@@ -399,8 +400,8 @@ export async function createExportCompositorFromMedia(
     ctx: frame.readback,
     readPixelsInto: (target) => frame.readPixelsInto(target),
     beginReadPixels: () => frame.beginReadPixels(),
-    tryFinishReadPixels: (ticket, target) =>
-      frame.tryFinishReadPixels(ticket, target),
+    tryFinishReadPixels: (ticket, target, force) =>
+      frame.tryFinishReadPixels(ticket, target, force),
     backend: frame.backend,
     stats: () => frame.stats(),
     uploadStats: () => frame.uploadStats(),

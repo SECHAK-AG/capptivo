@@ -21,6 +21,14 @@ export const ENCODE_STALL_MS = 8_000;
 /** `flush()`/finalize gets longer: it legitimately drains a full queue. */
 export const FLUSH_STALL_MS = 30_000;
 
+/**
+ * Async PBO fence that stays pending this long → force-finish that frame and
+ * latch to sync `readPixels` for the rest of the export. Shorter than
+ * {@link ENCODE_STALL_MS} so WebView2 fence hangs degrade to sync instead of
+ * aborting the only Windows MP4 route.
+ */
+export const ASYNC_READBACK_FALLBACK_MS = 2_000;
+
 export class ExportStallError extends Error {
   readonly name = "ExportStallError";
   constructor(where: string, stalledMs: number) {

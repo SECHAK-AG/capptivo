@@ -1,6 +1,7 @@
 /** Selfcheck: export stall detection (pure). */
 
 import {
+  ASYNC_READBACK_FALLBACK_MS,
   ENCODE_STALL_MS,
   ExportStallError,
   StallWatchdog,
@@ -11,6 +12,11 @@ import {
 function assert(cond: boolean, msg: string): void {
   if (!cond) throw new Error(msg);
 }
+
+assert(
+  ASYNC_READBACK_FALLBACK_MS < ENCODE_STALL_MS,
+  "async readback must fall back to sync before the route-killing stall fires",
+);
 
 // A token that keeps rising is healthy no matter how long the loop runs.
 {

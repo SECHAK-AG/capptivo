@@ -16,7 +16,7 @@
 
 use super::wasapi_audio::WasapiLoopback;
 use super::win_preview;
-use super::{CaptureBackend, CaptureHandle, RawFrame, CAPTURE_CHANNEL_CAP};
+use super::{CaptureBackend, CaptureHandle, FrameBufferPool, RawFrame, CAPTURE_CHANNEL_CAP};
 use crate::error::{AppError, AppResult};
 use crate::recorder::area_crop::{clamp_crop_px, CropPx};
 use crate::recorder::types::{CaptureSource, CaptureSourceKind, RecorderConfig};
@@ -140,11 +140,15 @@ impl CaptureBackend for WgcBackend {
         // Capture geometry (physical px) + scale, before frames start flowing.
         let (capture_rect, scale_factor, crop_px) = capture_geometry(&target, config)?;
 
+        let pool = FrameBufferPool::new();
+
         let flags = ForwarderFlags {
             tx,
             meta_tx,
             dropped: dropped.clone(),
             crop_px,
+            fps,
+            pool: pool.clone(),
         };
 
         // Feature-support probes: requesting an unsupported toggle fails the
@@ -207,6 +211,7 @@ impl CaptureBackend for WgcBackend {
             }
         };
         let mut handle = CaptureHandle::new(width, height, fps, rx, dropped, stop);
+        handle.pool = Some(pool);
         handle.capture_rect = capture_rect;
         handle.scale_factor = scale_factor;
         handle.epoch = epoch;
@@ -341,6 +346,10 @@ struct ForwarderFlags {
     meta_tx: Sender<([u32; 2], Instant)>,
     dropped: Arc<AtomicU64>,
     crop_px: Option<CropPx>,
+    /// Target capture rate, used to gate frames before the GPU readback.
+    fps: u32,
+    /// Recycled frame buffers, shared with the encode loop.
+    pool: FrameBufferPool,
 }
 
 /// Current QPC time in 100 ns units — the clock WGC frame timestamps
@@ -377,6 +386,9 @@ struct FrameForwarder {
     /// Locked on the first frame; frames with other dims (window resize) are
     /// skipped — the encoder's dimensions are fixed for the session.
     expected: Option<[u32; 2]>,
+    /// Next unfilled CFR slot, advanced by `capture_slot_gate`. Frames landing
+    /// in an already-filled slot never reach `Frame::buffer()`.
+    next_slot: u64,
 }
 
 impl GraphicsCaptureApiHandler for FrameForwarder {
@@ -389,6 +401,7 @@ impl GraphicsCaptureApiHandler for FrameForwarder {
             epoch_qpc: qpc_now_100ns(),
             epoch: Instant::now(),
             expected: None,
+            next_slot: 0,
         })
     }
 
@@ -398,6 +411,40 @@ impl GraphicsCaptureApiHandler for FrameForwarder {
         _control: InternalCaptureControl,
     ) -> Result<(), Self::Error> {
         let ts_raw = frame.timestamp().map(|t| t.Duration).unwrap_or(0);
+
+        // Rate-gate *before* touching the GPU. Every `buffer()`/`buffer_crop()`
+        // call below creates a D3D11 staging texture, copies the surface into
+        // it and maps it — and WGC hands us frames at the display refresh rate
+        // whenever `MinimumUpdateIntervalSettings::Custom` is unsupported
+        // (every Windows below 11 24H2, see `start`). On a 144 Hz monitor that
+        // is 144 readbacks/s feeding a 60 fps encode. The surplus ones used to
+        // be read back in full and then thrown away at `try_send`, and the
+        // readback traffic starves DWM and every other GPU client — which is
+        // why the whole desktop stalls during a recording, not just this app.
+        //
+        // The rule is the encoder's own: `plan_frame` already discards a frame
+        // whose CFR slot is filled. Applying that same rule here drops exactly
+        // the frames the encode loop would have dropped anyway, so the encoded
+        // output is unchanged — this only stops us paying for them. When frames
+        // arrive at or below the target rate every one still passes, so a 60 Hz
+        // display (or a mostly-static screen) is unaffected.
+        //
+        // Skipped when either clock is unavailable: `ts_raw == 0` or no QPC
+        // means we cannot place the frame on the slot axis, and the timestamp
+        // fallback below already treats that as "trust receipt order instead".
+        // Never gate on a timestamp you do not trust.
+        if ts_raw > 0 && self.epoch_qpc > 0 {
+            let ts_secs = (ts_raw - self.epoch_qpc).max(0) as f64 / 1e7;
+            match crate::recorder::capture_slot_gate(ts_secs, self.flags.fps, self.next_slot) {
+                Some(next) => self.next_slot = next,
+                // Not counted in `dropped`: that counter is surfaced to the user
+                // as `CaptureStats::frames_dropped` and means "the pipeline lost
+                // frames". These were never wanted — counting them would report
+                // ~58% loss on a 144 Hz display for a recording that is in fact
+                // complete.
+                None => return Ok(()),
+            }
+        }
 
         let mut buffer = match self.flags.crop_px {
             Some(c) => {
@@ -462,14 +509,20 @@ impl GraphicsCaptureApiHandler for FrameForwarder {
             width,
             height,
             bytes_per_row,
-            data: buffer.as_raw_buffer().to_vec(),
+            // Recycled rather than freshly allocated: a 4K frame is ~33 MB, and
+            // faulting in that many new pages costs several times the copy
+            // itself. See `FrameBufferPool`.
+            data: self.flags.pool.fill_from(buffer.as_raw_buffer()),
             timestamp,
         };
 
         match self.flags.tx.try_send(raw) {
             Ok(()) => {}
-            Err(crossbeam_channel::TrySendError::Full(_)) => {
+            Err(crossbeam_channel::TrySendError::Full(frame)) => {
                 self.flags.dropped.fetch_add(1, Ordering::Relaxed);
+                // The channel handed the frame back, so nothing else can be
+                // holding this buffer — recycle it instead of freeing it.
+                self.flags.pool.put(frame.data);
             }
             Err(crossbeam_channel::TrySendError::Disconnected(_)) => {
                 // Encoder is gone — the session is being torn down.
