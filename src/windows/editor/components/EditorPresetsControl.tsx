@@ -181,7 +181,7 @@ export function EditorPresetsControl() {
             activePreset && "text-foreground",
           )}
         >
-          <Bookmark className="size-3.5 shrink-0" aria-hidden />
+          <Bookmark className="size-3.5 shrink-0 fill-current" aria-hidden />
           <span className="max-w-28 truncate">{triggerLabel}</span>
           <ChevronDown className="size-3 shrink-0 opacity-50" aria-hidden />
         </button>
