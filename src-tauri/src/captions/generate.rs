@@ -113,7 +113,9 @@ pub fn generate(
 }
 
 fn extract_wav(ffmpeg: &Path, video: &Path, wav: &Path) -> AppResult<()> {
-    let status = proc::command(ffmpeg)
+    // Caption generation is entirely background work: audio extract, then the
+    // whisper model. None of it blocks the editor.
+    let status = proc::background_command(ffmpeg)
         .args([
             "-y",
             "-i",
@@ -143,7 +145,9 @@ fn run_whisper<'a>(
     whisper: &Path,
     args: impl IntoIterator<Item = &'a str>,
 ) -> AppResult<()> {
-    let status = proc::command(whisper)
+    // whisper.cpp caps itself at 4 threads by default, so it needs no --threads
+    // argument here — only the priority demotion.
+    let status = proc::background_command(whisper)
         .args(args)
         .status()
         .map_err(|e| AppError::Other(format!("whisper spawn ({whisper:?}): {e}")))?;
@@ -176,7 +180,7 @@ fn whisper_json_unsupported(err: &AppError) -> bool {
 }
 
 fn detect_silence(ffmpeg: &Path, wav: &Path) -> AppResult<Vec<SilenceInterval>> {
-    let output = proc::command(ffmpeg)
+    let output = proc::background_command(ffmpeg)
         .args([
             "-hide_banner",
             "-nostats",

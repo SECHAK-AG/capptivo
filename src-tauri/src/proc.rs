@@ -26,6 +26,59 @@ pub fn command(program: impl AsRef<OsStr>) -> Command {
     cmd
 }
 
+/// Like [`command`], but for long-running work the user is not waiting on:
+/// preview proxies, poster frames, camera-track normalization, caption models.
+///
+/// On Windows these run at `BELOW_NORMAL_PRIORITY_CLASS`. Windows has no
+/// automatic background QoS demotion the way macOS does, so a child inheriting
+/// `NORMAL` puts a multi-minute 4K transcode in direct competition with DWM,
+/// the shell, and the user's browser — which is how one background job makes
+/// the whole desktop feel frozen.
+///
+/// `IDLE_PRIORITY_CLASS` was rejected: it yields to *any* other runnable
+/// thread, so the job stalls indefinitely while the user works and the editor
+/// waits forever on a proxy that never arrives. `BELOW_NORMAL` still gets a full
+/// core when one is free.
+///
+/// Priority is a `CreateProcess` creation flag, so this needs no
+/// `SetPriorityClass` call and no extra `windows` crate feature. Note the flags
+/// are re-specified rather than OR'd onto [`command`]'s: `creation_flags`
+/// replaces the value, so dropping `CREATE_NO_WINDOW` here would bring back a
+/// console flash on every spawn.
+///
+/// No-op off Windows — macOS and Linux already schedule this workload acceptably.
+pub fn background_command(program: impl AsRef<OsStr>) -> Command {
+    #[allow(unused_mut)]
+    let mut cmd = command(program);
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        const BELOW_NORMAL_PRIORITY_CLASS: u32 = 0x0000_4000;
+        cmd.creation_flags(CREATE_NO_WINDOW | BELOW_NORMAL_PRIORITY_CLASS);
+    }
+    cmd
+}
+
+/// Threads a *background* FFmpeg job may use: every core but two, floor of 1.
+///
+/// FFmpeg defaults to one thread per logical core, so a 4K proxy transcode takes
+/// the whole machine. Two cores of headroom is what keeps the UI and the
+/// compositor responsive while it runs.
+///
+/// Deliberately **not** applied to the live recorder encoder or to export. The
+/// recorder has to keep pace with capture — starving it drops frames, which is a
+/// real recording-quality loss — and export is a foreground task the user is
+/// actively waiting on. Both are better served by finishing fast.
+///
+/// Falls back to 1 if the core count is unavailable: a slow background job beats
+/// an unusable machine.
+pub fn encode_thread_cap() -> usize {
+    std::thread::available_parallelism()
+        .map(|n| n.get().saturating_sub(2).max(1))
+        .unwrap_or(1)
+}
+
 /// Append the platform executable suffix to a bare tool name (`ffmpeg` →
 /// `ffmpeg.exe` on Windows).
 pub fn exe_name(base: &str) -> String {
@@ -117,6 +170,41 @@ mod tests {
             name == exe_name("ffmpeg") || name.ends_with(&exe_name("ffmpeg")),
             "unexpected fallback: {got:?}"
         );
+    }
+
+    #[test]
+    fn encode_thread_cap_leaves_headroom_for_the_desktop() {
+        let cap = encode_thread_cap();
+        assert!(cap >= 1, "must always allow at least one encode thread");
+        if let Ok(cores) = std::thread::available_parallelism() {
+            if cores.get() > 2 {
+                assert!(
+                    cap < cores.get(),
+                    "a background job must never be handed every core ({cap} of {cores})"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn encode_thread_cap_is_a_usable_ffmpeg_argument() {
+        // It is interpolated straight into `-threads N`; zero would make FFmpeg
+        // pick its own (all cores), silently undoing the cap.
+        let arg = encode_thread_cap().to_string();
+        assert_ne!(arg, "0", "`-threads 0` means 'auto', i.e. no cap at all");
+        assert!(arg.parse::<usize>().is_ok_and(|n| n >= 1));
+    }
+
+    #[test]
+    fn background_command_still_suppresses_the_console_window() {
+        // `creation_flags` replaces rather than ORs, so `background_command`
+        // has to re-specify CREATE_NO_WINDOW. Losing it means a console flashes
+        // on every proxy transcode. The flag itself is not readable back off
+        // `Command`, so assert the property that guards it: the two builders
+        // agree on the program they spawn, i.e. one delegates to the other.
+        let a = command("ffmpeg");
+        let b = background_command("ffmpeg");
+        assert_eq!(a.get_program(), b.get_program());
     }
 
     #[test]

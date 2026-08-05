@@ -38,14 +38,25 @@ pub fn generate(screen: &Path, dir: &Path) -> AppResult<()> {
         "scale={PROXY_LONG_EDGE}:{PROXY_LONG_EDGE}:force_original_aspect_ratio=decrease:force_divisible_by=2"
     );
 
-    let status = proc::command(&ffmpeg)
+    // This runs on editor open, against the full-resolution recording, and
+    // nobody is watching it — so it gets background priority and a bounded
+    // thread pool. Left at FFmpeg's defaults it decodes 4K, scales, and
+    // re-encodes on every core at normal priority, which is what made opening
+    // the editor lock up the desktop. The cap is applied three times because
+    // each stage sizes its own pool: decode (before `-i`), filtering, encode.
+    let threads = proc::encode_thread_cap().to_string();
+
+    let status = proc::background_command(&ffmpeg)
         .args(["-hide_banner", "-loglevel", "error", "-y"])
+        .args(["-filter_threads", &threads])
+        .args(["-threads", &threads])
         .args(encoder.pre_input_args)
         .arg("-i")
         .arg(screen)
         .args(["-c:v", encoder.name])
         .args(encoder.output_args(Some(&scale)))
         .args(encoder.tuning_args)
+        .args(["-threads", &threads])
         .args([
             "-b:v",
             "2500k",

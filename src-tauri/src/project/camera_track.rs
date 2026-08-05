@@ -92,8 +92,12 @@ fn transcode(src: &Path, out: &Path) -> AppResult<()> {
     let ffmpeg = ffmpeg_path();
     let encoder = hw_encoder::pick(&ffmpeg);
 
-    let status = proc::command(&ffmpeg)
+    // Background: the editor does not block on the face-cam track.
+    let threads = proc::encode_thread_cap().to_string();
+
+    let status = proc::background_command(&ffmpeg)
         .args(["-hide_banner", "-loglevel", "error", "-nostdin", "-y"])
+        .args(["-threads", &threads])
         .args(encoder.pre_input_args)
         .arg("-i")
         .arg(src)
