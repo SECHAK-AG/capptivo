@@ -16,7 +16,7 @@ import {
 import { openSequentialMedia } from "./sequentialMedia";
 import { shouldYieldNow, yieldToMain } from "./exportYield";
 import { throwIfAborted } from "./exportCancel";
-import { FLUSH_STALL_MS, StallWatchdog, withDeadline } from "./exportStall";
+import { FLUSH_STALL_MS, ASYNC_READBACK_FALLBACK_MS, StallWatchdog, withDeadline } from "./exportStall";
 import { throttledProgress } from "./exportProgress";
 import { FramePool } from "./framePool";
 import {
@@ -179,9 +179,12 @@ export async function renderMp4ViaFfmpegRawvideo(
     /**
      * Latched, not re-tested per frame: whether the renderer can do fenced reads
      * is a property of the GL context, so a single `null` means every later call
-     * would also return `null`.
+     * would also return `null`. Also latched off when a fence never signals
+     * (WebView2) so the rest of the export falls back to sync readback.
      */
     let asyncReadback = true;
+    /** Once set, in-flight tickets are force-finished (`gl.finish`) instead of polled. */
+    let forceCollect = false;
 
     /**
      * Complete the oldest outstanding readback and hand it to ffmpeg. Blocks
@@ -194,7 +197,11 @@ export async function renderMp4ViaFfmpegRawvideo(
       const watchdog = new StallWatchdog("rawvideo GPU readback");
       const waitStart = performance.now();
       for (;;) {
-        const status = tryFinishReadPixels(head.ticket, head.buffer);
+        const status = tryFinishReadPixels(
+          head.ticket,
+          head.buffer,
+          forceCollect,
+        );
         if (status === "done") {
           readbackMs += performance.now() - waitStart;
           inFlight.shift();
@@ -209,7 +216,20 @@ export async function renderMp4ViaFfmpegRawvideo(
           throw new Error("rawvideo readback failed mid-export");
         }
         // Pending. Never spin on the fence with a blocking wait — that is the
-        // stall this path exists to remove.
+        // stall this path exists to remove. If the fence never signals
+        // (WebView2 without a submitted pack), force-finish and latch sync.
+        if (
+          !forceCollect &&
+          performance.now() - waitStart >= ASYNC_READBACK_FALLBACK_MS
+        ) {
+          console.warn(
+            `[export] async GPU readback fence stalled after ${ASYNC_READBACK_FALLBACK_MS}ms; ` +
+              `force-finishing in-flight frames and falling back to sync readback`,
+          );
+          forceCollect = true;
+          asyncReadback = false;
+          continue;
+        }
         watchdog.check(progressToken);
         throwIfAborted(signal);
         throwIfGpuLost(isGpuLost);
