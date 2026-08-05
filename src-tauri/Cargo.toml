@@ -66,6 +66,12 @@ scap = { version = "=0.0.8", optional = true }
 screencapturekit-sys = { version = "0.2.8", optional = true }
 objc = "0.2.7"
 objc_id = { version = "0.1.1", optional = true }
+# Picker thumbnails via SCScreenshotManager (the legacy CGDisplayCreateImage /
+# CGWindowListCreateImage path is gone on macOS 15+). Both already in-tree
+# transitively; `block` for the capture completion handler, `foreign-types`
+# to borrow the returned CGImageRef.
+block = { version = "0.1.6", optional = true }
+foreign-types = "0.5"
 # Global cursor position + click polling for the zoom-follow data (no TCC needed
 # for position polling). Isolated behind cursor::CursorTracker.
 core-graphics = "0.24"
@@ -123,7 +129,7 @@ default = ["scap-capture", "wgc-capture", "portal-capture"]
 # test-pattern backend is compiled, keeping `cargo test` green everywhere and
 # letting `cargo check --no-default-features` verify the pipeline without the
 # ScreenCaptureKit `-sys` build.
-scap-capture = ["dep:scap", "dep:screencapturekit-sys", "dep:objc_id", "dep:cpal"]
+scap-capture = ["dep:scap", "dep:screencapturekit-sys", "dep:objc_id", "dep:cpal", "dep:block"]
 # Windows.Graphics.Capture backend (no-op off Windows — the target-gated deps
 # only resolve there, so the feature is safe to keep in defaults).
 wgc-capture = ["dep:windows-capture", "dep:cpal"]
