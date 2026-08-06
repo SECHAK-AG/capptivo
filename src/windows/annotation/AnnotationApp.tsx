@@ -29,6 +29,7 @@ import {
   Type,
   Undo2,
   X,
+  Zap,
 } from "lucide-react";
 import { cursorPosition, getCurrentWindow } from "@tauri-apps/api/window";
 import { emit, listen } from "@tauri-apps/api/event";
@@ -483,6 +484,12 @@ export function AnnotationApp() {
           active={tool === "highlighter"}
           onClick={() => pickTool("highlighter")}
           icon={<Highlighter className="size-4" />}
+        />
+        <ToolBtn
+          label="Laser pointer"
+          active={tool === "laser"}
+          onClick={() => pickTool("laser")}
+          icon={<Zap className="size-4" />}
         />
         <ToolBtn
           label="Eraser"
