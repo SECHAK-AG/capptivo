@@ -349,6 +349,8 @@ export const ko: Record<TranslationKey, string> = {
   "recorder.hud.hide": "컨트롤 숨기기",
   "recorder.error.dismiss": "닫기",
 
+  "library.back": "뒤로",
+
   "library.search.placeholder": "이름으로 검색…",
   "library.search.filter": "필터",
   "library.search.clear": "검색 지우기",

@@ -354,6 +354,8 @@ export const de: Record<TranslationKey, string> = {
   "recorder.hud.hide": "Steuerung ausblenden",
   "recorder.error.dismiss": "Schließen",
 
+  "library.back": "Zurück",
+
   "library.search.placeholder": "Nach Namen suchen…",
   "library.search.filter": "Filtern",
   "library.search.clear": "Suche löschen",

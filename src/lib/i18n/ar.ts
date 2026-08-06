@@ -352,6 +352,8 @@ export const ar: Record<TranslationKey, string> = {
   "recorder.hud.hide": "إخفاء عناصر التحكم",
   "recorder.error.dismiss": "إغلاق",
 
+  "library.back": "رجوع",
+
   "library.search.placeholder": "البحث بالاسم…",
   "library.search.filter": "تصفية",
   "library.search.clear": "مسح البحث",
