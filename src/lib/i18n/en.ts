@@ -347,6 +347,8 @@ export const en = {
   "recorder.hud.hide": "Hide controls",
   "recorder.error.dismiss": "Dismiss",
 
+  "library.back": "Back",
+
   "library.search.placeholder": "Search by name…",
   "library.search.filter": "Filter",
   "library.search.clear": "Clear search",

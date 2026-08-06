@@ -359,6 +359,8 @@ export const es: Record<TranslationKey, string> = {
   "recorder.hud.hide": "Ocultar controles",
   "recorder.error.dismiss": "Cerrar",
 
+  "library.back": "Atrás",
+
   "library.search.placeholder": "Buscar por nombre…",
   "library.search.filter": "Filtrar",
   "library.search.clear": "Borrar búsqueda",

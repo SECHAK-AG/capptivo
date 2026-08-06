@@ -349,6 +349,8 @@ export const ja: Record<TranslationKey, string> = {
   "recorder.hud.hide": "コントロールを隠す",
   "recorder.error.dismiss": "閉じる",
 
+  "library.back": "戻る",
+
   "library.search.placeholder": "名前で検索…",
   "library.search.filter": "フィルター",
   "library.search.clear": "検索をクリア",

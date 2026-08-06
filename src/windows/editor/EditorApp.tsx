@@ -224,7 +224,14 @@ export function EditorApp() {
     return (
       <TooltipProvider delayDuration={200}>
         <div className="flex h-screen min-h-0 flex-col bg-background text-foreground">
-          <EditorTitleBar title={t("recorder.recordings")} />
+          <EditorTitleBar
+            title={t("recorder.recordings")}
+            onBack={
+              ready && !error && project
+                ? () => setShell("editor")
+                : undefined
+            }
+          />
           <div className="min-h-0 flex-1 overflow-y-auto">
             <RecordingsLibrary
               currentProjectId={projectId}

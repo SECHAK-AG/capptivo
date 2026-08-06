@@ -6,7 +6,7 @@
  */
 
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import { Bug, Minus, Square, X } from "lucide-react";
+import { ArrowLeft, Bug, Minus, Square, X } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 
 import { Button } from "@/components/ui/button";
@@ -64,6 +64,8 @@ function WindowControls() {
 
 type Props = {
   title: string;
+  /** When set, a back button leads the bar (library shell with a project open). */
+  onBack?: () => void;
   /** When set, title is click-to-edit. Empty string clears the saved title. */
   onRename?: (next: string) => void;
   /** Value seeded into the input (use "" for untitled so the field starts empty). */
@@ -189,6 +191,7 @@ function EditableTitle({
 
 export function EditorTitleBar({
   title,
+  onBack,
   onRename,
   renameSeed,
   exportError = null,
@@ -224,6 +227,21 @@ export function EditorTitleBar({
         data-tauri-drag-region
         aria-hidden
       />
+
+      {onBack ? (
+        <div className="relative z-10 mr-auto flex items-center">
+          <Button
+            type="button"
+            variant="ghost"
+            size="sm"
+            className="pointer-events-auto gap-1.5 text-muted-foreground hover:text-foreground"
+            onClick={onBack}
+          >
+            <ArrowLeft className="size-4" aria-hidden />
+            {t("library.back")}
+          </Button>
+        </div>
+      ) : null}
 
       <div className="pointer-events-none absolute inset-x-0 top-px bottom-px flex items-center justify-center px-24">
         <div className="pointer-events-auto">

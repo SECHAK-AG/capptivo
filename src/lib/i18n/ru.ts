@@ -352,6 +352,8 @@ export const ru: Record<TranslationKey, string> = {
   "recorder.hud.hide": "Скрыть панель",
   "recorder.error.dismiss": "Закрыть",
 
+  "library.back": "Назад",
+
   "library.search.placeholder": "Поиск по имени…",
   "library.search.filter": "Фильтр",
   "library.search.clear": "Очистить поиск",
