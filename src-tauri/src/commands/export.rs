@@ -156,7 +156,7 @@ pub async fn ensure_seekable_recording(
 /// Fail early when the volume hosting `path` cannot hold `needed` bytes.
 /// No-op when free space cannot be determined (unsupported platform / odd path).
 #[tauri::command(async)]
-pub fn check_export_disk_space(path: String, needed: u64) -> AppResult<()> {
+pub fn check_export_disk_space(state: State<AppState>, path: String, needed: u64) -> AppResult<()> {
     let path = PathBuf::from(path);
     let available = volume_available_bytes(&path);
     if available.is_some_and(|free| free < needed) {
@@ -164,7 +164,25 @@ pub fn check_export_disk_space(path: String, needed: u64) -> AppResult<()> {
             "Not enough free disk space to save the export here. Choose another location or free up space.".into(),
         ));
     }
+    state.pending_export_paths.lock().insert(path);
     Ok(())
+}
+
+fn claim_export_path(state: &AppState, path: &Path) -> AppResult<()> {
+    claim_path(&state.pending_export_paths, path)
+}
+
+fn claim_path(
+    pending: &parking_lot::Mutex<std::collections::HashSet<PathBuf>>,
+    path: &Path,
+) -> AppResult<()> {
+    if pending.lock().remove(path) {
+        Ok(())
+    } else {
+        Err(AppError::Other(
+            "export destination was not selected via the save dialog".into(),
+        ))
+    }
 }
 
 /// Open a file sink at `path` and return an opaque handle for the chunk writes.
@@ -180,6 +198,7 @@ pub fn check_export_disk_space(path: String, needed: u64) -> AppResult<()> {
 #[tauri::command(async)]
 pub fn begin_export(state: State<AppState>, path: String) -> AppResult<u64> {
     let final_path = PathBuf::from(path);
+    claim_export_path(&state, &final_path)?;
     let temp_path = export_temp_path(&final_path);
     if temp_path.exists() {
         let _ = std::fs::remove_file(&temp_path);
@@ -304,12 +323,9 @@ pub fn abort_export(state: State<AppState>, handle: u64, reason: String) -> AppR
 /// Start ffmpeg reading Annex-B H.264 from IPC writes; output is a temp MP4
 /// promoted on [`finish_export_h264_stream`].
 #[tauri::command(async)]
-pub fn begin_export_h264_stream(
-    state: State<AppState>,
-    path: String,
-    fps: u32,
-) -> AppResult<u64> {
+pub fn begin_export_h264_stream(state: State<AppState>, path: String, fps: u32) -> AppResult<u64> {
     let final_path = PathBuf::from(path);
+    claim_export_path(&state, &final_path)?;
     let muxer = H264StreamMuxer::spawn(&final_path, fps)?;
     let mut next = state.next_export_id.lock();
     let handle = *next;
@@ -399,6 +415,7 @@ pub fn begin_export_rawvideo_stream(
     bitrate: u32,
 ) -> AppResult<u64> {
     let final_path = PathBuf::from(path);
+    claim_export_path(&state, &final_path)?;
     let encoder = RawvideoStreamEncoder::spawn(&final_path, width, height, fps, bitrate)?;
     let mut next = state.next_export_id.lock();
     let handle = *next;
@@ -601,5 +618,17 @@ mod tests {
         assert_eq!(got, "keep-me");
 
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn claim_path_requires_prior_registration() {
+        let pending = parking_lot::Mutex::new(std::collections::HashSet::new());
+        let path = PathBuf::from("/tmp/out.mp4");
+
+        assert!(claim_path(&pending, &path).is_err());
+
+        pending.lock().insert(path.clone());
+        assert!(claim_path(&pending, &path).is_ok());
+        assert!(claim_path(&pending, &path).is_err());
     }
 }

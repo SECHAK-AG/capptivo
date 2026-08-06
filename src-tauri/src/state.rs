@@ -33,6 +33,7 @@ pub struct AppState {
     pub proxy_jobs: Mutex<HashSet<String>>,
     /// Same coalescing for the face-cam normalization pass (`ensure_camera_track`).
     pub camera_jobs: Mutex<HashSet<String>>,
+    pub pending_export_paths: Mutex<HashSet<PathBuf>>,
 }
 
 pub struct ExportSink {
@@ -85,6 +86,7 @@ impl AppState {
             camera_sink: Mutex::new(None),
             proxy_jobs: Mutex::new(HashSet::new()),
             camera_jobs: Mutex::new(HashSet::new()),
+            pending_export_paths: Mutex::new(HashSet::new()),
         }
     }
 }
