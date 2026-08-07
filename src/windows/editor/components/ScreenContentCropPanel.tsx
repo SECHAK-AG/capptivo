@@ -1,12 +1,18 @@
 import { useCallback, useRef, useState } from "react";
-import { clampScreenContentCropNorm, hitTestHandle, type ScreenContentCropNorm } from "@/engine";
+import { clampScreenContentCropNorm, type ScreenContentCropNorm } from "@/engine";
 
 import { Button } from "@/components/ui/button";
 import { FieldLabelWithHint } from "@/components/ui/field-label-with-hint";
 import { cn } from "@/lib/utils";
 import { useI18n } from "@/lib/settings";
 
-import { cornerHandleOverlayStyle, CROP_HANDLE_SIZE, getHandleCursor } from "../lib/cropHandles";
+import { cornerHandleOverlayStyle, CROP_HANDLE_SIZE } from "../lib/cropHandles";
+import {
+  containsPoint,
+  hitHandleAt,
+  useRectDrag,
+  type RectHit,
+} from "../lib/useRectDrag";
 import { InspectorVideoPreview } from "./InspectorVideoPreview";
 
 type Rect = { x: number; y: number; width: number; height: number };
@@ -32,10 +38,6 @@ type ScreenContentCropPanelProps = {
   hint?: string;
 };
 
-type Interaction =
-  | { mode: "move"; startX: number; startY: number; startRect: Rect }
-  | { mode: "resize"; handle: string; startX: number; startY: number; startRect: Rect };
-
 /**
  * Single fixed crop (normalized 0–1) for the whole recording: which rectangle of the
  * source video is shown. Independent of zoom keyframes. Clearing the crop restores defaults.
@@ -54,179 +56,28 @@ export function ScreenContentCropPanel({
 }: ScreenContentCropPanelProps) {
   const { t } = useI18n();
   const stageRef = useRef<HTMLDivElement>(null);
-  const pointerIdRef = useRef<number | null>(null);
-  const interactionRef = useRef<Interaction | null>(null);
-  const [hoverCursor, setHoverCursor] = useState("default");
   const [measuredAspect, setMeasuredAspect] = useState<number | null>(null);
   const stageAspect = fileAspect ?? measuredAspect ?? 16 / 9;
   const activeRect = value ?? null;
 
-  const handlePointerDown = (e: React.PointerEvent) => {
-    if (disabled || !hasBackground || !activeRect || !stageRef.current) {
-      return;
-    }
-
-    const stage = stageRef.current;
-    const b = stage.getBoundingClientRect();
-
-    if (b.width <= 0 || b.height <= 0) {
-      return;
-    }
-
-    e.preventDefault();
-    e.stopPropagation();
-
-    const localX = e.clientX - b.left;
-    const localY = e.clientY - b.top;
-    const rectPx: Rect = {
-      x: activeRect.x * b.width,
-      y: activeRect.y * b.height,
-      width: activeRect.width * b.width,
-      height: activeRect.height * b.height,
-    };
-
-    const handle = hitTestHandle(localX, localY, rectPx, CROP_HANDLE_SIZE);
-    const inside =
-      localX >= rectPx.x &&
-      localX <= rectPx.x + rectPx.width &&
-      localY >= rectPx.y &&
-      localY <= rectPx.y + rectPx.height;
-
-    if (!handle && !inside) {
-      return;
-    }
-
-    stage.setPointerCapture(e.pointerId);
-    pointerIdRef.current = e.pointerId;
-
-    if (handle) {
-      interactionRef.current = {
-        mode: "resize",
-        handle,
-        startX: localX,
-        startY: localY,
-        startRect: { ...rectPx },
-      };
-    } else {
-      interactionRef.current = {
-        mode: "move",
-        startX: localX,
-        startY: localY,
-        startRect: { ...rectPx },
-      };
-    }
-  };
-
-  const applyRectPx = useCallback(
-    (r: Rect, w: number, h: number) => {
-      const x = r.x / w;
-      const y = r.y / h;
-      const width = r.width / w;
-      const height = r.height / h;
-      onChange(clampScreenContentCropNorm({ x, y, width, height }));
+  const pick = useCallback(
+    (x: number, y: number, w: number, h: number): RectHit | null => {
+      if (!activeRect) return null;
+      const handle = hitHandleAt(x, y, activeRect, w, h);
+      if (handle) return { key: "crop", rect: activeRect, handle };
+      return containsPoint(x, y, activeRect, w, h)
+        ? { key: "crop", rect: activeRect, handle: null }
+        : null;
     },
-    [onChange],
+    [activeRect],
   );
 
-  const handlePointerMove = (e: React.PointerEvent) => {
-    if (!activeRect || !stageRef.current) {
-      return;
-    }
-
-    const stage = stageRef.current;
-    const b = stage.getBoundingClientRect();
-    const localX = e.clientX - b.left;
-    const localY = e.clientY - b.top;
-    const bw = b.width;
-    const bh = b.height;
-
-    const inter = interactionRef.current;
-
-    if (pointerIdRef.current !== null && e.pointerId !== pointerIdRef.current) {
-      return;
-    }
-
-    if (inter) {
-      if (inter.mode === "move") {
-        const dx = localX - inter.startX;
-        const dy = localY - inter.startY;
-        applyRectPx(
-          {
-            x: inter.startRect.x + dx,
-            y: inter.startRect.y + dy,
-            width: inter.startRect.width,
-            height: inter.startRect.height,
-          },
-          bw,
-          bh,
-        );
-      } else {
-        const dx = localX - inter.startX;
-        const dy = localY - inter.startY;
-        const { startRect, handle } = inter;
-        let x = startRect.x;
-        let y = startRect.y;
-        let w = startRect.width;
-        let h = startRect.height;
-
-        if (handle.includes("e")) {
-          w = startRect.width + dx;
-        }
-
-        if (handle.includes("w")) {
-          x = startRect.x + dx;
-          w = startRect.width - dx;
-        }
-
-        if (handle.includes("s")) {
-          h = startRect.height + dy;
-        }
-
-        if (handle.includes("n")) {
-          y = startRect.y + dy;
-          h = startRect.height - dy;
-        }
-
-        applyRectPx({ x, y, width: w, height: h }, bw, bh);
-      }
-
-      return;
-    }
-
-    const rectPx: Rect = {
-      x: activeRect.x * bw,
-      y: activeRect.y * bh,
-      width: activeRect.width * bw,
-      height: activeRect.height * bh,
-    };
-    const hov = hitTestHandle(localX, localY, rectPx, CROP_HANDLE_SIZE);
-
-    if (hov) {
-      setHoverCursor(getHandleCursor(hov));
-    } else if (
-      localX >= rectPx.x &&
-      localX <= rectPx.x + rectPx.width &&
-      localY >= rectPx.y &&
-      localY <= rectPx.y + rectPx.height
-    ) {
-      setHoverCursor("move");
-    } else {
-      setHoverCursor("default");
-    }
-  };
-
-  const handlePointerUp = (e: React.PointerEvent) => {
-    if (e.pointerId !== pointerIdRef.current) {
-      return;
-    }
-
-    if (stageRef.current?.hasPointerCapture(e.pointerId)) {
-      stageRef.current.releasePointerCapture(e.pointerId);
-    }
-
-    pointerIdRef.current = null;
-    interactionRef.current = null;
-  };
+  const { cursor, handlers } = useRectDrag({
+    stageRef,
+    disabled: disabled || !hasBackground,
+    pick,
+    onChange: (_key, next) => onChange(clampScreenContentCropNorm(next)),
+  });
 
   if (!hasBackground) {
     return null;
@@ -269,20 +120,10 @@ export function ScreenContentCropPanel({
         <div
           ref={stageRef}
           className="relative w-full select-none"
-          onPointerDown={handlePointerDown}
-          onPointerMove={handlePointerMove}
-          onPointerUp={handlePointerUp}
-          onPointerCancel={handlePointerUp}
-          onPointerLeave={(e) => {
-            if (!interactionRef.current) {
-              setHoverCursor("default");
-            }
-
-            handlePointerUp(e);
-          }}
+          {...handlers}
           style={{
             aspectRatio: stageAspect > 0 ? stageAspect : 16 / 9,
-            cursor: hoverCursor,
+            cursor,
           }}
         >
           {/*

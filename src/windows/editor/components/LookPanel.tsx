@@ -26,6 +26,7 @@ import { maxDevicePaddingFor } from "../lib/composition";
 import { useStageDimensions } from "../lib/useStageDimensions";
 import { FieldLabel, SectionLabel } from "./ui";
 import { ScreenContentCropPanel } from "./ScreenContentCropPanel";
+import { BlurRegionsPanel } from "./BlurRegionsPanel";
 
 const selectedRing = "border-primary ring-2 ring-primary/40";
 const idleRing = "border-border hover:border-foreground/30";
@@ -38,6 +39,10 @@ const BG_TAB_LABEL_KEY: Record<BackgroundType, TranslationKey> = {
 
 export function LookPanel({ visible = true }: { visible?: boolean }) {
   const { t } = useI18n();
+  const blurRegions = useEditorStore((s) => s.blurRegions);
+  const addBlurRegion = useEditorStore((s) => s.addBlurRegion);
+  const updateBlurRegion = useEditorStore((s) => s.updateBlurRegion);
+  const removeBlurRegion = useEditorStore((s) => s.removeBlurRegion);
   const backgroundType = useEditorStore((s) => s.backgroundType);
   const setBackgroundType = useEditorStore((s) => s.setBackgroundType);
   const selectedBackground = useEditorStore((s) => s.selectedBackground);
@@ -90,6 +95,19 @@ export function LookPanel({ visible = true }: { visible?: boolean }) {
           hasBackground
           value={screenContentCrop}
           onChange={setScreenContentCrop}
+          seekTo={cropPreviewTime}
+        />
+      )}
+
+      {previewUrl && (
+        <BlurRegionsPanel
+          key="blur-regions"
+          videoUrl={previewUrl}
+          fileAspect={sourceAspect}
+          regions={blurRegions}
+          onAdd={addBlurRegion}
+          onChange={updateBlurRegion}
+          onRemove={removeBlurRegion}
           seekTo={cropPreviewTime}
         />
       )}

@@ -1,3 +1,4 @@
+export * from "./blurRegions";
 export * from "./cameraTransform";
 export * from "./constants";
 export * from "./cursorMotion";

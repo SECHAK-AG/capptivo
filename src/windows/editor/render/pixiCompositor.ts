@@ -8,6 +8,7 @@
 import "pixi.js/unsafe-eval";
 
 import {
+  BlurFilter,
   Container,
   Graphics,
   Rectangle,
@@ -18,7 +19,9 @@ import {
 } from "pixi.js";
 
 import {
+  BLUR_REGION_STRENGTH,
   CAMERA_IDENTITY,
+  blurRegionPlacement,
   computeCameraTransform,
   contentRectPixelsFromCrop,
   drawBackgroundLayer,
@@ -110,10 +113,17 @@ export async function createPixiFrameCompositor(
   faceSprite.mask = faceMask.graphics;
   faceRoot.addChild(faceShadow.sprite, faceSprite, faceMask.graphics);
 
+  const blurLayer = new Container({ label: "blur-regions" });
+  const blurMask = new RoundedMask();
+  blurLayer.mask = blurMask.graphics;
+  const blurSprites: Sprite[] = [];
+
   camera.addChild(
     recordingShadow.sprite,
     screenSprite,
     screenMask.graphics,
+    blurLayer,
+    blurMask.graphics,
     cursorOverlay.container,
   );
   stage.addChild(
@@ -259,6 +269,9 @@ export async function createPixiFrameCompositor(
       screenMask.set(rect.x, rect.y, rect.width, rect.height, radius);
       profiler.mark("screenGeometry");
 
+      updateBlurRegions(inputs, screenSize, content, rect, radius);
+      profiler.mark("blurRegions");
+
       updateCursor(inputs, rect);
       profiler.mark("cursor");
 
@@ -276,6 +289,7 @@ export async function createPixiFrameCompositor(
       screenSprite.texture = Texture.EMPTY;
       screenSprite.visible = false;
       recordingShadow.sprite.visible = false;
+      blurLayer.visible = false;
       cursorOverlay.hide();
     }
 
@@ -350,6 +364,78 @@ export async function createPixiFrameCompositor(
       y: rect.y,
       scaleX: 1,
       scaleY: 1,
+    });
+  }
+
+  function updateBlurRegions(
+    inputs: RenderFrameInputs,
+    source: { width: number; height: number },
+    content: { ox: number; oy: number; rw: number; rh: number },
+    rect: Rect,
+    radius: number,
+  ): void {
+    const textureSource = screenSprite.texture.source;
+    const placements = (inputs.blurRegions ?? [])
+      .map((region) =>
+        blurRegionPlacement(
+          region,
+          source.width,
+          source.height,
+          content,
+          rect,
+        ),
+      )
+      .filter((placement) => placement !== null);
+
+    blurLayer.visible = placements.length > 0;
+    if (placements.length === 0) {
+      for (const sprite of blurSprites) sprite.visible = false;
+      return;
+    }
+
+    blurMask.set(rect.x, rect.y, rect.width, rect.height, radius);
+
+    while (blurSprites.length < placements.length) {
+      const sprite = new Sprite();
+      sprite.filters = [new BlurFilter({ strength: BLUR_REGION_STRENGTH })];
+      blurSprites.push(sprite);
+      blurLayer.addChild(sprite);
+    }
+
+    blurSprites.forEach((sprite, index) => {
+      const placement = placements[index];
+      if (!placement) {
+        sprite.visible = false;
+        return;
+      }
+      const { x, y, width, height } = placement.source;
+      const current = sprite.texture;
+      if (current === Texture.EMPTY || current.source !== textureSource) {
+        if (current !== Texture.EMPTY) current.destroy(false);
+        sprite.texture = new Texture({
+          source: textureSource,
+          frame: new Rectangle(x, y, width, height),
+          label: "blur-region",
+          dynamic: true,
+        });
+      } else {
+        const frame = current.frame;
+        if (
+          frame.x !== x ||
+          frame.y !== y ||
+          frame.width !== width ||
+          frame.height !== height
+        ) {
+          frame.x = x;
+          frame.y = y;
+          frame.width = width;
+          frame.height = height;
+          current.update();
+        }
+      }
+      sprite.visible = true;
+      sprite.position.set(placement.dest.x, placement.dest.y);
+      sprite.setSize(placement.dest.width, placement.dest.height);
     });
   }
 

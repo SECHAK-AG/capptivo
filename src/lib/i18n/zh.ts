@@ -122,6 +122,14 @@ export const zh: Record<TranslationKey, string> = {
   "look.darkness": "暗度（%）",
   "look.darkness.hint": "仅加深背景，突出录制内容。",
 
+  "blur.label": "模糊区域",
+
+  "blur.add": "添加区域",
+
+  "blur.remove": "移除",
+
+  "blur.hint": "隐藏密码、邮箱等私密内容。拖动方框，整段视频都会保持模糊。",
+
   "crop.label": "画面裁剪",
   "crop.hint":
     "整段视频共用一个裁剪——像裁照片一样。拖动边框或手柄去掉边缘或浏览器界面。",

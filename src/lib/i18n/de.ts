@@ -127,6 +127,14 @@ export const de: Record<TranslationKey, string> = {
   "look.darkness": "Abdunkelung (%)",
   "look.darkness.hint": "Dunkelt nur den Hintergrund ab, damit die Aufnahme hervorsticht.",
 
+  "blur.label": "Unschärfebereiche",
+
+  "blur.add": "Bereich hinzufügen",
+
+  "blur.remove": "Entfernen",
+
+  "blur.hint": "Passwörter, E-Mails oder Privates verbergen. Ziehe einen Rahmen darüber; er bleibt im ganzen Video unscharf.",
+
   "crop.label": "Bildschirm-Zuschnitt",
   "crop.hint":
     "Ein Zuschnitt für das ganze Video — wie ein Fotozuschnitt. Rahmen oder Griffe ziehen, um Ränder oder Browser-UI zu entfernen.",

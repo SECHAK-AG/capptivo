@@ -25,7 +25,10 @@ import {
   resizeTrimGapAtIndex,
   segmentsFromTrimGaps,
   splitSegmentAtTime,
+  clampBlurRegion,
   clampScreenContentCropNorm,
+  createBlurRegion,
+  type BlurRegion,
   type CursorSettings,
   type FaceCamCorner,
   type RecordingMetadata,
@@ -367,6 +370,7 @@ interface EditorStore {
 
   segments: TrimSegment[];
   zoomFragments: ZoomFragment[];
+  blurRegions: BlurRegion[];
   selectedSegmentId: string | null;
   selectedZoomFragmentId: string | null;
   selectedGapIndex: number | null;
@@ -404,6 +408,9 @@ interface EditorStore {
   setCursorSettings: (patch: Partial<CursorSettings>) => void;
   setFaceCam: (patch: Partial<FaceCamParams>) => void;
   setScreenContentCrop: (crop: ScreenContentCropNorm | null) => void;
+  addBlurRegion: () => void;
+  updateBlurRegion: (id: string, patch: Partial<Omit<BlurRegion, "id">>) => void;
+  removeBlurRegion: (id: string) => void;
   setInspectorPanel: (panel: InspectorPanelId) => void;
   setCaptionSettings: (patch: Partial<CaptionSettings>) => void;
   generateCaptions: () => Promise<void>;
@@ -601,6 +608,7 @@ function enqueuePersist(get: () => EditorStore): void {
     projectId,
     segments,
     zoomFragments,
+    blurRegions,
     look,
     screenContentCrop,
     captions,
@@ -613,6 +621,7 @@ function enqueuePersist(get: () => EditorStore): void {
   const editorState = {
     segments,
     zoomFragments,
+    blurRegions,
     look,
     screenContentCrop,
     captions,
@@ -689,6 +698,7 @@ function applySnapshot(set: (p: Partial<EditorStore>) => void, snap: TimelineSna
 function parseEditorState(raw: unknown, duration: number): {
   segments: TrimSegment[];
   zoomFragments: ZoomFragment[];
+  blurRegions?: BlurRegion[];
   look?: Partial<LookParams>;
   screenContentCrop?: ScreenContentCropNorm | null;
   captions?: CaptionCue[];
@@ -705,6 +715,11 @@ function parseEditorState(raw: unknown, duration: number): {
     : null;
   const zoomFragments = Array.isArray(data.zoomFragments)
     ? (data.zoomFragments as ZoomFragment[])
+    : [];
+  const blurRegions = Array.isArray(data.blurRegions)
+    ? (data.blurRegions as BlurRegion[])
+        .filter((region) => region && typeof region.id === "string")
+        .map(clampBlurRegion)
     : [];
   const look =
     data.look && typeof data.look === "object" ? (data.look as Partial<LookParams>) : undefined;
@@ -730,6 +745,7 @@ function parseEditorState(raw: unknown, duration: number): {
   return {
     segments: segments && segments.length > 0 ? segments : createFullSegment(duration),
     zoomFragments,
+    blurRegions,
     look,
     screenContentCrop,
     captions,
@@ -782,6 +798,7 @@ export const useEditorStore = create<EditorStore>((set, get) => ({
 
   segments: [],
   zoomFragments: [],
+  blurRegions: [],
   selectedSegmentId: null,
   selectedZoomFragmentId: null,
   selectedGapIndex: null,
@@ -827,6 +844,7 @@ export const useEditorStore = create<EditorStore>((set, get) => ({
       sourceVideoSize: null,
       segments: [],
       zoomFragments: [],
+      blurRegions: [],
       selectedSegmentId: null,
       selectedZoomFragmentId: null,
       selectedGapIndex: null,
@@ -912,6 +930,7 @@ export const useEditorStore = create<EditorStore>((set, get) => ({
     const parsed = parseEditorState(get().project?.editorState, duration);
     const segments = parsed?.segments ?? createFullSegment(duration);
     const zoomFragments = parsed?.zoomFragments ?? [];
+    const blurRegions = parsed?.blurRegions ?? [];
     const look = parsed?.look ? { ...get().look, ...parsed.look } : get().look;
     const screenContentCrop =
       parsed?.screenContentCrop !== undefined ? parsed.screenContentCrop : get().screenContentCrop;
@@ -982,6 +1001,7 @@ export const useEditorStore = create<EditorStore>((set, get) => ({
       duration,
       segments,
       zoomFragments,
+      blurRegions,
       look,
       screenContentCrop,
       captions,
@@ -1137,6 +1157,24 @@ export const useEditorStore = create<EditorStore>((set, get) => ({
   setScreenContentCrop(screenContentCrop) {
     invalidateZoomKeyframesCache();
     set({ screenContentCrop });
+    schedulePersist(get);
+  },
+  addBlurRegion() {
+    set((s) => ({ blurRegions: [...s.blurRegions, createBlurRegion()] }));
+    schedulePersist(get);
+  },
+  updateBlurRegion(id, patch) {
+    set((s) => ({
+      blurRegions: s.blurRegions.map((region) =>
+        region.id === id ? clampBlurRegion({ ...region, ...patch }) : region,
+      ),
+    }));
+    schedulePersist(get);
+  },
+  removeBlurRegion(id) {
+    set((s) => ({
+      blurRegions: s.blurRegions.filter((region) => region.id !== id),
+    }));
     schedulePersist(get);
   },
   setInspectorPanel(inspectorPanel) {

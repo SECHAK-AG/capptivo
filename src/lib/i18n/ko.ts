@@ -126,6 +126,14 @@ export const ko: Record<TranslationKey, string> = {
   "look.darkness": "어두움(%)",
   "look.darkness.hint": "배경만 어둡게 해 녹화가 돋보이게 합니다.",
 
+  "blur.label": "블러 영역",
+
+  "blur.add": "영역 추가",
+
+  "blur.remove": "제거",
+
+  "blur.hint": "비밀번호나 이메일 등 민감한 정보를 가립니다. 상자를 끌어 놓으면 영상 전체에서 흐려집니다。",
+
   "crop.label": "화면 자르기",
   "crop.hint":
     "전체 영상에 하나의 자르기. 프레임이나 핸들을 드래그해 가장자리나 브라우저 UI를 제거하세요.",

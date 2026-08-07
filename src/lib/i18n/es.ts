@@ -134,6 +134,14 @@ export const es: Record<TranslationKey, string> = {
   "look.darkness.hint":
     "Oscurece solo el fondo para que destaque la grabación.",
 
+  "blur.label": "Áreas difuminadas",
+
+  "blur.add": "Añadir área",
+
+  "blur.remove": "Quitar",
+
+  "blur.hint": "Oculta contraseñas, correos o cualquier dato privado. Arrastra un recuadro; se mantiene difuminado en todo el vídeo.",
+
   "crop.label": "Recorte de pantalla",
   "crop.hint":
     "Un solo recorte para todo el vídeo — como en una foto. Arrastra el marco o las asas para quitar bordes o la interfaz del navegador.",

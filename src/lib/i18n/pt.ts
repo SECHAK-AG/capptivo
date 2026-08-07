@@ -127,6 +127,14 @@ export const pt: Record<TranslationKey, string> = {
   "look.darkness": "Escurecimento (%)",
   "look.darkness.hint": "Escurece só o fundo para a gravação sobressair.",
 
+  "blur.label": "Áreas desfocadas",
+
+  "blur.add": "Adicionar área",
+
+  "blur.remove": "Remover",
+
+  "blur.hint": "Oculte senhas, e-mails ou dados privados. Arraste uma caixa; ela fica desfocada no vídeo inteiro.",
+
   "crop.label": "Recorte do ecrã",
   "crop.hint":
     "Um recorte para todo o vídeo — como um recorte de foto. Arraste a moldura ou as pegas para remover bordas ou a interface do browser.",

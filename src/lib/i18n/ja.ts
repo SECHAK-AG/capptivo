@@ -126,6 +126,14 @@ export const ja: Record<TranslationKey, string> = {
   "look.darkness": "暗さ（%）",
   "look.darkness.hint": "背景だけを暗くし、録画を際立たせます。",
 
+  "blur.label": "ぼかし範囲",
+
+  "blur.add": "範囲を追加",
+
+  "blur.remove": "削除",
+
+  "blur.hint": "パスワードやメールなど非公開の情報を隠します。枠をドラッグすると動画全体でぼかされます。",
+
   "crop.label": "画面の切り抜き",
   "crop.hint":
     "動画全体にひとつの切り抜き。枠やハンドルをドラッグして端やブラウザの余白を取り除きます。",

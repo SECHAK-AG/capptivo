@@ -134,6 +134,14 @@ export const it: Record<TranslationKey, string> = {
   "look.darkness.hint":
     "Scurisce solo lo sfondo così la registrazione risalta.",
 
+  "blur.label": "Aree sfocate",
+
+  "blur.add": "Aggiungi area",
+
+  "blur.remove": "Rimuovi",
+
+  "blur.hint": "Nascondi password, email o dati privati. Trascina un riquadro; resta sfocato per tutto il video.",
+
   "crop.label": "Ritaglio schermo",
   "crop.hint":
     "Un solo ritaglio per tutto il video — come ritagliare una foto. Trascina il fotogramma o le maniglie per rimuovere i bordi o l’interfaccia del browser.",

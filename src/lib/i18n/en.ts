@@ -127,6 +127,14 @@ export const en = {
   "look.darkness": "Darkness (%)",
   "look.darkness.hint": "Darkens only the background so the recording stands out.",
 
+  "blur.label": "Blur areas",
+
+  "blur.add": "Add area",
+
+  "blur.remove": "Remove",
+
+  "blur.hint": "Hide passwords, emails or anything private. Drag a box over what to blur; it stays blurred for the whole video.",
+
   "crop.label": "Screen crop",
   "crop.hint":
     "One crop for the whole video—like a photo crop. Drag the frame or handles to remove edges or browser chrome.",

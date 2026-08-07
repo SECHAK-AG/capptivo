@@ -351,6 +351,7 @@ export function PreviewStage({
             zoomFocus: { x: zoom.x, y: zoom.y },
             ...resolveZoomReactiveState(active, t),
             screenContentCrop: crop,
+            blurRegions: store.blurRegions,
             cursorTime: t,
             cursorFreeze: !nowPlaying,
             cursorSettings: store.cursorSettings,
@@ -566,6 +567,7 @@ export function PreviewStage({
       next.currentTime !== prev.currentTime ||
       next.isPlaying !== prev.isPlaying ||
       next.screenContentCrop !== prev.screenContentCrop ||
+      next.blurRegions !== prev.blurRegions ||
       next.captions !== prev.captions ||
       next.captionSettings !== prev.captionSettings ||
       next.cursorSettings !== prev.cursorSettings ||

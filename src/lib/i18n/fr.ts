@@ -135,6 +135,14 @@ export const fr: Record<TranslationKey, string> = {
   "look.darkness.hint":
     "Assombrit uniquement l'arrière-plan pour faire ressortir l'enregistrement.",
 
+  "blur.label": "Zones floutées",
+
+  "blur.add": "Ajouter une zone",
+
+  "blur.remove": "Supprimer",
+
+  "blur.hint": "Masquez mots de passe, e-mails ou données privées. Faites glisser un cadre; il reste flouté sur toute la vidéo.",
+
   "crop.label": "Recadrage de l'écran",
   "crop.hint":
     "Un seul recadrage pour toute la vidéo, comme pour une photo. Faites glisser le cadre ou les poignées pour supprimer les bords ou l'interface du navigateur.",

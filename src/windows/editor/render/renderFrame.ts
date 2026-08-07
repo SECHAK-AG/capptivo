@@ -11,6 +11,7 @@ import {
   type CursorLoopReturn,
   type CursorSettings,
   type RecordingMetadata,
+  type BlurRegion,
   type ScreenContentCropNorm,
   type ZoomFragment,
 } from "@/engine";
@@ -51,6 +52,7 @@ export interface RenderFrameInputs {
   /** Eased face-cam shrink for the active zoom (1 = full size). */
   faceCamPresenceScale?: number;
   screenContentCrop?: ScreenContentCropNorm | null;
+  blurRegions?: BlurRegion[];
   /** Source time (seconds) for cursor overlay; omit to skip. */
   cursorTime?: number;
   /** Snap cursor spring (seek / scrub / pause). Export leaves this false. */
