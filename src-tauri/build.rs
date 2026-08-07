@@ -58,6 +58,7 @@ fn main() {
         "download_whisper_model",
         "delete_whisper_model",
         "generate_captions",
+        "detect_project_silences",
         // projects
         "list_projects",
         "load_project",

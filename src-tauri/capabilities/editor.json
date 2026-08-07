@@ -21,6 +21,7 @@
     "allow-download-whisper-model",
     "allow-delete-whisper-model",
     "allow-generate-captions",
+    "allow-detect-project-silences",
     "allow-list-projects",
     "allow-load-project",
     "allow-ensure-proxy",

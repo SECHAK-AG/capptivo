@@ -68,6 +68,7 @@ macro_rules! command_handlers {
             $crate::commands::captions::download_whisper_model,
             $crate::commands::captions::delete_whisper_model,
             $crate::commands::captions::generate_captions,
+            $crate::commands::captions::detect_project_silences,
             // projects
             $crate::commands::project::list_projects,
             $crate::commands::project::load_project,

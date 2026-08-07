@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-detect-project-silences"
+description = "Enables the detect_project_silences command without any pre-configured scope."
+commands.allow = ["detect_project_silences"]
+
+[[permission]]
+identifier = "deny-detect-project-silences"
+description = "Denies the detect_project_silences command without any pre-configured scope."
+commands.deny = ["detect_project_silences"]

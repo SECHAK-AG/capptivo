@@ -76,6 +76,10 @@ import {
   shouldAutoSuggestZoomsForSource,
   type ZoomSuggestionStatus,
 } from "./lib/zoomSuggestionUtils";
+import {
+  buildSilenceCutSuggestions,
+  type SilenceCutStatus,
+} from "./lib/silenceCutUtils";
 import type { InspectorPanelId } from "./components/InspectorChrome";
 import type { CaptionSettings, CaptionCue } from "@/captions/types";
 import {
@@ -433,6 +437,7 @@ interface EditorStore {
     force?: boolean;
     selectPanel?: boolean;
   }) => ZoomSuggestionStatus;
+  suggestCutsFromSilence: () => Promise<SilenceCutStatus>;
   deleteSelected: () => void;
   restoreTrimGap: (start: number, end: number) => void;
   moveTrimGap: (gapIndex: number, start: number, end: number) => void;
@@ -1348,6 +1353,46 @@ export const useEditorStore = create<EditorStore>((set, get) => ({
       selectedGapIndex: null,
       selectedSegmentId: null,
       ...(selectPanel ? { inspectorPanel: "zoom" as const } : {}),
+    });
+    pushHistory(get, set, before);
+    schedulePersist(get);
+    return "ok";
+  },
+
+  async suggestCutsFromSilence() {
+    const { projectId, duration, segments } = get();
+    if (!projectId || !(duration > 0)) return "no-duration";
+
+    let silences: Array<{ startMs: number; endMs: number }>;
+    try {
+      silences = await commands.detectProjectSilences(projectId);
+    } catch {
+      return "failed";
+    }
+
+    const base =
+      segments.length > 0
+        ? normalizeSegments(segments, duration, MIN_SEGMENT_LENGTH)
+        : createFullSegment(duration);
+    const result = buildSilenceCutSuggestions({
+      silences,
+      duration,
+      reservedSpans: computeTrimGaps(base, duration),
+    });
+    if (result.status !== "ok") return result.status;
+
+    const before = snapshotOf(get());
+    const nextSegments = result.cuts.reduce(
+      (acc, cut) => addTrimGap(acc, cut.start, cut.end, duration),
+      base,
+    );
+    set({
+      segments: nextSegments,
+      currentTime: getNextPlayableTime(nextSegments, get().currentTime) ?? 0,
+      isPlaying: false,
+      selectedZoomFragmentId: null,
+      selectedGapIndex: null,
+      selectedSegmentId: null,
     });
     pushHistory(get, set, before);
     schedulePersist(get);
