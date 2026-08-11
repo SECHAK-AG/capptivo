@@ -112,6 +112,7 @@ export const en = {
   "look.custom": "Custom",
   "look.uploadImage": "Upload image",
   "look.deleteImage": "Delete image",
+  "look.deleteImageConfirm": "Delete this background image? This cannot be undone.",
   "look.start": "Start",
   "look.end": "End",
   "look.angle": "Angle",

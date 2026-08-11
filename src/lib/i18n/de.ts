@@ -112,6 +112,7 @@ export const de: Record<TranslationKey, string> = {
   "look.custom": "Eigene",
   "look.uploadImage": "Bild hochladen",
   "look.deleteImage": "Bild löschen",
+  "look.deleteImageConfirm": "Dieses Hintergrundbild löschen? Das kann nicht widerrufen werden.",
   "look.start": "Start",
   "look.end": "Ende",
   "look.angle": "Winkel",

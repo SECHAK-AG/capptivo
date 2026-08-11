@@ -115,6 +115,7 @@ export const fr: Record<TranslationKey, string> = {
   "look.custom": "Personnalisé",
   "look.uploadImage": "Importer une image",
   "look.deleteImage": "Supprimer l'image",
+  "look.deleteImageConfirm": "Supprimer cette image d’arrière-plan ? Cette action est irréversible.",
   "look.start": "Début",
   "look.end": "Fin",
   "look.angle": "Angle",

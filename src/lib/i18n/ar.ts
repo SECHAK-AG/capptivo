@@ -112,6 +112,7 @@ export const ar: Record<TranslationKey, string> = {
   "look.custom": "مخصص",
   "look.uploadImage": "رفع صورة",
   "look.deleteImage": "حذف الصورة",
+  "look.deleteImageConfirm": "حذف صورة الخلفية هذه؟ لا يمكن التراجع عن هذا الإجراء.",
   "look.start": "البداية",
   "look.end": "النهاية",
   "look.angle": "الزاوية",

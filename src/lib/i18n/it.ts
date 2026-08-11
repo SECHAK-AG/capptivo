@@ -114,6 +114,7 @@ export const it: Record<TranslationKey, string> = {
   "look.custom": "Personalizzato",
   "look.uploadImage": "Carica immagine",
   "look.deleteImage": "Elimina immagine",
+  "look.deleteImageConfirm": "Eliminare questa immagine di sfondo? L’operazione non può essere annullata.",
   "look.start": "Inizio",
   "look.end": "Fine",
   "look.angle": "Angolo",

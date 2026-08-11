@@ -111,6 +111,7 @@ export const ko: Record<TranslationKey, string> = {
   "look.custom": "사용자 지정",
   "look.uploadImage": "이미지 업로드",
   "look.deleteImage": "이미지 삭제",
+  "look.deleteImageConfirm": "이 배경 이미지를 삭제할까요? 이 작업은 취소할 수 없습니다.",
   "look.start": "시작",
   "look.end": "끝",
   "look.angle": "각도",
