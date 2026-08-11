@@ -357,6 +357,15 @@ export const en = {
 
   "library.back": "Back",
 
+  "library.title": "Recordings",
+  "library.subtitle": "Your videos stay on this device. Click a recording to open the editor.",
+  "library.empty": "No recordings yet. Capture from the menubar tray, then come back here.",
+  "library.delete": "Delete",
+  "library.deleteConfirm": "Delete “{title}”? This cannot be undone.",
+  "library.rowActions": "Actions for {title}",
+  "library.loadFailed": "Failed to load recordings",
+  "library.deleteFailed": "Failed to delete",
+
   "library.search.placeholder": "Search by name…",
   "library.search.filter": "Filter",
   "library.search.clear": "Clear search",

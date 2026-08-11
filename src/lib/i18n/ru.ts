@@ -362,6 +362,15 @@ export const ru: Record<TranslationKey, string> = {
 
   "library.back": "Назад",
 
+  "library.title": "Записи",
+  "library.subtitle": "Ваши видео остаются на этом устройстве. Нажмите на запись, чтобы открыть редактор.",
+  "library.empty": "Записей пока нет. Начните запись из строки меню и вернитесь сюда.",
+  "library.delete": "Удалить",
+  "library.deleteConfirm": "Удалить «{title}»? Это действие нельзя отменить.",
+  "library.rowActions": "Действия для {title}",
+  "library.loadFailed": "Не удалось загрузить записи",
+  "library.deleteFailed": "Не удалось удалить",
+
   "library.search.placeholder": "Поиск по имени…",
   "library.search.filter": "Фильтр",
   "library.search.clear": "Очистить поиск",

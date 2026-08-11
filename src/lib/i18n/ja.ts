@@ -359,6 +359,15 @@ export const ja: Record<TranslationKey, string> = {
 
   "library.back": "戻る",
 
+  "library.title": "録画",
+  "library.subtitle": "動画はこのデバイスに保存されます。録画をクリックするとエディタが開きます。",
+  "library.empty": "まだ録画がありません。メニューバーから録画して、ここに戻ってください。",
+  "library.delete": "削除",
+  "library.deleteConfirm": "「{title}」を削除しますか？この操作は取り消せません。",
+  "library.rowActions": "{title} の操作",
+  "library.loadFailed": "録画を読み込めませんでした",
+  "library.deleteFailed": "削除できませんでした",
+
   "library.search.placeholder": "名前で検索…",
   "library.search.filter": "フィルター",
   "library.search.clear": "検索をクリア",

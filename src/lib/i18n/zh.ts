@@ -349,6 +349,15 @@ export const zh: Record<TranslationKey, string> = {
 
   "library.back": "返回",
 
+  "library.title": "录制",
+  "library.subtitle": "你的视频保存在本设备上。点击录制即可打开编辑器。",
+  "library.empty": "还没有录制。从菜单栏录制后再回到这里。",
+  "library.delete": "删除",
+  "library.deleteConfirm": "删除“{title}”？此操作无法撤消。",
+  "library.rowActions": "{title} 的操作",
+  "library.loadFailed": "无法加载录制",
+  "library.deleteFailed": "无法删除",
+
   "library.search.placeholder": "按名称搜索…",
   "library.search.filter": "筛选",
   "library.search.clear": "清除搜索",

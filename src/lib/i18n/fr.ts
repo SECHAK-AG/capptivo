@@ -372,6 +372,15 @@ export const fr: Record<TranslationKey, string> = {
 
   "library.back": "Retour",
 
+  "library.title": "Enregistrements",
+  "library.subtitle": "Vos vidéos restent sur cet appareil. Cliquez sur un enregistrement pour ouvrir l’éditeur.",
+  "library.empty": "Aucun enregistrement pour l’instant. Lancez une capture depuis la barre de menus, puis revenez ici.",
+  "library.delete": "Supprimer",
+  "library.deleteConfirm": "Supprimer « {title} » ? Cette action est irréversible.",
+  "library.rowActions": "Actions pour {title}",
+  "library.loadFailed": "Échec du chargement des enregistrements",
+  "library.deleteFailed": "Échec de la suppression",
+
   "library.search.placeholder": "Rechercher par nom…",
   "library.search.filter": "Filtrer",
   "library.search.clear": "Effacer la recherche",

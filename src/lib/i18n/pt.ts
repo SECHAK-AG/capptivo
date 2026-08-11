@@ -362,6 +362,15 @@ export const pt: Record<TranslationKey, string> = {
 
   "library.back": "Voltar",
 
+  "library.title": "Gravações",
+  "library.subtitle": "Os seus vídeos ficam neste dispositivo. Clique numa gravação para abrir o editor.",
+  "library.empty": "Ainda não há gravações. Faça uma captura a partir da barra de menus e volte aqui.",
+  "library.delete": "Eliminar",
+  "library.deleteConfirm": "Eliminar «{title}»? Esta ação não pode ser anulada.",
+  "library.rowActions": "Ações para {title}",
+  "library.loadFailed": "Falha ao carregar as gravações",
+  "library.deleteFailed": "Falha ao eliminar",
+
   "library.search.placeholder": "Pesquisar por nome…",
   "library.search.filter": "Filtrar",
   "library.search.clear": "Limpar pesquisa",

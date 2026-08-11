@@ -362,6 +362,15 @@ export const ar: Record<TranslationKey, string> = {
 
   "library.back": "رجوع",
 
+  "library.title": "التسجيلات",
+  "library.subtitle": "تبقى مقاطع الفيديو على هذا الجهاز. انقر على تسجيل لفتح المحرر.",
+  "library.empty": "لا توجد تسجيلات بعد. سجّل من شريط القوائم ثم عد إلى هنا.",
+  "library.delete": "حذف",
+  "library.deleteConfirm": "حذف «{title}»؟ لا يمكن التراجع عن هذا الإجراء.",
+  "library.rowActions": "إجراءات {title}",
+  "library.loadFailed": "فشل تحميل التسجيلات",
+  "library.deleteFailed": "فشل الحذف",
+
   "library.search.placeholder": "البحث بالاسم…",
   "library.search.filter": "تصفية",
   "library.search.clear": "مسح البحث",

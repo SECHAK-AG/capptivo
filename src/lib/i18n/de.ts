@@ -364,6 +364,15 @@ export const de: Record<TranslationKey, string> = {
 
   "library.back": "Zurück",
 
+  "library.title": "Aufnahmen",
+  "library.subtitle": "Die Videos bleiben auf diesem Gerät. Auf eine Aufnahme klicken, um den Editor zu öffnen.",
+  "library.empty": "Noch keine Aufnahmen. Über die Menüleiste aufnehmen und dann hierher zurückkommen.",
+  "library.delete": "Löschen",
+  "library.deleteConfirm": "„{title}“ löschen? Das kann nicht widerrufen werden.",
+  "library.rowActions": "Aktionen für {title}",
+  "library.loadFailed": "Aufnahmen konnten nicht geladen werden",
+  "library.deleteFailed": "Löschen fehlgeschlagen",
+
   "library.search.placeholder": "Nach Namen suchen…",
   "library.search.filter": "Filtern",
   "library.search.clear": "Suche löschen",
