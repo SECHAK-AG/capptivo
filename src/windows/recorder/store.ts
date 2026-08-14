@@ -258,7 +258,16 @@ export const useRecorderStore = create<RecorderStore>((set, get) => {
         });
       });
       await onElapsed((seconds) => set({ elapsed: seconds }));
-      await onError((message) => reportError(message));
+      await onError((message, fatal) => {
+        reportError(message);
+        if (!fatal) return;
+        const { state } = get();
+        if (state.status !== "recording" && state.status !== "paused") return;
+        // Encoding died, so the file stopped growing. Finalize now instead of
+        // leaving the popover looking live. That is what made a 7 minute take
+        // come back as a 2 minute file. Keeps whatever was encoded so far.
+        void get().stopRecording();
+      });
       await onInterrupted(() => {
         const { state } = get();
         if (state.status !== "recording" && state.status !== "paused") return;

@@ -374,6 +374,19 @@ fn spawn_encode_loop(
             let mut encode_error: Option<AppError> = None;
             let mut interrupted = false;
 
+            // Once encoding fails the take is over: this loop breaks, so no more
+            // progress ticks are sent and the file stops growing. Without a signal
+            // here the popover still looks like it is recording, and the user only
+            // finds out when they press Stop. By then they have "recorded" minutes
+            // into a file that never grew. Say so at the point of failure instead.
+            let report_encode_failure = |e: &AppError| {
+                tracing::error!(%e, "encoding failed mid-recording; ending the take");
+                emit(RecorderEvent::Error {
+                    message: e.to_string(),
+                    fatal: true,
+                });
+            };
+
             loop {
                 if encode_error.is_none() {
                     if let Err(e) = drain_audio(
@@ -383,6 +396,7 @@ fn spawn_encode_loop(
                         media_epoch,
                         paused_accum,
                     ) {
+                        report_encode_failure(&e);
                         encode_error = Some(e);
                         break;
                     }
@@ -394,6 +408,7 @@ fn spawn_encode_loop(
                         media_epoch,
                         paused_accum,
                     ) {
+                        report_encode_failure(&e);
                         encode_error = Some(e);
                         break;
                     }
@@ -440,6 +455,7 @@ fn spawn_encode_loop(
                                 ) {
                                     Ok(n) => frames_encoded += n,
                                     Err(e) => {
+                                        report_encode_failure(&e);
                                         encode_error = Some(e);
                                         break;
                                     }
@@ -1462,5 +1478,73 @@ mod tests {
         assert_eq!(controller.state(), RecorderState::Idle);
 
         std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// Losing the encoder mid-take has to announce itself. It used to break the
+    /// loop silently: progress ticks stopped, the popover still looked like it was
+    /// recording, and the user only found out when they pressed Stop, by which
+    /// point they had "recorded" minutes into a file that stopped growing.
+    #[cfg(unix)]
+    #[test]
+    fn losing_the_encoder_mid_take_is_reported_without_waiting_for_stop() {
+        if std::process::Command::new("ffmpeg")
+            .arg("-version")
+            .output()
+            .is_err()
+        {
+            eprintln!("ffmpeg not found, skipping encoder failure test");
+            return;
+        }
+
+        // The tag lands in the encoder's output path, so `pkill -f` hits this
+        // test's child and nothing else on the machine.
+        let tag = format!("capptivo-encoder-loss-{}", uuid::Uuid::new_v4());
+        let dir = std::env::temp_dir().join(&tag);
+        std::fs::create_dir_all(&dir).unwrap();
+
+        let reported = Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
+        let sink = reported.clone();
+        let emit: EmitFn = Arc::new(move |ev| {
+            if let RecorderEvent::Error { message, .. } = ev {
+                sink.lock().unwrap().push(message);
+            }
+        });
+
+        let controller =
+            RecorderController::new(Box::new(TestPatternBackend::default()), emit);
+        let config = RecorderConfig {
+            source_id: "display:test".into(),
+            crop: None,
+            fps: 30,
+            show_cursor: true,
+            capture_system_audio: false,
+            capture_microphone: false,
+            microphone_device_id: None,
+            microphone_label: None,
+            quality: QualityPreset::Balanced,
+        };
+        controller.start(&config, &dir).unwrap();
+
+        // Let the encode loop settle, then kill the encoder out from under it.
+        std::thread::sleep(Duration::from_millis(500));
+        let _ = std::process::Command::new("pkill")
+            .args(["-f", &tag])
+            .output();
+
+        // Nobody calls stop() here. The report has to arrive on its own.
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while reported.lock().unwrap().is_empty() && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(50));
+        }
+        let seen = reported.lock().unwrap().clone();
+
+        let _ = controller.stop();
+        std::fs::remove_dir_all(&dir).ok();
+
+        assert!(
+            !seen.is_empty(),
+            "losing the encoder must emit RecorderEvent::Error while the take is \
+             still live, so the popover can stop claiming to record"
+        );
     }
 }
