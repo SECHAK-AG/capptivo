@@ -533,16 +533,33 @@ fn build_format_pod() -> AppResult<Vec<u8>> {
     .map_err(|e| AppError::Other(format!("format pod: {e:?}")))
 }
 
-/// Ask PipeWire for `SPA_META_Cursor` on buffers (OBS does the same).
+/// Ask PipeWire for `SPA_META_Cursor` on buffers (OBS does the same), with the
+/// size declared as a **range** rather than a single value.
+///
+/// This is the difference between a cursor track and no cursor track at all.
+/// Meta sizes are negotiated by intersection, so an exact `Int` from us only
+/// survives if the compositor names the identical number. `SPA_META_Header`
+/// does survive that way, its size is `sizeof(spa_meta_header)` on both sides
+/// and so always agrees, but the cursor size embeds a *bitmap dimension* that
+/// each side chooses independently. A hardcoded 64×64 never matched Mutter's
+/// choice, the intersection came out empty, and the meta was dropped from the
+/// buffer while the session still reported Metadata mode as negotiated: no
+/// error anywhere, and every recording came out with an empty cursor track.
+///
+/// A range accepts whatever cursor size the compositor allocates, which is why
+/// OBS declares this meta the same way.
 fn build_cursor_meta_pod() -> AppResult<Vec<u8>> {
     use pipewire::spa;
     use pipewire::spa::sys as spa_sys;
 
-    // spa_meta_cursor + spa_meta_bitmap + 64×64 ARGB — enough for position;
-    // bitmap is optional for Capptivo (we only need x/y for zoom-follow).
-    let meta_size = (std::mem::size_of::<spa_sys::spa_meta_cursor>()
-        + std::mem::size_of::<spa_sys::spa_meta_bitmap>()
-        + 64 * 64 * 4) as i32;
+    // spa_meta_cursor + spa_meta_bitmap + w×h ARGB. Capptivo only reads x/y for
+    // zoom-follow, so any size in the range serves, the bitmap rides along
+    // unused, and its dimensions are the compositor's call.
+    const fn cursor_meta_size(w: usize, h: usize) -> i32 {
+        (std::mem::size_of::<spa_sys::spa_meta_cursor>()
+            + std::mem::size_of::<spa_sys::spa_meta_bitmap>()
+            + w * h * 4) as i32
+    }
 
     let obj = spa::pod::Object {
         type_: spa::utils::SpaTypes::ObjectParamMeta.as_raw(),
@@ -552,7 +569,17 @@ fn build_cursor_meta_pod() -> AppResult<Vec<u8>> {
                 spa_sys::SPA_PARAM_META_type,
                 spa::pod::Value::Id(spa::utils::Id(spa_sys::SPA_META_Cursor)),
             ),
-            spa::pod::Property::new(spa_sys::SPA_PARAM_META_size, spa::pod::Value::Int(meta_size)),
+            spa::pod::Property::new(
+                spa_sys::SPA_PARAM_META_size,
+                spa::pod::Value::Choice(spa::pod::ChoiceValue::Int(spa::utils::Choice(
+                    spa::utils::ChoiceFlags::empty(),
+                    spa::utils::ChoiceEnum::Range {
+                        default: cursor_meta_size(64, 64),
+                        min: cursor_meta_size(1, 1),
+                        max: cursor_meta_size(1024, 1024),
+                    },
+                ))),
+            ),
         ],
     };
     spa::pod::serialize::PodSerializer::serialize(
@@ -644,5 +671,78 @@ fn store_restore_token(token: &str) {
     }
     if let Err(e) = std::fs::write(&path, token) {
         tracing::debug!(%e, "failed to persist screencast restore token");
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use pipewire::spa;
+    use pipewire::spa::sys as spa_sys;
+
+    /// The cursor meta size must be a **range**, never a single value.
+    ///
+    /// Meta sizes are negotiated by intersection, and this one embeds a cursor
+    /// bitmap dimension the compositor picks independently of us. One exact
+    /// number means the intersection is empty unless the compositor happens to
+    /// name the identical size, which presents as Metadata mode negotiating
+    /// successfully while every buffer arrives with no cursor on it, so nothing
+    /// downstream reports an error. Regressing this silently costs every
+    /// Wayland user their cursor track, and with it the whole cursor style
+    /// panel and follow-cursor zoom.
+    #[test]
+    fn cursor_meta_size_is_a_range_not_a_fixed_value() {
+        let bytes = build_cursor_meta_pod().expect("cursor meta pod builds");
+        let (_, value) = spa::pod::deserialize::PodDeserializer::deserialize_any_from(&bytes)
+            .expect("cursor meta pod parses back");
+
+        let spa::pod::Value::Object(obj) = value else {
+            panic!("cursor meta pod is not an object");
+        };
+        assert_eq!(obj.id, spa::param::ParamType::Meta.as_raw());
+
+        let meta_type = obj
+            .properties
+            .iter()
+            .find(|p| p.key == spa_sys::SPA_PARAM_META_type)
+            .expect("pod declares a meta type");
+        assert!(
+            matches!(
+                meta_type.value,
+                spa::pod::Value::Id(spa::utils::Id(id)) if id == spa_sys::SPA_META_Cursor
+            ),
+            "meta type must be SPA_META_Cursor, got {:?}",
+            meta_type.value
+        );
+
+        let size = obj
+            .properties
+            .iter()
+            .find(|p| p.key == spa_sys::SPA_PARAM_META_size)
+            .expect("pod declares a meta size");
+        let spa::pod::Value::Choice(spa::pod::ChoiceValue::Int(spa::utils::Choice(_, choice))) =
+            &size.value
+        else {
+            panic!("meta size must be an Int choice, got {:?}", size.value);
+        };
+        let spa::utils::ChoiceEnum::Range { default, min, max } = choice else {
+            panic!("meta size must be a Range, got {choice:?}");
+        };
+
+        // A range that cannot widen is a fixed value wearing a range's clothes.
+        assert!(
+            min < max,
+            "range must span more than one size ({min}..{max})"
+        );
+        assert!(
+            min <= default && default <= max,
+            "default {default} outside {min}..{max}"
+        );
+        // Every size in the range must still hold the struct we read x/y out of.
+        let floor = std::mem::size_of::<spa_sys::spa_meta_cursor>() as i32;
+        assert!(
+            *min >= floor,
+            "min {min} cannot hold spa_meta_cursor ({floor})"
+        );
     }
 }
