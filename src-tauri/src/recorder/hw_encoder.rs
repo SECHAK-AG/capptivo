@@ -133,6 +133,17 @@ const OVERSIZE_SOFTWARE_FALLBACK: EncoderChoice = EncoderChoice {
     ..SOFTWARE_FALLBACK
 };
 
+/// An [`EncoderChoice`] with only its name set, for tests in sibling modules
+/// (`hw_decoder` pairs a decoder to an encoder by name). The private
+/// `pix_fmt` / `upload_filter` fields keep those modules from building one.
+#[cfg(test)]
+pub fn for_test(name: &'static str) -> EncoderChoice {
+    EncoderChoice {
+        name,
+        ..SOFTWARE_FALLBACK
+    }
+}
+
 /// Candidates in preference order per OS. The last entry must be the software
 /// fallback so `pick()` can always return something.
 fn candidates() -> &'static [EncoderChoice] {
