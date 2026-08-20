@@ -61,7 +61,7 @@ impl UnsafeSCStreamOutput for AudioOut {
         .ok()
         .flatten();
         if let Some(chunk) = chunk {
-            let _ = self.system_tx.try_send(chunk);
+            super::forward_audio(&self.system_tx, chunk, "system-audio");
         }
     }
 }

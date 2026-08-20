@@ -347,12 +347,16 @@ fn forward_f32(
     if data.is_empty() {
         return;
     }
-    let _ = tx.try_send(RawAudio {
-        data,
-        sample_rate,
-        channels,
-        timestamp: epoch.elapsed(),
-    });
+    super::forward_audio(
+        tx,
+        RawAudio {
+            data,
+            sample_rate,
+            channels,
+            timestamp: epoch.elapsed(),
+        },
+        "microphone",
+    );
 }
 
 fn pick_input_device(

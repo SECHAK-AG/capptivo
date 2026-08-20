@@ -6,7 +6,8 @@
 
 use crate::error::AppResult;
 use crate::recorder::types::{CaptureDevice, CaptureSource, RecorderConfig};
-use crossbeam_channel::Receiver;
+use crossbeam_channel::{Receiver, Sender};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
 mod router;
@@ -315,9 +316,64 @@ impl FrameBufferPool {
     }
 }
 
-/// Audio packets are tiny vs video frames; allow more slack so a brief encode
-/// stall doesn't drop system audio.
-pub const AUDIO_CHANNEL_CAP: usize = 64;
+/// Audio packets are tiny vs video frames, so this queue is sized for the
+/// *worst* encode stall rather than the average one.
+///
+/// The encode loop drains audio once per iteration, and an iteration can block
+/// for a long time inside `Encoder::write_frame` — that call hands a whole
+/// frame to FFmpeg's stdin and flushes, which at 4K is ~33 MB, and it blocks
+/// while the pipe is backed up. Anything the mic produced during that stall has
+/// nowhere to go.
+///
+/// 64 was not enough slack to cover it. WASAPI shared mode hands over a buffer
+/// every ~3–10 ms, so 64 chunks is only ~190–640 ms — well inside the stall a
+/// 4K take with a face-cam can produce, and the overflow is *audible*:
+/// `write_mic_at` pads to each chunk's timeline position, so a dropped chunk
+/// does not shorten the audio, it punches a hole of silence in it. That is the
+/// "microphone keeps cutting in and out" in #26 and #18.
+///
+/// 1024 covers ~3 s at the shortest period and ~10 s at the typical one. The
+/// cost of being wrong in this direction is trivial: 48 kHz stereo f32 is
+/// 384 KB/s, so even the full 10 s queue is a few MB — less than one 4K video
+/// frame already in flight.
+pub const AUDIO_CHANNEL_CAP: usize = 1024;
+
+/// PCM chunks the encode loop never received, this process.
+///
+/// Every *video* send site checks the result of `try_send`; every audio one
+/// used to be written `let _ = tx.try_send(..)`. So the one loss the user can
+/// actually hear was the only one that left no trace, and "the audio cuts out"
+/// arrived with nothing to diagnose it from.
+static AUDIO_CHUNKS_DROPPED: AtomicU64 = AtomicU64::new(0);
+
+/// Hand one PCM chunk to the encode loop, reporting overflow instead of
+/// swallowing it.
+///
+/// Dropping audio is not like dropping a frame. `Encoder::write_mic_at` pads to
+/// the next chunk's timeline position, so what is lost comes back as silence
+/// rather than as a shorter track — the recording stays in sync and sounds
+/// broken, which is the hardest kind of fault to report.
+pub fn forward_audio(tx: &Sender<RawAudio>, chunk: RawAudio, source: &'static str) {
+    if tx.try_send(chunk).is_err() {
+        let total = AUDIO_CHUNKS_DROPPED.fetch_add(1, Ordering::Relaxed) + 1;
+        // Doubling backoff: a one-off burst costs a line or two, a sustained
+        // problem keeps reporting, and an audio callback running every few
+        // milliseconds can never flood the log.
+        if total.is_power_of_two() {
+            tracing::warn!(
+                source,
+                total,
+                "audio queue full; PCM dropped (lands in the recording as silence)"
+            );
+        }
+    }
+}
+
+/// Total PCM chunks dropped this process — see [`forward_audio`].
+#[cfg(test)]
+fn audio_chunks_dropped() -> u64 {
+    AUDIO_CHUNKS_DROPPED.load(Ordering::Relaxed)
+}
 
 /// The port implemented by every capture source.
 pub trait CaptureBackend: Send + Sync {
@@ -357,6 +413,53 @@ pub trait CaptureBackend: Send + Sync {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn pcm(len: usize) -> RawAudio {
+        RawAudio {
+            data: vec![0u8; len],
+            sample_rate: 48_000,
+            channels: 2,
+            timestamp: Duration::from_millis(0),
+        }
+    }
+
+    #[test]
+    fn forwarding_audio_delivers_when_there_is_room() {
+        let (tx, rx) = crossbeam_channel::bounded::<RawAudio>(2);
+        forward_audio(&tx, pcm(16), "test");
+        assert_eq!(rx.try_recv().map(|c| c.data.len()), Ok(16));
+    }
+
+    #[test]
+    fn a_full_audio_queue_is_counted_rather_than_swallowed() {
+        // The whole point of the helper. `let _ = tx.try_send(..)` lost this
+        // silently at every audio source, so the one kind of loss the user can
+        // actually *hear* was the only one with no trace behind it.
+        let (tx, _rx) = crossbeam_channel::bounded::<RawAudio>(1);
+        forward_audio(&tx, pcm(8), "test");
+        let before = audio_chunks_dropped();
+        forward_audio(&tx, pcm(8), "test");
+        assert_eq!(
+            audio_chunks_dropped(),
+            before + 1,
+            "an overflowing chunk must be counted"
+        );
+    }
+
+    #[test]
+    fn the_audio_queue_covers_a_multi_second_encode_stall() {
+        // Sizing regression guard. The encode loop drains audio once per
+        // iteration and an iteration can block for seconds inside
+        // `write_frame`; every chunk that overflows meanwhile is padded to
+        // silence and audible. WASAPI shared mode hands over a buffer as often
+        // as every ~3 ms, which is the worst case for queue depth.
+        const SHORTEST_PERIOD_SECS: f64 = 0.003;
+        let covered = AUDIO_CHANNEL_CAP as f64 * SHORTEST_PERIOD_SECS;
+        assert!(
+            covered >= 3.0,
+            "queue covers only {covered:.1}s of capture; a long encode stall              will punch silence into the recording"
+        );
+    }
 
     #[test]
     fn pool_allocates_when_empty_and_copies_the_source() {
