@@ -773,7 +773,19 @@ export const useRecorderStore = create<RecorderStore>((set, get) => {
     const { cameraEnabled } = get();
     try {
       if (cameraEnabled) {
-        await flushCameraCaptureWithTimeout();
+        // A timeout here is not cosmetic: `stop_recording` drops the camera
+        // sink immediately after, so whatever the bubble had not written yet
+        // is lost and the face-cam can come back truncated or missing (#22).
+        // It cannot be recovered from at this point, but it must not vanish
+        // without a trace the way it used to.
+        if ((await flushCameraCaptureWithTimeout()) === "timed-out") {
+          logClientError(
+            "recorder",
+            new Error(
+              "camera flush timed out before stop; the face-cam track may be truncated",
+            ),
+          );
+        }
       }
       // Rust stops ScreenCaptureKit first, then opens the editor (so the blank
       // editor shell is never in the last frames), then finishes mux/finalize.
