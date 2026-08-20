@@ -15,12 +15,23 @@ const H: u32 = 360;
 
 pub struct TestPatternBackend {
     /// If set, the producer stops after this many frames (keeps tests bounded).
+    /// Dropping the sender disconnects the channel, which the encode loop reads
+    /// as "the capture ended".
     pub max_frames: Option<u64>,
+    /// If set, the producer stops *sending* after this many frames but holds the
+    /// channel open — a screen that has gone still. This is what
+    /// Windows.Graphics.Capture does when nothing on screen changes, and it is
+    /// deliberately different from `max_frames`: the session is alive and the
+    /// user is still recording, there is simply nothing new to send.
+    pub quiet_after: Option<u64>,
 }
 
 impl Default for TestPatternBackend {
     fn default() -> Self {
-        Self { max_frames: None }
+        Self {
+            max_frames: None,
+            quiet_after: None,
+        }
     }
 }
 
@@ -53,6 +64,7 @@ impl CaptureBackend for TestPatternBackend {
         let stop_flag = Arc::new(AtomicBool::new(false));
         let dropped = Arc::new(AtomicU64::new(0));
         let max_frames = self.max_frames;
+        let quiet_after = self.quiet_after;
 
         let producer_stop = stop_flag.clone();
         let producer_dropped = dropped.clone();
@@ -65,6 +77,12 @@ impl CaptureBackend for TestPatternBackend {
                     if n >= max {
                         break;
                     }
+                }
+                // Gone still: hold the channel open and send nothing, the way a
+                // capture backend behaves when the screen stops changing.
+                if quiet_after.is_some_and(|q| n >= q) {
+                    std::thread::sleep(frame_interval);
+                    continue;
                 }
                 let frame = render_frame(n, t0.elapsed());
                 // Non-blocking send: if the consumer is behind, drop and count.

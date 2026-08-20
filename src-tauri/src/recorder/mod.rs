@@ -373,6 +373,11 @@ fn spawn_encode_loop(
             let mut hud_paused_accum = Duration::ZERO;
             let mut encode_error: Option<AppError> = None;
             let mut interrupted = false;
+            // Last capture timestamp seen, and when it landed. Lets the loop
+            // estimate "what time is it on the capture clock" while no frames
+            // are arriving, using the same domain the frame path works in so the
+            // two can never disagree about where the timeline is.
+            let mut last_raw: Option<(f64, Instant)> = None;
 
             // Once encoding fails the take is over: this loop breaks, so no more
             // progress ticks are sent and the file stops growing. Without a signal
@@ -417,6 +422,7 @@ fn spawn_encode_loop(
                 let video_done = match capture.frames.recv_timeout(Duration::from_millis(100)) {
                     Ok(frame) => {
                         let ts = frame.timestamp.as_secs_f64();
+                        last_raw = Some((ts, Instant::now()));
                         if pause_flag.load(Ordering::Relaxed) {
                             // Mark where the pause began; hold everything until resume.
                             pause_mark.get_or_insert(ts);
@@ -481,7 +487,49 @@ fn spawn_encode_loop(
                         }
                         false
                     }
-                    Err(crossbeam_channel::RecvTimeoutError::Timeout) => false,
+                    Err(crossbeam_channel::RecvTimeoutError::Timeout) => {
+                        // A quiet channel is not a quiet recording. WGC emits a
+                        // frame only when the content changes, so a static
+                        // screen — a slide, a paused video, a form nobody is
+                        // typing into — sends nothing for as long as it sits
+                        // still. The HUD keeps counting off wall clock while the
+                        // encoded timeline stopped dead, so the take came back
+                        // short by exactly the still time, with no error to
+                        // explain it. Advance the timeline off the capture clock
+                        // instead of off arrivals.
+                        //
+                        // This mirrors the frame path's arithmetic deliberately:
+                        // same pause folding, same epoch, same slot rounding. The
+                        // two must agree on where the timeline is, so they read
+                        // the same way.
+                        if let Some((raw_ts, at)) = last_raw {
+                            let est_ts = raw_ts + at.elapsed().as_secs_f64();
+                            if pause_flag.load(Ordering::Relaxed) {
+                                // Pause with a still screen delivers no frame to
+                                // mark the pause with, so mark it from here or
+                                // the paused span never leaves the timeline.
+                                pause_mark.get_or_insert(est_ts);
+                            } else {
+                                if let Some(mark) = pause_mark.take() {
+                                    paused_accum += (est_ts - mark).max(0.0);
+                                    pause_spans.push((mark, est_ts.max(mark)));
+                                }
+                                if let Some(epoch) = media_epoch {
+                                    let timeline_ts =
+                                        (est_ts - paused_accum - epoch).max(0.0);
+                                    match pacer.fill_to(&mut encoder, timeline_ts) {
+                                        Ok(n) => frames_encoded += n,
+                                        Err(e) => {
+                                            report_encode_failure(&e);
+                                            encode_error = Some(e);
+                                            break;
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        false
+                    }
                     Err(crossbeam_channel::RecvTimeoutError::Disconnected) => true,
                 };
 
@@ -847,6 +895,21 @@ fn plan_frame(ts_secs: f64, fps: u32, next_index: u64, max_fill: u64) -> FramePl
     }
 }
 
+/// How many repeat frames bring the timeline up to `ts_secs` with no new
+/// capture to write — [`FramePacer::fill_to`]'s arithmetic, hoisted so the
+/// invariant below is testable without an FFmpeg process.
+///
+/// Deliberately *not* [`plan_frame`]: that one jumps `next_index` to the target
+/// slot even when `max_fill` clamped the repeats, which is correct for a real
+/// arriving frame (it belongs in its own slot) but would silently shorten the
+/// take when there is no frame to anchor. Here the index advances by exactly
+/// what was written, so a clamp defers work to the next tick instead of
+/// discarding it.
+fn fill_repeats(ts_secs: f64, fps: u32, next_index: u64, max_fill: u64) -> u64 {
+    let target = (ts_secs * f64::from(fps.max(1))).round().max(0.0) as u64;
+    target.saturating_sub(next_index).min(max_fill)
+}
+
 /// The CFR slot a frame presented at `ts_secs` of capture time belongs to.
 ///
 /// Deliberately the same arithmetic as [`plan_frame`]'s `target`. The two must
@@ -949,6 +1012,34 @@ impl FramePacer {
         Ok(written)
     }
 
+    /// Advance the CFR timeline to `ts_secs` by repeating the last frame, with
+    /// no new capture to write. This is what keeps a *quiet* capture from
+    /// shortening the take: Windows.Graphics.Capture only produces a frame when
+    /// the content changes, so a static screen delivers nothing at all, and a
+    /// timeline driven only by arrivals simply stops until something moves.
+    ///
+    /// Unlike [`Self::push`], this advances `next_index` by exactly the number
+    /// of frames it wrote rather than jumping to the target slot. `max_fill`
+    /// therefore rate-limits a single call instead of discarding the remainder —
+    /// the caller ticks again in ~100 ms and carries on filling, so the written
+    /// frame count and the timeline length can never drift apart.
+    fn fill_to(&mut self, encoder: &mut Encoder, ts_secs: f64) -> AppResult<u64> {
+        let repeats = fill_repeats(ts_secs, self.fps, self.next_index, self.max_fill);
+        if repeats == 0 {
+            return Ok(0);
+        }
+        let Some((data, bpr)) = self.last.as_ref() else {
+            // Nothing captured yet — there is no picture to hold, and inventing
+            // one would put black frames before the recording's first frame.
+            return Ok(0);
+        };
+        for _ in 0..repeats {
+            encoder.write_frame(data, *bpr)?;
+        }
+        self.next_index += repeats;
+        Ok(repeats)
+    }
+
     /// Retain `data` as the frame to repeat across future gaps. An ownership
     /// move, not a copy: the buffer arrived fresh from the capture backend and
     /// would otherwise be dropped at the end of this tick.
@@ -1006,6 +1097,7 @@ mod tests {
 
         let backend = Box::new(TestPatternBackend {
             max_frames: Some(30),
+            ..Default::default()
         });
         let controller = RecorderController::new(backend, silent_emit());
         let config = RecorderConfig {
@@ -1058,6 +1150,7 @@ mod tests {
         let controller = RecorderController::new(
             Box::new(TestPatternBackend {
                 max_frames: Some(30),
+                ..Default::default()
             }),
             silent_emit(),
         );
@@ -1191,6 +1284,95 @@ mod tests {
         // Next frame arrives ~3 slots in (2 frames were dropped at 30fps).
         let p = plan_frame(0.1, 30, 1, 150);
         assert_eq!((p.repeats, p.write_current, p.next_index), (2, true, 4));
+    }
+
+    #[test]
+    fn a_quiet_capture_still_advances_the_timeline() {
+        // The #24 case: nothing on screen changes, so WGC sends no frames at
+        // all. One 100 ms tick with the timeline sitting at slot 30 (1.0 s) and
+        // the capture clock now at 1.1 s owes 3 frames at 30 fps.
+        assert_eq!(fill_repeats(1.1, 30, 30, 150), 3);
+    }
+
+    #[test]
+    fn filling_writes_nothing_when_the_timeline_is_already_current() {
+        // Frames are arriving normally: the pacer has already filled this slot,
+        // so the heartbeat must not add a duplicate on top of it.
+        assert_eq!(fill_repeats(1.0, 30, 30, 150), 0);
+        // An estimate that ran slightly behind the real frames must not rewind.
+        assert_eq!(fill_repeats(0.9, 30, 30, 150), 0);
+    }
+
+    #[test]
+    fn filling_defers_a_clamped_gap_instead_of_discarding_it() {
+        // The load-bearing difference from `plan_frame`. Both clamp to
+        // `max_fill`, but `plan_frame` then jumps `next_index` to the target and
+        // the clamped remainder is gone for good — which is how a long stall
+        // silently shortened a take. `fill_repeats` reports only what it will
+        // write, so the caller advances by that much and the next tick picks up
+        // exactly where this one stopped.
+        let fps = 30;
+        let max_fill = fps as u64 * 5;
+
+        // A 20 s hole with a 5 s clamp: plan_frame writes 150 and calls it done.
+        let p = plan_frame(20.0, fps, 0, max_fill);
+        assert_eq!(p.repeats, 150);
+        assert_eq!(p.next_index, 601, "plan_frame jumps the whole gap");
+
+        // Filling the same hole one tick at a time loses nothing: keep calling
+        // and the timeline arrives at the target slot with a frame per slot.
+        let mut next = 0u64;
+        let mut written = 0u64;
+        for _ in 0..1000 {
+            let n = fill_repeats(20.0, fps, next, max_fill);
+            if n == 0 {
+                break;
+            }
+            next += n;
+            written += n;
+        }
+        assert_eq!(next, 600, "the timeline reaches the target slot");
+        assert_eq!(written, 600, "and every slot got a frame");
+    }
+
+    #[test]
+    fn a_still_screen_keeps_the_saved_duration_matching_the_clock() {
+        // Reproduces the shape of #24: 7 minutes recorded, the screen static for
+        // all but the first second, ticking every 100 ms the way the encode loop
+        // does. `duration_seconds` is `frames_encoded / fps`, so the frame count
+        // *is* the saved duration — before the heartbeat this stopped at the
+        // last arriving frame and the take came back minutes short.
+        let fps = 30u32;
+        let max_fill = fps as u64 * 5;
+        let wall = 420.0f64;
+
+        let mut next = 0u64;
+        let mut frames = 0u64;
+        // One second of real frames, then the screen goes still.
+        let mut t = 0.0f64;
+        while t < 1.0 {
+            let p = plan_frame(t, fps, next, max_fill);
+            frames += p.repeats;
+            if p.write_current {
+                frames += 1;
+                next = p.next_index;
+            }
+            t += 1.0 / f64::from(fps);
+        }
+        // Nothing arrives for the remaining ~7 minutes; only the heartbeat runs.
+        let mut clock = t;
+        while clock < wall {
+            let n = fill_repeats(clock, fps, next, max_fill);
+            next += n;
+            frames += n;
+            clock += 0.1;
+        }
+
+        let saved = frames as f64 / f64::from(fps);
+        assert!(
+            (saved - wall).abs() < 1.0,
+            "saved {saved:.1}s for a {wall:.0}s recording — the still stretch was lost"
+        );
     }
 
     #[test]
@@ -1386,6 +1568,66 @@ mod tests {
         assert_eq!(pacer.last_frame(), Some(([9u8, 9].as_slice(), 4)));
     }
 
+    /// Issue #24: a recording of a screen that stops changing came back far
+    /// shorter than the time on the HUD, with no error anywhere.
+    ///
+    /// The capture stays alive and the user keeps recording; there is simply
+    /// nothing new to send, so the encode loop received nothing and the encoded
+    /// timeline stopped at the last arriving frame. The HUD kept counting off
+    /// wall clock, which is why the two disagreed at the end and nothing warned
+    /// about it. `duration_seconds` is `frames_encoded / fps`, so the assertion
+    /// here is the user-visible duration.
+    #[test]
+    fn a_recording_of_a_still_screen_keeps_its_full_duration() {
+        if std::process::Command::new("ffmpeg")
+            .arg("-version")
+            .output()
+            .is_err()
+        {
+            eprintln!("ffmpeg not found — skipping still-screen duration test");
+            return;
+        }
+
+        let dir = std::env::temp_dir().join(format!("capptivo-still-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+
+        // ~5 frames of motion, then the screen goes still for the rest of the take.
+        let backend = Box::new(TestPatternBackend {
+            quiet_after: Some(5),
+            ..Default::default()
+        });
+        let controller = RecorderController::new(backend, silent_emit());
+        let config = RecorderConfig {
+            source_id: "display:test".into(),
+            crop: None,
+            fps: 30,
+            show_cursor: false,
+            capture_system_audio: false,
+            capture_microphone: false,
+            microphone_device_id: None,
+            microphone_label: None,
+            quality: QualityPreset::Balanced,
+        };
+
+        let started = Instant::now();
+        controller.start(&config, &dir).unwrap();
+        std::thread::sleep(Duration::from_millis(2000));
+        let artifacts = controller.stop().unwrap();
+        let wall = started.elapsed().as_secs_f64();
+
+        assert!(artifacts.error.is_none(), "{:?}", artifacts.error);
+        let saved = artifacts.stats.duration_seconds;
+        // Generous bound: this asserts the still stretch is *there*, not that the
+        // timing is exact. Before the heartbeat this came back at ~0.17s (the 5
+        // frames that arrived) against a ~2s take.
+        assert!(
+            saved > wall * 0.6,
+            "saved {saved:.2}s for a {wall:.2}s recording of a still screen —              the still stretch was dropped from the timeline"
+        );
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
     #[test]
     fn records_a_short_clip_into_a_valid_mp4() {
         // Skip gracefully if ffmpeg isn't available on the test machine.
@@ -1403,6 +1645,7 @@ mod tests {
 
         let backend = Box::new(TestPatternBackend {
             max_frames: Some(30),
+            ..Default::default()
         });
         let controller = RecorderController::new(backend, silent_emit());
 
@@ -1450,6 +1693,7 @@ mod tests {
 
         let backend = Box::new(TestPatternBackend {
             max_frames: Some(10),
+            ..Default::default()
         });
         let controller = RecorderController::new(backend, silent_emit());
 
