@@ -70,7 +70,11 @@ pub fn ensure_proxy(
     let screen = dir.join("screen.mp4");
     let app = app.clone();
     std::thread::spawn(move || {
-        let result = std::panic::catch_unwind(|| proxy::generate(&screen, &dir));
+        // `recording_size` yields (0, 0) when meta.json is unreadable; pass the
+        // size only when it is real so the GPU scalers that need it can tell
+        // "unknown" from a genuine dimension.
+        let source_size = (width > 0 && height > 0).then_some((width, height));
+        let result = std::panic::catch_unwind(|| proxy::generate(&screen, &dir, source_size));
         // Always clear the in-flight flag — a panic in `proxy::generate` used to
         // leave `proxy_jobs` set and the editor waited forever for proxy-ready.
         if let Some(state) = app.try_state::<AppState>() {

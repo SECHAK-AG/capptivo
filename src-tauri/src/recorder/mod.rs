@@ -6,6 +6,7 @@
 pub mod area_crop;
 pub mod backend;
 pub mod encoder;
+pub mod hw_decoder;
 pub mod hw_encoder;
 pub mod mic_devices;
 pub mod mic_warm;
