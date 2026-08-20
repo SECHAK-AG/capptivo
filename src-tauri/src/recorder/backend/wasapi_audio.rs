@@ -110,12 +110,16 @@ fn build_stream(tx: Sender<RawAudio>, epoch: Instant) -> Result<cpal::Stream, St
         for s in samples {
             data.extend_from_slice(&s.to_le_bytes());
         }
-        let _ = tx.try_send(RawAudio {
-            data,
-            sample_rate,
-            channels,
-            timestamp: epoch.elapsed(),
-        });
+        super::forward_audio(
+            &tx,
+            RawAudio {
+                data,
+                sample_rate,
+                channels,
+                timestamp: epoch.elapsed(),
+            },
+            "system-audio-wasapi",
+        );
     };
 
     // The shared-mode mix format is virtually always f32, but cover the
