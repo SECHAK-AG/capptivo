@@ -52,6 +52,9 @@ pub struct Encoder {
     height: u32,
     frame_len: usize,
     output: PathBuf,
+    /// Set when `hw_encoder::pick_for` demoted the startup pick for this frame
+    /// size: `(refused hardware encoder, software encoder in use)`.
+    demoted: Option<(&'static str, &'static str)>,
 }
 
 impl Encoder {
@@ -66,7 +69,9 @@ impl Encoder {
     ) -> AppResult<Self> {
         let bitrate = quality.target_bitrate(width, height);
         let ffmpeg = ffmpeg_path();
-        let encoder = hw_encoder::pick(&ffmpeg);
+        let encoder = hw_encoder::pick_for(&ffmpeg, width, height);
+        let startup = hw_encoder::pick(&ffmpeg);
+        let demoted = (startup.name != encoder.name).then_some((startup.name, encoder.name));
 
         let mut child = proc::command(&ffmpeg)
             .args(["-hide_banner", "-loglevel", "error", "-y"])
@@ -168,6 +173,15 @@ impl Encoder {
             height,
             frame_len: (width as usize) * (height as usize) * 4,
             output: output.to_path_buf(),
+            demoted,
+        })
+    }
+
+    /// The user-facing note for a take that lost its hardware encoder to the
+    /// frame size, or `None` when the startup pick is in use.
+    pub fn software_fallback_notice(&self) -> Option<String> {
+        self.demoted.map(|(refused, fallback)| {
+            hw_encoder::software_fallback_notice(self.width, self.height, refused, fallback)
         })
     }
 

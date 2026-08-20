@@ -134,6 +134,7 @@ impl RecorderController {
         // source errors surface, before we spawn anything.
         let capture: CaptureHandle = self.backend.start(config)?;
         let (width, height) = encodable_dimensions(capture.width, capture.height)?;
+        let mut notices: Vec<String> = capture.notice.iter().cloned().collect();
         let fps = capture.fps;
         let system_audio = capture.audio.is_some();
         let microphone = capture.mic.is_some();
@@ -148,6 +149,7 @@ impl RecorderController {
             system_audio,
             microphone,
         )?;
+        notices.extend(encoder.software_fallback_notice());
 
         // One clock for everything: frame timestamps are measured from the
         // backend's `epoch`, so the cursor sampler must stamp against that
@@ -197,6 +199,16 @@ impl RecorderController {
         });
         self.set_state(RecorderState::Recording);
         (self.emit)(RecorderEvent::Elapsed { seconds: 0.0 });
+        // Non-fatal: the recorder shows it as a toast and keeps the take going.
+        // Emitted after the state change so a listener that resets on
+        // `StateChanged` does not wipe it.
+        for message in notices {
+            tracing::info!(%message, "capture notice");
+            (self.emit)(RecorderEvent::Error {
+                message,
+                fatal: false,
+            });
+        }
         Ok(())
     }
 

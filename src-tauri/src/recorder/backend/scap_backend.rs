@@ -17,10 +17,11 @@ use super::picker_sources;
 use super::source_preview;
 use super::{CaptureBackend, CaptureHandle, RawFrame, CAPTURE_CHANNEL_CAP};
 use crate::error::{AppError, AppResult};
-use crate::recorder::types::{CaptureSource, CaptureSourceKind, RecorderConfig};
+use crate::recorder::hw_encoder;
+use crate::recorder::types::{CaptureCrop, CaptureSource, CaptureSourceKind, RecorderConfig};
 use crate::windows;
 use core_graphics::display::CGDisplay;
-use scap::capturer::{Area, Capturer, Options, Point, Size};
+use scap::capturer::{Area, Capturer, Options, Point, Resolution, Size};
 use scap::frame::{Frame, FrameType};
 use scap::Target;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -130,6 +131,15 @@ impl CaptureBackend for ScapBackend {
         } else {
             windows::overlay_cgwindow_ids(&self.app)
         };
+        // A display or area wider than the hardware encoder takes is scaled by
+        // SCK on the GPU (see `hw_encoder::HW_ENCODER_EDGE`). scap only offers
+        // preset output sizes, so this picks the largest one that lands inside
+        // the edge; the window path sizes its own stream in `sck_window`.
+        let output_resolution = if is_window {
+            Resolution::Captured
+        } else {
+            display_output_resolution(&source_id, crop)
+        };
 
         let (tx, rx) = crossbeam_channel::bounded::<RawFrame>(CAPTURE_CHANNEL_CAP);
         let (meta_tx, meta_rx) =
@@ -188,6 +198,7 @@ impl CaptureBackend for ScapBackend {
                     fps,
                     show_cursor: false,
                     output_type: FrameType::BGRAFrame,
+                    output_resolution,
                     target: Some(target),
                     crop_area,
                     excluded_targets,
@@ -303,6 +314,10 @@ impl CaptureBackend for ScapBackend {
                     if scale_base > 0.0 {
                         handle.scale_factor = width as f64 / scale_base;
                     }
+                    let scale = picker_sources::display_scale_factor(id);
+                    let native =
+                        picker_sources::points_to_even_pixels(rect.width, rect.height, scale);
+                    handle.notice = hw_encoder::scaled_capture_notice(native, (width, height));
                 }
             }
             Some(("window", id_str)) => {
@@ -317,6 +332,10 @@ impl CaptureBackend for ScapBackend {
                     if rect.width > 0.0 {
                         handle.scale_factor = width as f64 / rect.width;
                     }
+                    let scale = display_scale_for_rect(&rect);
+                    let native =
+                        picker_sources::points_to_even_pixels(rect.width, rect.height, scale);
+                    handle.notice = hw_encoder::scaled_capture_notice(native, (width, height));
                     handle.capture_rect = rect;
                 }
             }
@@ -333,6 +352,96 @@ fn start_scap_capturer(options: Options) -> AppResult<(Capturer, [u32; 2])> {
     capturer.start_capture();
     let size = capturer.get_output_frame_size();
     Ok((capturer, size))
+}
+
+/// Backing scale of the display under a window frame's centre — the scale
+/// `sck_window` sized the stream with, recovered from Core Graphics so the
+/// notice can name the window's native pixel size. Falls back to the main
+/// display, like `sck_window` does when no display intersects the frame.
+fn display_scale_for_rect(rect: &crate::cursor::CaptureRect) -> u32 {
+    let cx = rect.x + rect.width / 2.0;
+    let cy = rect.y + rect.height / 2.0;
+    let id = CGDisplay::active_displays()
+        .ok()
+        .and_then(|ids| {
+            ids.into_iter().find(|&id| {
+                let b = CGDisplay::new(id).bounds();
+                cx >= b.origin.x
+                    && cx < b.origin.x + b.size.width
+                    && cy >= b.origin.y
+                    && cy < b.origin.y + b.size.height
+            })
+        })
+        .unwrap_or_else(|| CGDisplay::main().id);
+    picker_sources::display_scale_factor(id)
+}
+
+/// The scap output preset for a display (or area) capture: `Captured` when
+/// the backing-store size fits `hw_encoder::HW_ENCODER_EDGE`, otherwise the
+/// largest preset that lands inside the edge on both axes. scap resolves a
+/// preset to `[W, W / aspect]` and clamps each axis to the captured size, so
+/// the aspect ratio survives and the GPU does the scaling.
+fn display_output_resolution(source_id: &str, crop: Option<CaptureCrop>) -> Resolution {
+    let Some(("display", id_str)) = source_id.split_once(':') else {
+        return Resolution::Captured;
+    };
+    let Ok(display_id) = id_str.parse::<u32>() else {
+        return Resolution::Captured;
+    };
+    let bounds = CGDisplay::new(display_id).bounds();
+    let (width_pts, height_pts) = match crop {
+        Some(c) => (c.width, c.height),
+        None => (bounds.size.width, bounds.size.height),
+    };
+    let scale = picker_sources::display_scale_factor(display_id);
+    let (width, height) = picker_sources::points_to_even_pixels(width_pts, height_pts, scale);
+    let resolution = preset_inside_hardware_edge(width, height);
+    if !matches!(resolution, Resolution::Captured) {
+        tracing::info!(
+            source_id,
+            width,
+            height,
+            ?resolution,
+            "capture exceeds the hardware encoder edge; scaling on the GPU"
+        );
+    }
+    resolution
+}
+
+/// scap's preset ladder, widest first, with the width each preset resolves
+/// to. Mirrors `scap::capturer::Resolution::value` (0.0.8, pinned in
+/// Cargo.toml): `[W, floor(W / aspect)]`, then per-axis `min` with the
+/// captured size, then rounded down to even.
+const SCAP_PRESETS: &[(Resolution, u32)] = &[
+    (Resolution::_4320p, 7680),
+    (Resolution::_2160p, 3840),
+    (Resolution::_1440p, 2560),
+    (Resolution::_1080p, 1920),
+    (Resolution::_720p, 1280),
+    (Resolution::_480p, 640),
+];
+
+/// What scap will hand out for `width`×`height` under `preset` — the clamp
+/// from `get_output_frame_size`, reproduced so the pick can be checked against
+/// the edge before the stream exists.
+fn scap_output_size(width: u32, height: u32, preset_width: u32) -> (u32, u32) {
+    let aspect = width as f32 / height as f32;
+    let w = width.min(preset_width);
+    let h = height.min((preset_width as f32 / aspect).floor() as u32);
+    (w & !1, h & !1)
+}
+
+fn preset_inside_hardware_edge(width: u32, height: u32) -> Resolution {
+    if width.max(height) <= hw_encoder::HW_ENCODER_EDGE || width == 0 || height == 0 {
+        return Resolution::Captured;
+    }
+    for &(preset, preset_width) in SCAP_PRESETS {
+        let (w, h) = scap_output_size(width, height, preset_width);
+        if w.max(h) <= hw_encoder::HW_ENCODER_EDGE {
+            return preset;
+        }
+    }
+    Resolution::_480p
 }
 
 fn parse_source_id(source_id: &str) -> AppResult<u32> {
@@ -450,4 +559,72 @@ fn to_raw_frame(frame: Frame, epoch_host_ns: u64, epoch: Instant) -> Option<RawF
         data: f.data,
         timestamp,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn same(a: Resolution, b: Resolution) -> bool {
+        std::mem::discriminant(&a) == std::mem::discriminant(&b)
+    }
+
+    fn preset_width(preset: Resolution) -> u32 {
+        SCAP_PRESETS
+            .iter()
+            .find(|(p, _)| same(*p, preset))
+            .map(|(_, w)| *w)
+            .expect("every non-Captured preset is in the ladder")
+    }
+
+    #[test]
+    fn captures_inside_the_edge_keep_their_size() {
+        assert!(same(preset_inside_hardware_edge(3840, 2160), Resolution::Captured));
+        assert!(same(preset_inside_hardware_edge(4096, 2304), Resolution::Captured));
+        assert!(same(preset_inside_hardware_edge(0, 9000), Resolution::Captured));
+    }
+
+    #[test]
+    fn a_5k_display_lands_on_the_2160p_preset() {
+        // 2560×1440 pt at 2× — scap resolves _2160p to [3840, 2160] here.
+        assert!(same(preset_inside_hardware_edge(5120, 2880), Resolution::_2160p));
+        assert_eq!(scap_output_size(5120, 2880, 3840), (3840, 2160));
+        // An area of that display, 2560×1410 pt.
+        assert!(same(preset_inside_hardware_edge(5120, 2820), Resolution::_2160p));
+        assert_eq!(scap_output_size(5120, 2820, 3840), (3840, 2114));
+    }
+
+    #[test]
+    fn a_portrait_5k_display_needs_a_smaller_preset() {
+        // _2160p resolves to [3840, 6826] and the per-axis min keeps the
+        // captured 5120 px height — only _1080p gets both axes under the edge.
+        assert!(same(preset_inside_hardware_edge(2880, 5120), Resolution::_1080p));
+        assert_eq!(scap_output_size(2880, 5120, 1920), (1920, 3412));
+    }
+
+    #[test]
+    fn every_oversize_pick_fits_the_edge_under_scaps_clamp() {
+        for (w, h) in [
+            (5120, 2880),
+            (5120, 2820),
+            (2880, 5120),
+            (10240, 4320),
+            (6016, 3384),
+            (4100, 4100),
+            (7680, 2160),
+        ] {
+            let preset = preset_inside_hardware_edge(w, h);
+            let (ow, oh) = scap_output_size(w, h, preset_width(preset));
+            assert!(
+                ow.max(oh) <= hw_encoder::HW_ENCODER_EDGE,
+                "{w}x{h} → {preset:?} → {ow}x{oh}"
+            );
+            let aspect_in = w as f64 / h as f64;
+            let aspect_out = ow as f64 / oh as f64;
+            assert!(
+                ((aspect_in - aspect_out) / aspect_in).abs() < 0.01,
+                "{w}x{h} → {preset:?} → {ow}x{oh} changes the aspect ratio"
+            );
+        }
+    }
 }
