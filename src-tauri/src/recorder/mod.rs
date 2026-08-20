@@ -378,6 +378,12 @@ fn spawn_encode_loop(
             // are arriving, using the same domain the frame path works in so the
             // two can never disagree about where the timeline is.
             let mut last_raw: Option<(f64, Instant)> = None;
+            // The most recent frame the warm-up skip rejected, kept as
+            // (pixels, stride, active timestamp). For a source that paints once
+            // and then sits still this is the only picture the take will ever
+            // get, so it is held rather than dropped until the warm-up window
+            // closes and the heartbeat can promote it.
+            let mut pending_warmup: Option<(Vec<u8>, u32, f64)> = None;
 
             // Once encoding fails the take is over: this loop breaks, so no more
             // progress ticks are sent and the file stops growing. Without a signal
@@ -483,6 +489,13 @@ fn spawn_encode_loop(
                                         }
                                     }
                                 }
+                            } else {
+                                // Skipped as warm-up black. Hold it: a window
+                                // that hands over an unpainted surface and then
+                                // never repaints sends nothing else, and
+                                // discarding this left the take with no frames
+                                // at all.
+                                pending_warmup = Some((frame.data, bytes_per_row, active_ts));
                             }
                         }
                         false
@@ -514,6 +527,33 @@ fn spawn_encode_loop(
                                     paused_accum += (est_ts - mark).max(0.0);
                                     pause_spans.push((mark, est_ts.max(mark)));
                                 }
+                                // `CAPTURE_WARMUP_MAX_SECS` is a deadline, but it
+                                // used to be enforced only by an arriving frame:
+                                // "start the timeline on the next frame after
+                                // 0.75s". A source that is not repainting has no
+                                // next frame, so the deadline never fired, the
+                                // epoch was never set, and the take encoded
+                                // nothing at all. Enforce it against the clock.
+                                if media_epoch.is_none()
+                                    && (est_ts - paused_accum) >= CAPTURE_WARMUP_MAX_SECS
+                                {
+                                    if let Some((data, bpr, ts)) = pending_warmup.take() {
+                                        media_epoch = Some(ts);
+                                        media_lead_in_ms.store(
+                                            (ts.max(0.0) * 1000.0).round() as i64,
+                                            Ordering::Relaxed,
+                                        );
+                                        match pacer.push(&mut encoder, data, bpr, 0.0) {
+                                            Ok(n) => frames_encoded += n,
+                                            Err(e) => {
+                                                report_encode_failure(&e);
+                                                encode_error = Some(e);
+                                                break;
+                                            }
+                                        }
+                                    }
+                                }
+
                                 if let Some(epoch) = media_epoch {
                                     let timeline_ts =
                                         (est_ts - paused_accum - epoch).max(0.0);
@@ -1623,6 +1663,127 @@ mod tests {
         assert!(
             saved > wall * 0.6,
             "saved {saved:.2}s for a {wall:.2}s recording of a still screen —              the still stretch was dropped from the timeline"
+        );
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// Issue #33: recording a selected window produced a take whose duration was
+    /// always 0, however long it ran.
+    ///
+    /// The stricter sibling of #24. A window hands over an unpainted (black)
+    /// surface first, and `is_capture_warmup_black` skips those so the take does
+    /// not open on a black flash. That skip is only supposed to last until
+    /// `CAPTURE_WARMUP_MAX_SECS`, after which the next frame forces the timeline
+    /// to start — but "the next frame" never comes for a window that is not
+    /// redrawing. The epoch was never set, so nothing was ever encoded and
+    /// `frames_encoded / fps` came out at exactly zero.
+    #[test]
+    fn a_window_that_never_repaints_after_warmup_still_records() {
+        if std::process::Command::new("ffmpeg")
+            .arg("-version")
+            .output()
+            .is_err()
+        {
+            eprintln!("ffmpeg not found — skipping warm-up-only duration test");
+            return;
+        }
+
+        let dir = std::env::temp_dir().join(format!("capptivo-warm-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+
+        // Every frame the capture will ever send is black, and it sends only
+        // three of them before going still — an unpainted window that then sits
+        // there. This is the whole take.
+        let backend = Box::new(TestPatternBackend {
+            black_frames: 3,
+            quiet_after: Some(3),
+            ..Default::default()
+        });
+        let controller = RecorderController::new(backend, silent_emit());
+        let config = RecorderConfig {
+            source_id: "display:test".into(),
+            crop: None,
+            fps: 30,
+            show_cursor: false,
+            capture_system_audio: false,
+            capture_microphone: false,
+            microphone_device_id: None,
+            microphone_label: None,
+            quality: QualityPreset::Balanced,
+        };
+
+        let started = Instant::now();
+        controller.start(&config, &dir).unwrap();
+        std::thread::sleep(Duration::from_millis(2000));
+        let artifacts = controller.stop().unwrap();
+        let wall = started.elapsed().as_secs_f64();
+
+        assert!(artifacts.error.is_none(), "{:?}", artifacts.error);
+        let saved = artifacts.stats.duration_seconds;
+        assert!(
+            saved > 0.0,
+            "a {wall:.2}s recording saved 0s — the warm-up skip swallowed every              frame the capture ever sent"
+        );
+        // Past the warm-up window the take must run for real, not just emit a
+        // token frame or two.
+        assert!(
+            saved > (wall - CAPTURE_WARMUP_MAX_SECS) * 0.6,
+            "saved only {saved:.2}s of a {wall:.2}s take"
+        );
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// The guard on the #33 fix: promoting a held warm-up frame must not cost
+    /// the behaviour the warm-up skip exists for. When the source *does* paint,
+    /// the take still opens on real content, not on the black surface that came
+    /// first — the promotion only ever fires for a source that went silent.
+    #[test]
+    fn a_source_that_paints_still_skips_its_black_warmup() {
+        if std::process::Command::new("ffmpeg")
+            .arg("-version")
+            .output()
+            .is_err()
+        {
+            eprintln!("ffmpeg not found — skipping warm-up skip test");
+            return;
+        }
+
+        let dir = std::env::temp_dir().join(format!("capptivo-skip-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+
+        // Black for the first few frames, then real content, and it keeps
+        // coming — the ordinary case.
+        let backend = Box::new(TestPatternBackend {
+            black_frames: 5,
+            ..Default::default()
+        });
+        let controller = RecorderController::new(backend, silent_emit());
+        let config = RecorderConfig {
+            source_id: "display:test".into(),
+            crop: None,
+            fps: 30,
+            show_cursor: false,
+            capture_system_audio: false,
+            capture_microphone: false,
+            microphone_device_id: None,
+            microphone_label: None,
+            quality: QualityPreset::Balanced,
+        };
+
+        controller.start(&config, &dir).unwrap();
+        std::thread::sleep(Duration::from_millis(800));
+        let artifacts = controller.stop().unwrap();
+
+        assert!(artifacts.error.is_none(), "{:?}", artifacts.error);
+        assert!(
+            artifacts.media_lead_in_ms > 0,
+            "the timeline opened at 0 — the black warm-up frames were kept"
+        );
+        assert!(
+            artifacts.stats.frames_encoded > 0,
+            "nothing was encoded at all"
         );
 
         std::fs::remove_dir_all(&dir).ok();
