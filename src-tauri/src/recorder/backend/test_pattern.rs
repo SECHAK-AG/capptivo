@@ -24,6 +24,10 @@ pub struct TestPatternBackend {
     /// deliberately different from `max_frames`: the session is alive and the
     /// user is still recording, there is simply nothing new to send.
     pub quiet_after: Option<u64>,
+    /// Render this many leading frames as pure black. Mirrors a capture that
+    /// hands over an unpainted surface before the source draws anything — the
+    /// frames `is_capture_warmup_black` is meant to skip.
+    pub black_frames: u64,
 }
 
 impl Default for TestPatternBackend {
@@ -31,6 +35,7 @@ impl Default for TestPatternBackend {
         Self {
             max_frames: None,
             quiet_after: None,
+            black_frames: 0,
         }
     }
 }
@@ -65,6 +70,7 @@ impl CaptureBackend for TestPatternBackend {
         let dropped = Arc::new(AtomicU64::new(0));
         let max_frames = self.max_frames;
         let quiet_after = self.quiet_after;
+        let black_frames = self.black_frames;
 
         let producer_stop = stop_flag.clone();
         let producer_dropped = dropped.clone();
@@ -84,7 +90,11 @@ impl CaptureBackend for TestPatternBackend {
                     std::thread::sleep(frame_interval);
                     continue;
                 }
-                let frame = render_frame(n, t0.elapsed());
+                let frame = if n < black_frames {
+                    render_black_frame(t0.elapsed())
+                } else {
+                    render_frame(n, t0.elapsed())
+                };
                 // Non-blocking send: if the consumer is behind, drop and count.
                 match tx.try_send(frame) {
                     Ok(()) => {}
@@ -103,6 +113,23 @@ impl CaptureBackend for TestPatternBackend {
             move || stop_flag.store(true, Ordering::Relaxed)
         };
         Ok(CaptureHandle::new(W, H, fps, rx, dropped, stop))
+    }
+}
+
+/// An all-black frame: what a capture surface looks like before the source has
+/// painted into it.
+fn render_black_frame(elapsed: Duration) -> RawFrame {
+    let bytes_per_row = W * 4;
+    let mut data = vec![0u8; (bytes_per_row * H) as usize];
+    for px in data.chunks_exact_mut(4) {
+        px[3] = 255; // opaque black
+    }
+    RawFrame {
+        width: W,
+        height: H,
+        bytes_per_row,
+        data,
+        timestamp: elapsed,
     }
 }
 
