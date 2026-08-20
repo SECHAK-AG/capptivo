@@ -8,6 +8,7 @@ use super::picker_sources;
 use super::RawFrame;
 use crate::cursor::CaptureRect;
 use crate::error::{AppError, AppResult};
+use crate::recorder::hw_encoder;
 use crossbeam_channel::{Sender, TrySendError};
 use objc::{msg_send, sel, sel_impl};
 use objc_id::Id;
@@ -159,13 +160,30 @@ fn run_window_capture_inner(
         })?;
 
     let displays = content.displays();
-    let (cfg_w, cfg_h) = stream_config_pixels(&window, &displays);
+    let native = stream_config_pixels(&window, &displays);
+    // A window wider than the hardware encoder takes is scaled by SCK on the
+    // GPU rather than encoded in software at full size (see
+    // `hw_encoder::HW_ENCODER_EDGE`). `scales_to_fit` is what makes SCK honour
+    // a size other than the window's own; the target keeps the window's aspect
+    // ratio, so nothing is letterboxed.
+    let scaled = hw_encoder::fit_to_hardware_edge(native.0, native.1);
+    let (cfg_w, cfg_h) = scaled.unwrap_or(native);
+    if let Some((w, h)) = scaled {
+        tracing::info!(
+            window_id,
+            native_width = native.0,
+            native_height = native.1,
+            width = w,
+            height = h,
+            "window exceeds the hardware encoder edge; scaling on the GPU"
+        );
+    }
     let filter = UnsafeContentFilter::init(UnsafeInitParams::DesktopIndependentWindow(window));
 
     let config = UnsafeStreamConfiguration {
         width: cfg_w,
         height: cfg_h,
-        scales_to_fit: 0,
+        scales_to_fit: BOOL::from(scaled.is_some()),
         queue_depth: 6,
         shows_cursor: 0,
         minimum_frame_interval: CMTime {

@@ -137,6 +137,11 @@ pub struct CaptureHandle {
     /// capture: the frames are the *phone's* screen, so sampling the Mac cursor
     /// would write a cursor track that has nothing to do with the video.
     pub tracks_cursor: bool,
+    /// Something the user should know about this take that is not an error —
+    /// today: the capture was scaled on the GPU because the hardware encoder
+    /// would not take it at its native size. The controller surfaces it as a
+    /// non-fatal `RecorderEvent::Error`, which the recorder shows as a toast.
+    pub notice: Option<String>,
     /// The `Instant` that frame timestamps are measured from. The controller
     /// starts the cursor sampler on this same instant, which is what keeps the
     /// replayed cursor glued to the pixels it was recorded over — any epoch
@@ -171,6 +176,7 @@ impl CaptureHandle {
                 height: height as f64,
             },
             tracks_cursor: true,
+            notice: None,
             scale_factor: 1.0,
             // Handle construction happens as the producer comes up; backends
             // whose source clock can be anchored precisely overwrite this.

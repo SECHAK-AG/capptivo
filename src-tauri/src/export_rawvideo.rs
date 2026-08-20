@@ -52,7 +52,7 @@ impl RawvideoStreamEncoder {
         }
 
         let ffmpeg = ffmpeg_path();
-        let encoder = hw_encoder::pick(&ffmpeg);
+        let encoder = hw_encoder::pick_for(&ffmpeg, width, height);
         let fps = fps.max(1);
         let bitrate = bitrate.max(500_000);
         let size = format!("{width}x{height}");

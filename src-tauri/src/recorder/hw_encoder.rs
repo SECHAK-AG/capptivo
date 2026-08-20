@@ -3,11 +3,17 @@
 //! choice is *probed* once per process (a 2-frame smoke encode against the null
 //! muxer, ~100 ms) and cached. Every FFmpeg pipeline that encodes H.264
 //! (recorder, preview proxy) consumes the same [`EncoderChoice`].
+//!
+//! The startup probe runs at 256×144, which says nothing about frames a
+//! hardware encoder caps below the capture size. Callers that know their frame
+//! size go through [`pick_for`], which re-probes the pick at the exact size
+//! once it exceeds what the startup probe covers.
 
 use crate::proc;
+use std::collections::HashMap;
 use std::path::Path;
 use std::process::Stdio;
-use std::sync::OnceLock;
+use std::sync::{Mutex, OnceLock};
 
 /// One FFmpeg H.264 encoder plus the arg plumbing it needs. Fields are ordered
 /// the way they appear on the command line:
@@ -114,6 +120,19 @@ const SOFTWARE_FALLBACK: EncoderChoice = EncoderChoice {
     tuning_args: &["-preset", "veryfast"],
 };
 
+/// The software fallback as handed out for frames a hardware encoder refused.
+///
+/// `veryfast` — the regular fallback — measured 1.24× realtime for 5120×2820
+/// at 60 fps on an M4, reading BGRA from a file with nothing else running. The
+/// recorder adds a 57 MB frame copy and a pipe write per frame on top of that,
+/// and in a real 51 s take it shed close to half the captured frames.
+/// `ultrafast` measured 2.34× on the same input. Frames this size get ~28 Mbps,
+/// where the preset's quality cost does not show; the dropped frames do.
+const OVERSIZE_SOFTWARE_FALLBACK: EncoderChoice = EncoderChoice {
+    tuning_args: &["-preset", "ultrafast"],
+    ..SOFTWARE_FALLBACK
+};
+
 /// Candidates in preference order per OS. The last entry must be the software
 /// fallback so `pick()` can always return something.
 fn candidates() -> &'static [EncoderChoice] {
@@ -190,6 +209,118 @@ fn candidates() -> &'static [EncoderChoice] {
 pub fn pick(ffmpeg: &Path) -> &'static EncoderChoice {
     static PICK: OnceLock<EncoderChoice> = OnceLock::new();
     PICK.get_or_init(|| select(ffmpeg))
+}
+
+/// The largest frame edge every hardware H.264 encoder in the candidate list
+/// is known to accept: H.264 Level 5.1/5.2 tops out at 4096 px per edge.
+///
+/// Larger frames are ordinary on HiDPI displays — a 2560×1440-pt screen
+/// captures at 5120×2880 px — and VideoToolbox answers them with `Cannot
+/// create compression session: -12903` on the first real frame, long after
+/// the 256×144 startup probe blessed it. The recorder then saw ffmpeg die, hit
+/// a broken pipe and shelved a 0-byte take.
+///
+/// Two layers keep captures inside this edge. Backends that can scale on the
+/// GPU ask for a stream that already fits ([`fit_to_hardware_edge`]), so the
+/// hardware encoder keeps the take. Whatever still arrives larger goes through
+/// [`pick_for`], which re-probes the pick at that size and demotes it to the
+/// software encoder instead of letting it die mid-take.
+pub const HW_ENCODER_EDGE: u32 = 4096;
+
+/// The even output size that fits a `width`×`height` capture inside
+/// [`HW_ENCODER_EDGE`] at the same aspect ratio, or `None` when it already
+/// fits. Backends hand this to the capture API so the scaling happens on the
+/// GPU before a frame is ever copied: encoding the full-size frame in software
+/// instead saturated an M4 (5120×2820 at 60 fps: ~47 % of captured frames
+/// dropped, the system-audio queue overflowing).
+pub fn fit_to_hardware_edge(width: u32, height: u32) -> Option<(u32, u32)> {
+    let edge = width.max(height);
+    if edge <= HW_ENCODER_EDGE || width == 0 || height == 0 {
+        return None;
+    }
+    let scale = HW_ENCODER_EDGE as f64 / edge as f64;
+    // Nearest even value: the encoder wants even dimensions, and SCK
+    // letterboxes whatever misses the source aspect, so stay as close to it
+    // as two-pixel steps allow. The long edge lands on the edge exactly.
+    let fit = |px: u32| ((px as f64 * scale / 2.0).round() as u32 * 2).max(2);
+    Some((fit(width), fit(height)))
+}
+
+/// What to tell the user when a capture was scaled from `native` down to
+/// `actual` to stay inside [`HW_ENCODER_EDGE`] — `None` when nothing was
+/// scaled. A silent downscale reads as "the recording is soft", and a silent
+/// failure (the 0-byte take this replaces) reads as "the app is broken"; the
+/// toast is the difference between the two.
+pub fn scaled_capture_notice(native: (u32, u32), actual: (u32, u32)) -> Option<String> {
+    if fit_to_hardware_edge(native.0, native.1).is_none() || actual == native {
+        return None;
+    }
+    Some(format!(
+        "Recording at {}×{} instead of {}×{}: the hardware encoder takes at most {} px per edge, so the capture is scaled on the GPU.",
+        actual.0, actual.1, native.0, native.1, HW_ENCODER_EDGE
+    ))
+}
+
+/// What to tell the user when the hardware encoder refused the frame size and
+/// the take runs on `fallback` instead (see [`pick_for`]).
+pub fn software_fallback_notice(
+    width: u32,
+    height: u32,
+    refused: &str,
+    fallback: &str,
+) -> String {
+    format!(
+        "{width}×{height} is more than the {refused} hardware encoder accepts; recording with the {fallback} software encoder instead, which costs CPU and may drop frames."
+    )
+}
+
+/// The encoder for frames of `width`×`height`: the cached [`pick`] for any
+/// size inside [`HW_ENCODER_EDGE`], otherwise that pick re-probed at the exact
+/// size and demoted to the software fallback if it refuses. Oversize answers
+/// are cached per size, so the probe (~0.1 s) runs once per size, not once per
+/// recording.
+pub fn pick_for(ffmpeg: &Path, width: u32, height: u32) -> EncoderChoice {
+    let chosen = *pick(ffmpeg);
+    if width.max(height) <= HW_ENCODER_EDGE {
+        return chosen;
+    }
+    static OVERSIZE: OnceLock<Mutex<HashMap<(u32, u32), EncoderChoice>>> = OnceLock::new();
+    let cache = OVERSIZE.get_or_init(|| Mutex::new(HashMap::new()));
+    if let Some(cached) = cache.lock().unwrap().get(&(width, height)) {
+        return *cached;
+    }
+    // Probe outside the lock: a recording and an export may ask concurrently,
+    // and a duplicate probe is cheaper than serialising them on a mutex.
+    let choice = select_for(ffmpeg, chosen, width, height);
+    cache.lock().unwrap().insert((width, height), choice);
+    choice
+}
+
+/// The oversize decision behind [`pick_for`], without the cache. Split out for
+/// the same reason as [`select`]: a test must not depend on who warmed the
+/// `OnceLock`.
+fn select_for(ffmpeg: &Path, chosen: EncoderChoice, width: u32, height: u32) -> EncoderChoice {
+    if chosen.name == SOFTWARE_FALLBACK.name {
+        // Nothing to demote to; libx264 handles Level 6 sizes on its own.
+        return chosen;
+    }
+    match probe_at(ffmpeg, &chosen, width, height) {
+        Ok(()) => chosen,
+        Err(failure) => {
+            // WARN, not INFO: this is the one place a hardware machine silently
+            // goes software, and "why is this 5K recording eating my CPU" must
+            // be answerable from the log.
+            tracing::warn!(
+                encoder = chosen.name,
+                width,
+                height,
+                fallback = OVERSIZE_SOFTWARE_FALLBACK.name,
+                reason = %failure,
+                "hardware encoder rejected the frame size; using the software encoder for it"
+            );
+            OVERSIZE_SOFTWARE_FALLBACK
+        }
+    }
 }
 
 /// The probe loop behind [`pick`], without the cache. Split out so the fallback
@@ -270,10 +401,22 @@ impl std::fmt::Display for ProbeFailure {
 /// Encode 2 synthetic frames to the null muxer. Cheap, and exercises the real
 /// encoder init path (driver present, session available).
 fn probe(ffmpeg: &Path, choice: &EncoderChoice) -> Result<(), ProbeFailure> {
+    probe_at(ffmpeg, choice, 256, 144)
+}
+
+/// [`probe`] at an explicit frame size — the session an encoder opens depends
+/// on it, and a rejection only shows up at the size that triggers it.
+fn probe_at(
+    ffmpeg: &Path,
+    choice: &EncoderChoice,
+    width: u32,
+    height: u32,
+) -> Result<(), ProbeFailure> {
     let mut cmd = proc::command(ffmpeg);
     cmd.args(["-hide_banner", "-loglevel", "error", "-nostdin"])
         .args(choice.pre_input_args)
-        .args(["-f", "lavfi", "-i", "color=black:s=256x144:r=30:d=0.1"])
+        .args(["-f", "lavfi", "-i"])
+        .arg(format!("color=black:s={width}x{height}:r=30:d=0.1"))
         .args(["-c:v", choice.name])
         .args(choice.output_args(None))
         .args(choice.tuning_args)
@@ -394,6 +537,118 @@ mod tests {
     fn selection_falls_back_to_software_when_all_probes_fail() {
         let choice = select(Path::new("/nonexistent/ffmpeg-for-test"));
         assert_eq!(choice.name, "libx264");
+    }
+
+    #[test]
+    fn frames_inside_the_edge_are_left_alone() {
+        assert_eq!(fit_to_hardware_edge(3840, 2160), None);
+        assert_eq!(fit_to_hardware_edge(4096, 2304), None);
+        assert_eq!(fit_to_hardware_edge(0, 5000), None);
+    }
+
+    #[test]
+    fn oversize_frames_scale_to_the_edge_at_the_same_aspect() {
+        // The incident: a 2560×1440-pt HiDPI display, 5120×2880 px.
+        assert_eq!(fit_to_hardware_edge(5120, 2880), Some((4096, 2304)));
+        // The window from the report, 2560×1410 pt.
+        assert_eq!(fit_to_hardware_edge(5120, 2820), Some((4096, 2256)));
+        // Portrait: the long edge is the height.
+        assert_eq!(fit_to_hardware_edge(2880, 5120), Some((2304, 4096)));
+    }
+
+    #[test]
+    fn scaled_sizes_are_even_and_never_exceed_the_edge() {
+        for (w, h) in [(4097, 2161), (5121, 2883), (9999, 333), (4100, 4100)] {
+            let (fw, fh) = fit_to_hardware_edge(w, h).expect("oversize");
+            assert_eq!(fw % 2, 0, "{w}x{h} → {fw}x{fh}");
+            assert_eq!(fh % 2, 0, "{w}x{h} → {fw}x{fh}");
+            assert!(
+                fw <= HW_ENCODER_EDGE && fh <= HW_ENCODER_EDGE,
+                "{w}x{h} → {fw}x{fh}"
+            );
+            let aspect_in = w as f64 / h as f64;
+            let aspect_out = fw as f64 / fh as f64;
+            assert!(
+                ((aspect_in - aspect_out) / aspect_in).abs() < 0.01,
+                "{w}x{h} → {fw}x{fh} changes the aspect ratio"
+            );
+        }
+    }
+
+    #[test]
+    fn no_notice_unless_something_was_scaled() {
+        assert_eq!(scaled_capture_notice((3840, 2160), (3840, 2160)), None);
+        assert_eq!(scaled_capture_notice((5120, 2880), (5120, 2880)), None);
+        // Inside the edge nothing is ever scaled for the encoder's sake, so a
+        // size mismatch there is not this notice's business.
+        assert_eq!(scaled_capture_notice((3840, 2160), (1920, 1080)), None);
+    }
+
+    #[test]
+    fn a_scaled_capture_names_both_sizes_and_the_edge() {
+        let notice = scaled_capture_notice((5120, 2820), (4096, 2256)).expect("scaled");
+        assert!(notice.contains("4096×2256"), "{notice}");
+        assert!(notice.contains("5120×2820"), "{notice}");
+        assert!(notice.contains("4096 px"), "{notice}");
+    }
+
+    #[test]
+    fn a_software_pick_is_never_reprobed() {
+        // There is nothing to demote libx264 to, so an oversize frame must not
+        // spawn ffmpeg at all — a missing binary proves it was never consulted.
+        let choice = select_for(
+            Path::new("/nonexistent/ffmpeg-for-test"),
+            SOFTWARE_FALLBACK,
+            5120,
+            2880,
+        );
+        assert_eq!(choice.name, "libx264");
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn videotoolbox_is_demoted_above_its_4096_px_edge() {
+        // The incident behind `pick_for`: a 2560×1440-pt HiDPI display
+        // captures at 5120×2880 px, VideoToolbox's H.264 session refuses
+        // anything wider than 4096 px, and the startup probe cannot know.
+        let ffmpeg = crate::recorder::encoder::ffmpeg_path();
+        let chosen = select(&ffmpeg);
+        if chosen.name != "h264_videotoolbox" {
+            // No usable VideoToolbox here (no sidecar on this runner) — there
+            // is nothing to demote, so skip rather than assert on libx264.
+            return;
+        }
+        assert_eq!(
+            select_for(&ffmpeg, chosen, 3840, 2160).name,
+            "h264_videotoolbox",
+            "4K is inside the edge and must keep the hardware encoder"
+        );
+        let demoted = select_for(&ffmpeg, chosen, 5120, 2880);
+        assert_eq!(
+            demoted.name, "libx264",
+            "5K must fall back to software instead of dying on the first frame"
+        );
+        assert!(
+            demoted.tuning_args.contains(&"ultrafast"),
+            "the oversize fallback needs the headroom preset, got {:?}",
+            demoted.tuning_args
+        );
+    }
+
+    #[test]
+    fn oversize_fallback_only_differs_in_its_preset() {
+        // Same encoder, same pixel format, same plumbing — only the speed knob
+        // moves, so everything the recorder assumes about libx264 still holds.
+        assert_eq!(OVERSIZE_SOFTWARE_FALLBACK.name, SOFTWARE_FALLBACK.name);
+        assert_eq!(OVERSIZE_SOFTWARE_FALLBACK.pix_fmt, SOFTWARE_FALLBACK.pix_fmt);
+        assert_eq!(
+            OVERSIZE_SOFTWARE_FALLBACK.pre_input_args,
+            SOFTWARE_FALLBACK.pre_input_args
+        );
+        assert_eq!(
+            OVERSIZE_SOFTWARE_FALLBACK.tuning_args,
+            &["-preset", "ultrafast"]
+        );
     }
 
     #[test]
