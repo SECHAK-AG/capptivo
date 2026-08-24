@@ -131,6 +131,8 @@ const DEFAULT_OPTIONS: CaptureOptions = {
 };
 
 let subscribed = false;
+/** Encode-fail and capture-loss both call stop; `stop()` then re-emits Error. */
+let stopping = false;
 
 /**
  * In-flight `prewarmCapture()` work, so `startRecording` can await it instead of
@@ -770,6 +772,8 @@ export const useRecorderStore = create<RecorderStore>((set, get) => {
   },
 
   async stopRecording() {
+    if (stopping) return;
+    stopping = true;
     const { cameraEnabled } = get();
     try {
       if (cameraEnabled) {
@@ -797,6 +801,8 @@ export const useRecorderStore = create<RecorderStore>((set, get) => {
     } catch (e) {
       reportError(describeError(e));
       set({ annotationVisible: false, micSessionMuted: false });
+    } finally {
+      stopping = false;
     }
   },
 

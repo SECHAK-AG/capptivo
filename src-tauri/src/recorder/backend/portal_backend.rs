@@ -537,12 +537,16 @@ fn build_format_pod() -> AppResult<Vec<u8>> {
 fn build_cursor_meta_pod() -> AppResult<Vec<u8>> {
     use pipewire::spa;
     use pipewire::spa::sys as spa_sys;
+    use spa::pod::{ChoiceValue, Value};
+    use spa::utils::{Choice, ChoiceEnum, ChoiceFlags, Id};
 
-    // spa_meta_cursor + spa_meta_bitmap + 64×64 ARGB — enough for position;
-    // bitmap is optional for Capptivo (we only need x/y for zoom-follow).
-    let meta_size = (std::mem::size_of::<spa_sys::spa_meta_cursor>()
-        + std::mem::size_of::<spa_sys::spa_meta_bitmap>()
-        + 64 * 64 * 4) as i32;
+    // SPA intersects meta sizes. An exact 64×64 bitmap size disagrees with the
+    // compositor's max and the meta is dropped — session still says Metadata.
+    // Range: we only need `spa_meta_cursor` (x/y); max leaves room for a bitmap.
+    let min = std::mem::size_of::<spa_sys::spa_meta_cursor>() as i32;
+    let max = min
+        + std::mem::size_of::<spa_sys::spa_meta_bitmap>() as i32
+        + 256 * 256 * 4;
 
     let obj = spa::pod::Object {
         type_: spa::utils::SpaTypes::ObjectParamMeta.as_raw(),
@@ -550,14 +554,24 @@ fn build_cursor_meta_pod() -> AppResult<Vec<u8>> {
         properties: vec![
             spa::pod::Property::new(
                 spa_sys::SPA_PARAM_META_type,
-                spa::pod::Value::Id(spa::utils::Id(spa_sys::SPA_META_Cursor)),
+                Value::Id(Id(spa_sys::SPA_META_Cursor)),
             ),
-            spa::pod::Property::new(spa_sys::SPA_PARAM_META_size, spa::pod::Value::Int(meta_size)),
+            spa::pod::Property::new(
+                spa_sys::SPA_PARAM_META_size,
+                Value::Choice(ChoiceValue::Int(Choice(
+                    ChoiceFlags::empty(),
+                    ChoiceEnum::Range {
+                        default: min,
+                        min,
+                        max,
+                    },
+                ))),
+            ),
         ],
     };
     spa::pod::serialize::PodSerializer::serialize(
         std::io::Cursor::new(Vec::new()),
-        &spa::pod::Value::Object(obj),
+        &Value::Object(obj),
     )
     .map(|v| v.0.into_inner())
     .map_err(|e| AppError::Other(format!("cursor meta pod: {e:?}")))
@@ -644,5 +658,42 @@ fn store_restore_token(token: &str) {
     }
     if let Err(e) = std::fs::write(&path, token) {
         tracing::debug!(%e, "failed to persist screencast restore token");
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use pipewire::spa::pod::{ChoiceValue, Value};
+    use pipewire::spa::sys as spa_sys;
+    use pipewire::spa::utils::{Choice, ChoiceEnum};
+
+    #[test]
+    fn cursor_meta_size_is_a_range_not_an_exact_int() {
+        let bytes = build_cursor_meta_pod().expect("serialize");
+        let (_, value) =
+            pipewire::spa::pod::deserialize::PodDeserializer::deserialize_any_from(&bytes)
+                .expect("deserialize");
+        let Value::Object(obj) = value else {
+            panic!("expected Object, got {value:?}");
+        };
+        let size = obj
+            .properties
+            .iter()
+            .find(|p| p.key == spa_sys::SPA_PARAM_META_size)
+            .expect("SPA_PARAM_META_size");
+        let Value::Choice(ChoiceValue::Int(Choice(
+            _,
+            ChoiceEnum::Range { min, max, .. },
+        ))) = &size.value
+        else {
+            panic!(
+                "exact Int sizes intersect to nothing against the compositor; got {:?}",
+                size.value
+            );
+        };
+        let cursor = std::mem::size_of::<spa_sys::spa_meta_cursor>() as i32;
+        assert_eq!(*min, cursor);
+        assert!(*max > *min, "range must include compositor bitmap sizes");
     }
 }
