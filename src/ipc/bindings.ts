@@ -139,6 +139,10 @@ export const commands = {
       json: string | null;
       silences: { startMs: number; endMs: number }[];
     }>("generate_captions", { projectId, language }),
+  detectProjectSilences: (projectId: string) =>
+    invoke<{ startMs: number; endMs: number }[]>("detect_project_silences", {
+      projectId,
+    }),
 
   // --- projects ---
   listProjects: () => invoke<ProjectSummary[]>("list_projects"),

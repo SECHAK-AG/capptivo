@@ -11,6 +11,11 @@ const TOAST_STYLE: React.CSSProperties = {
   maxWidth: "min(420px, calc(100vw - 32px))",
 };
 
+const INFO_TOAST_STYLE: React.CSSProperties = {
+  ...TOAST_STYLE,
+  background: "oklch(0.28 0.02 260)",
+};
+
 /** Surface a user-visible error without coupling callers to the toast library. */
 export function showError(message: string): void {
   const trimmed = message.trim();
@@ -18,6 +23,15 @@ export function showError(message: string): void {
   toast.error(trimmed, {
     duration: 6000,
     style: TOAST_STYLE,
+  });
+}
+
+export function showInfo(message: string): void {
+  const trimmed = message.trim();
+  if (!trimmed) return;
+  toast(trimmed, {
+    duration: 4000,
+    style: INFO_TOAST_STYLE,
   });
 }
 

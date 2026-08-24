@@ -1,4 +1,7 @@
-use crate::captions::{self, types::{WhisperModelStatus, WhisperTranscriptArtifacts}};
+use crate::captions::{
+    self,
+    types::{SilenceInterval, WhisperModelStatus, WhisperTranscriptArtifacts},
+};
 use crate::error::AppResult;
 use crate::state::AppState;
 use tauri::{AppHandle, State};
@@ -17,6 +20,17 @@ pub async fn download_whisper_model(app: AppHandle) -> AppResult<String> {
 #[tauri::command]
 pub fn delete_whisper_model(app: AppHandle) -> AppResult<()> {
     captions::delete_model(&app)
+}
+
+#[tauri::command]
+pub async fn detect_project_silences(
+    state: State<'_, AppState>,
+    project_id: String,
+) -> AppResult<Vec<SilenceInterval>> {
+    let project_dir = state.store.project_dir(&project_id)?;
+    tauri::async_runtime::spawn_blocking(move || captions::detect_silences(&project_dir))
+        .await
+        .map_err(|e| crate::error::AppError::Other(format!("silence task: {e}")))?
 }
 
 #[tauri::command]

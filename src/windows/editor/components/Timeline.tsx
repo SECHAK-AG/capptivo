@@ -6,6 +6,7 @@
 
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type RefObject } from "react";
 import {
+  AudioLines,
   Plus,
   RectangleHorizontal,
   Redo2,
@@ -25,6 +26,7 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { Button } from "@/components/ui/button";
 import { useI18n } from "@/lib/settings";
+import { showError, showInfo } from "@/lib/toast";
 import type { TranslationKey } from "@/lib/i18n";
 
 import { cn } from "../lib/cn";
@@ -108,6 +110,7 @@ export function Timeline({
   const historyFuture = useEditorStore((s) => s.historyFuture);
 
   const addFragment = useEditorStore((s) => s.addFragment);
+  const suggestCutsFromSilence = useEditorStore((s) => s.suggestCutsFromSilence);
   const deleteSelected = useEditorStore((s) => s.deleteSelected);
   const restoreTrimGap = useEditorStore((s) => s.restoreTrimGap);
   const moveTrimGap = useEditorStore((s) => s.moveTrimGap);
@@ -279,6 +282,19 @@ export function Timeline({
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, [addFragment, deleteSelected, redo, selectedExists, undo]);
+
+  const runSuggestCuts = useCallback(async () => {
+    const status = await suggestCutsFromSilence();
+    if (status === "ok") {
+      showInfo(t("timeline.suggestCuts.done"));
+      return;
+    }
+    if (status === "failed") {
+      showError(t("timeline.suggestCuts.failed"));
+      return;
+    }
+    showInfo(t("timeline.suggestCuts.none"));
+  }, [suggestCutsFromSilence, t]);
 
   const onPointerMove = useCallback(
     (e: React.PointerEvent) => {
@@ -492,6 +508,10 @@ export function Timeline({
               <DropdownMenuItem onClick={() => addFragment("trim")}>
                 <Scissors className="size-4 text-muted-foreground" />
                 {t("timeline.trim")}
+              </DropdownMenuItem>
+              <DropdownMenuItem onClick={() => void runSuggestCuts()}>
+                <AudioLines className="size-4 text-muted-foreground" />
+                {t("timeline.suggestCuts")}
               </DropdownMenuItem>
             </DropdownMenuContent>
           </DropdownMenu>

@@ -179,6 +179,14 @@ fn whisper_json_unsupported(err: &AppError) -> bool {
         || msg.contains("oj ")
 }
 
+pub fn detect_silences(project_dir: &Path) -> AppResult<Vec<SilenceInterval>> {
+    let screen = project_dir.join("screen.mp4");
+    if !screen.is_file() {
+        return Err(AppError::Other("screen recording not found".into()));
+    }
+    detect_silence(&ffmpeg_path(), &screen)
+}
+
 fn detect_silence(ffmpeg: &Path, wav: &Path) -> AppResult<Vec<SilenceInterval>> {
     let output = proc::background_command(ffmpeg)
         .args([
