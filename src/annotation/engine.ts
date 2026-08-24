@@ -331,6 +331,26 @@ export class AnnotationEngine {
     return this.layerHidden;
   }
 
+  /**
+   * Rebuild both canvas contexts and repaint committed strokes.
+   *
+   * Same work as a resize, exposed because a lost 2D context needs exactly
+   * this: the old `CanvasRenderingContext2D` handles are dead, and the ink
+   * only survives because `history` is plain data rather than pixels.
+   */
+  recoverContexts() {
+    this.onResize();
+  }
+
+  /** True when the view canvas's 2D context has been lost by the compositor. */
+  isContextLost(): boolean {
+    // `isContextLost` is Chromium 117+; older engines simply never report loss.
+    const ctx = this.viewCtx as CanvasRenderingContext2D & {
+      isContextLost?: () => boolean;
+    };
+    return typeof ctx.isContextLost === "function" ? ctx.isContextLost() : false;
+  }
+
   private onResize() {
     const w = window.innerWidth;
     const h = window.innerHeight;

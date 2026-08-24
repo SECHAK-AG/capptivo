@@ -45,7 +45,19 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { Slider } from "@/components/ui/slider";
 import { commands } from "@/ipc/bindings";
-import { logClientInfo } from "@/lib/errorLogging";
+import { logClientError, logClientInfo } from "@/lib/errorLogging";
+import {
+  attachCanvas2dContextLoss,
+  planOverlayRecovery,
+  type OverlayRecoveryState,
+} from "./overlayGpuGuard";
+
+/**
+ * How often to check that the overlay's drawing context is still alive. Cheap
+ * enough to be invisible (one boolean read) and fast enough that a dead
+ * fullscreen overlay is not left covering the desktop for long.
+ */
+const CONTEXT_WATCHDOG_MS = 2_000;
 import { cn } from "@/lib/utils";
 
 const ANNOTATION_ESCAPE_EVENT = "annotation://escape";
@@ -118,6 +130,10 @@ export function AnnotationApp() {
   // stays mounted while hidden. Track native visibility to suspend the idle
   // cursor-poll when off-screen — the window is created to be shown, so `true`.
   const [overlayVisible, setOverlayVisible] = useState(true);
+  // Mirror of `overlayVisible` for the context-loss handler, which is installed
+  // once and would otherwise close over the mount-time value.
+  const overlayVisibleRef = useRef(true);
+  overlayVisibleRef.current = overlayVisible;
 
   const passThrough = tool === "select" && panel === null;
 
@@ -182,7 +198,87 @@ export function AnnotationApp() {
     canvas.addEventListener("pointerup", onUp);
     canvas.addEventListener("pointercancel", onUp);
 
+    // GPU context loss on a fullscreen transparent always-on-top window is not
+    // a rendering glitch — the surface composites opaque and the user's whole
+    // desktop goes black mid-recording (#25). Hide first, ask questions after:
+    // a hidden window cannot paint over anything, and the ink is history data
+    // so nothing is lost by rebuilding.
+    let recovery: OverlayRecoveryState = { attempts: 0, lastAttemptAtMs: null };
+    let recovering = false;
+    const handleContextLoss = () => {
+      if (recovering) return;
+      recovering = true;
+      const win = getCurrentWindow();
+      // Hide before anything else — this is the step that gets the black
+      // rectangle off the user's desktop. Everything after it is cleanup.
+      if (overlayVisibleRef.current) {
+        void win.hide().catch(() => undefined);
+      }
+
+      const { action, next } = planOverlayRecovery(recovery, Date.now());
+      recovery = next;
+      logClientError(
+        "annotation-overlay",
+        new Error(
+          `2D context lost (attempt ${next.attempts}); overlay hidden, action=${action}`,
+        ),
+      );
+
+      if (action === "stayHidden") {
+        // Repeated loss means the GPU process is not coming back. Showing the
+        // overlay again would just black the desktop out a fourth time, so
+        // the take continues without live ink.
+        void emit("annotation://closed");
+        void commands.hideAnnotationOverlay().catch(() => undefined);
+        recovering = false;
+        return;
+      }
+
+      try {
+        engine.recoverContexts();
+      } catch (e) {
+        logClientError("annotation-overlay", e);
+      }
+      // Only come back once the context actually took. Showing a still-lost
+      // surface is exactly the black screen being defended against.
+      if (engine.isContextLost()) {
+        void emit("annotation://closed");
+        void commands.hideAnnotationOverlay().catch(() => undefined);
+      } else if (overlayVisibleRef.current) {
+        // Only restore an overlay that was actually on screen. A context can be
+        // lost while the user has the overlay closed, and showing it again
+        // would put a toolbar back over their screen that they dismissed.
+        void win.show().catch(() => undefined);
+      }
+      recovering = false;
+    };
+
+    const detachContextLoss = attachCanvas2dContextLoss(canvas, {
+      onLost: handleContextLoss,
+      onRestored: () => {
+        logClientInfo("annotation-overlay", "2D context restored");
+        try {
+          engine.recoverContexts();
+        } catch (e) {
+          logClientError("annotation-overlay", e);
+        }
+      },
+    });
+
+    // The event is the fast path, not the only one. A compositor fault can leave
+    // the context dead without our listener ever seeing `contextlost` — and the
+    // window whose surface is black is exactly the window that stopped telling
+    // us things. Poll cheaply so the desktop is never left covered by a dead
+    // overlay waiting for an event that is not coming.
+    const watchdog = window.setInterval(() => {
+      if (!recovering && engine.isContextLost()) {
+        handleContextLoss();
+      }
+    }, CONTEXT_WATCHDOG_MS);
+
     return () => {
+      window.clearInterval(watchdog);
+      detachContextLoss();
       canvas.removeEventListener("pointerdown", onDown);
       canvas.removeEventListener("pointermove", onMove);
       canvas.removeEventListener("pointerup", onUp);
