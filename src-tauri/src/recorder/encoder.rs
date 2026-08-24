@@ -763,6 +763,28 @@ fn build_enhance_chain(preset: AudioEnhancePreset, has_system_audio: bool) -> Op
     Some(chain.join(","))
 }
 
+/// Fold the editor's volume slider into the audio filter chain.
+///
+/// `gain` is a linear multiplier taken from a 0..100 slider, so it only ever
+/// turns the audio down. Anything that is not a usable number leaves the level
+/// alone, so a bad value can never silently wipe out an export's audio. Full
+/// mute is not handled here: export skips the audio pass entirely in that case.
+fn with_gain(chain: Option<String>, gain: f32) -> Option<String> {
+    if !gain.is_finite() || gain <= 0.0 {
+        return chain;
+    }
+    let clamped = gain.min(1.0);
+    if (clamped - 1.0).abs() < f32::EPSILON {
+        return chain;
+    }
+    Some(match chain {
+        // Last in the chain, so the enhance preset's leveling and limiter still
+        // see the untouched signal and the slider stays predictable.
+        Some(existing) => format!("{existing},volume={clamped:.4}"),
+        None => format!("volume={clamped:.4}"),
+    })
+}
+
 /// Build the `-filter_complex` that trims `input_label`'s audio to `segments`
 /// (source seconds), concatenates them to match the trimmed video timeline, then
 /// applies `enhance`. Returns `(filter_complex, map_label)`; an empty filter
@@ -861,28 +883,34 @@ pub fn prepare_export_audio(
     segments: &[(f64, f64)],
     preset: AudioEnhancePreset,
     has_system_audio: bool,
+    gain: f32,
 ) -> AppResult<bool> {
     if !audio_source.is_file() || !mp4_has_audio_stream(audio_source) {
         return Ok(false);
     }
 
-    let enhance = build_enhance_chain(preset, has_system_audio);
-    if let Some(ref chain) = enhance {
+    let preset_chain = build_enhance_chain(preset, has_system_audio);
+    let had_preset = preset_chain.is_some();
+    if let Some(ref chain) = preset_chain {
         tracing::info!(
             %has_system_audio,
             filter = %chain,
             "export audio: applying podcast enhance"
         );
     }
+    let chain = with_gain(preset_chain, gain);
 
-    match run_prepare_export_audio_inner(audio_source, out_path, segments, enhance.as_deref()) {
+    match run_prepare_export_audio_inner(audio_source, out_path, segments, chain.as_deref()) {
         Ok(prepared) => Ok(prepared),
-        Err(e) if enhance.is_some() => {
+        // Only the enhance preset is worth retrying without. Gain is a single
+        // `volume` filter, so dropping it would just lose the user's setting.
+        Err(e) if had_preset => {
             tracing::warn!(
                 error = %e,
                 "export audio enhance failed; retrying without enhance"
             );
-            run_prepare_export_audio_inner(audio_source, out_path, segments, None)
+            let gain_only = with_gain(None, gain);
+            run_prepare_export_audio_inner(audio_source, out_path, segments, gain_only.as_deref())
         }
         Err(e) => Err(e),
     }
@@ -941,6 +969,7 @@ pub fn mux_export_audio(
     segments: &[(f64, f64)],
     preset: AudioEnhancePreset,
     has_system_audio: bool,
+    gain: f32,
 ) -> AppResult<()> {
     if !video_path.is_file() {
         return Err(AppError::Encoder("export mux: missing video".into()));
@@ -950,23 +979,28 @@ pub fn mux_export_audio(
         return Ok(());
     }
 
-    let enhance = build_enhance_chain(preset, has_system_audio);
-    if let Some(ref chain) = enhance {
+    let preset_chain = build_enhance_chain(preset, has_system_audio);
+    let had_preset = preset_chain.is_some();
+    if let Some(ref chain) = preset_chain {
         tracing::info!(
             %has_system_audio,
             filter = %chain,
             "export audio mux: applying podcast enhance"
         );
     }
+    let chain = with_gain(preset_chain, gain);
 
-    match run_mux_export_audio_inner(video_path, audio_source, segments, enhance.as_deref()) {
+    match run_mux_export_audio_inner(video_path, audio_source, segments, chain.as_deref()) {
         Ok(()) => Ok(()),
-        Err(e) if enhance.is_some() => {
+        // Only the enhance preset is worth retrying without. Gain is a single
+        // `volume` filter, so dropping it would just lose the user's setting.
+        Err(e) if had_preset => {
             tracing::warn!(
                 error = %e,
                 "export audio mux enhance failed; retrying without enhance"
             );
-            run_mux_export_audio_inner(video_path, audio_source, segments, None)
+            let gain_only = with_gain(None, gain);
+            run_mux_export_audio_inner(video_path, audio_source, segments, gain_only.as_deref())
         }
         Err(e) => Err(e),
     }
@@ -1258,6 +1292,49 @@ mod tests {
         assert!(f.contains("[0:a]atrim="));
         assert!(f.contains("concat=n=1:v=0:a=1[ac]"));
         assert_eq!(map, "[ac]");
+    }
+
+    #[test]
+    fn full_volume_adds_no_filter() {
+        assert_eq!(with_gain(None, 1.0), None);
+        assert_eq!(with_gain(Some("loudnorm".into()), 1.0), Some("loudnorm".into()));
+    }
+
+    #[test]
+    fn turning_the_volume_down_appends_a_volume_filter() {
+        assert_eq!(with_gain(None, 0.5), Some("volume=0.5000".into()));
+    }
+
+    /// Gain goes last so the enhance preset's leveling and limiter still see the
+    /// untouched signal.
+    #[test]
+    fn gain_runs_after_the_enhance_chain() {
+        let chain = with_gain(Some("highpass=f=80,alimiter=limit=0.95".into()), 0.25).unwrap();
+        assert_eq!(chain, "highpass=f=80,alimiter=limit=0.95,volume=0.2500");
+        assert!(
+            chain.find("alimiter") < chain.find("volume"),
+            "volume must come after the limiter, got {chain}"
+        );
+    }
+
+    /// A bad number must never silence an export. Muting is handled by skipping
+    /// the audio pass entirely, not by sending a zero gain down here.
+    #[test]
+    fn unusable_gain_leaves_the_level_alone() {
+        for bad in [f32::NAN, f32::INFINITY, 0.0, -1.0] {
+            assert_eq!(
+                with_gain(Some("loudnorm".into()), bad),
+                Some("loudnorm".into()),
+                "gain {bad} should have been ignored"
+            );
+            assert_eq!(with_gain(None, bad), None, "gain {bad} should add no filter");
+        }
+    }
+
+    /// The slider only attenuates, so a value above 1.0 must not boost.
+    #[test]
+    fn gain_never_boosts_above_unity() {
+        assert_eq!(with_gain(None, 4.0), None);
     }
 
     #[test]

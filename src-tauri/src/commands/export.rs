@@ -34,6 +34,9 @@ pub struct ExportAudioSegment {
 /// kept `segments` and optionally voice-enhanced. Runs FFmpeg off the UI thread;
 /// video is stream-copied so this is fast. `audio_source` is a bare filename in
 /// the project directory (e.g. `screen.mp4`).
+// One more argument than Clippy likes, but these are IPC parameters: bundling
+// them into a struct would change the shape the WebView sends.
+#[allow(clippy::too_many_arguments)]
 #[tauri::command]
 pub async fn mux_export_audio(
     state: State<'_, AppState>,
@@ -43,6 +46,7 @@ pub async fn mux_export_audio(
     segments: Vec<ExportAudioSegment>,
     preset: String,
     has_system_audio: bool,
+    gain: Option<f32>,
 ) -> AppResult<()> {
     if audio_source.contains(['/', '\\']) || audio_source.contains("..") {
         return Err(AppError::Other("invalid export audio source".into()));
@@ -57,7 +61,7 @@ pub async fn mux_export_audio(
     let preset = AudioEnhancePreset::parse(&preset);
 
     tauri::async_runtime::spawn_blocking(move || {
-        run_mux_export_audio(&video, &audio_path, &segs, preset, has_system_audio)
+        run_mux_export_audio(&video, &audio_path, &segs, preset, has_system_audio, gain.unwrap_or(1.0))
     })
     .await
     .map_err(|e| AppError::Other(format!("export audio mux task failed: {e}")))?
@@ -67,6 +71,7 @@ pub async fn mux_export_audio(
 /// video encode runs. `out_name` is a bare filename (joined under the project
 /// dir) so the WebView can read it back over `media://`. Returns the absolute
 /// sidecar path when written, or `null` when the recording is silent.
+#[allow(clippy::too_many_arguments)]
 #[tauri::command]
 pub async fn prepare_export_audio(
     state: State<'_, AppState>,
@@ -76,6 +81,7 @@ pub async fn prepare_export_audio(
     segments: Vec<ExportAudioSegment>,
     preset: String,
     has_system_audio: bool,
+    gain: Option<f32>,
 ) -> AppResult<Option<String>> {
     if audio_source.contains(['/', '\\']) || audio_source.contains("..") {
         return Err(AppError::Other("invalid export audio source".into()));
@@ -94,7 +100,7 @@ pub async fn prepare_export_audio(
     let preset = AudioEnhancePreset::parse(&preset);
 
     let wrote = tauri::async_runtime::spawn_blocking(move || {
-        run_prepare_export_audio(&audio_path, &out, &segs, preset, has_system_audio)
+        run_prepare_export_audio(&audio_path, &out, &segs, preset, has_system_audio, gain.unwrap_or(1.0))
     })
     .await
     .map_err(|e| AppError::Other(format!("export audio prepare task failed: {e}")))??;

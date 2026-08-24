@@ -234,6 +234,8 @@ export const commands = {
     segments: { start: number; end: number }[];
     preset: "off" | "podcast";
     hasSystemAudio: boolean;
+    /** Linear volume multiplier from the editor slider; omit to leave it alone. */
+    gain?: number;
   }) => invoke<void>("mux_export_audio", args),
   /** Prepare a trimmed audio sidecar while video encodes; returns path or null when silent. */
   prepareExportAudio: (args: {
@@ -243,6 +245,8 @@ export const commands = {
     segments: { start: number; end: number }[];
     preset: "off" | "podcast";
     hasSystemAudio: boolean;
+    /** Linear volume multiplier from the editor slider; omit to leave it alone. */
+    gain?: number;
   }) => invoke<string | null>("prepare_export_audio", args),
   attachExportAudio: (args: { videoPath: string; audioPath: string }) =>
     invoke<void>("attach_export_audio", args),

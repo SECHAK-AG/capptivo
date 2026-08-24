@@ -423,6 +423,18 @@ async function exportMp4(
 }
 
 /**
+ * The editor's volume slider as a linear multiplier for FFmpeg, or `null` when
+ * the track is muted. `null` means "export no audio at all" rather than
+ * "export silence", so a muted take produces a genuinely video-only file.
+ */
+function exportAudioGain(): number | null {
+  const { muted, volume } = useEditorStore.getState();
+  if (muted) return null;
+  const gain = Math.max(0, Math.min(1, volume / 100));
+  return gain <= 0 ? null : gain;
+}
+
+/**
  * Mux the recorded audio into the just-saved (video-only) export, trimmed to the
  * same kept segments the video uses. Rust runs FFmpeg (`-c:v copy`, so no video
  * re-encode) and no-ops for silent recordings.
@@ -433,6 +445,9 @@ async function muxRecordedAudio(
 ): Promise<void> {
   const { project, duration, segments } = useEditorStore.getState();
   if (!project) return;
+
+  const gain = exportAudioGain();
+  if (gain === null) return;
 
   const kept =
     segments.length > 0
@@ -449,6 +464,7 @@ async function muxRecordedAudio(
     segments: kept,
     preset,
     hasSystemAudio: project.capture.capturedSystemAudio,
+    gain,
   });
 }
 
@@ -466,6 +482,9 @@ async function prepareExportAudioTrack(
   const { project, duration, segments } = useEditorStore.getState();
   if (!project) return null;
 
+  const gain = exportAudioGain();
+  if (gain === null) return null;
+
   const kept =
     segments.length > 0
       ? segments.map((s) => ({ start: s.start, end: s.end }))
@@ -478,6 +497,7 @@ async function prepareExportAudioTrack(
     segments: kept,
     preset,
     hasSystemAudio: project.capture.capturedSystemAudio,
+    gain,
   });
   if (!absPath) return null;
   if (preset !== "off") {

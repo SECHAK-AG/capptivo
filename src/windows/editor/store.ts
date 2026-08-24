@@ -616,6 +616,8 @@ function enqueuePersist(get: () => EditorStore): void {
     cursorSettings,
     faceCam,
     aspectRatioPresetId,
+    muted,
+    volume,
   } = get();
   if (!projectId) return;
   const editorState = {
@@ -629,6 +631,8 @@ function enqueuePersist(get: () => EditorStore): void {
     cursorSettings,
     faceCam,
     aspectRatioPresetId,
+    muted,
+    volume,
     background: snapshotBackground(get()),
   };
   persistChain = persistChain
@@ -707,6 +711,8 @@ function parseEditorState(raw: unknown, duration: number): {
   faceCam?: FaceCamParams;
   aspectRatioPresetId?: AspectRatioPresetId;
   background?: PersistedBackground;
+  muted?: boolean;
+  volume?: number;
 } | null {
   if (!raw || typeof raw !== "object") return null;
   const data = raw as Record<string, unknown>;
@@ -742,6 +748,11 @@ function parseEditorState(raw: unknown, duration: number): {
   const aspectRatioPresetId = isAspectRatioPresetId(data.aspectRatioPresetId)
     ? data.aspectRatioPresetId
     : undefined;
+  const muted = typeof data.muted === "boolean" ? data.muted : undefined;
+  const volume =
+    typeof data.volume === "number" && Number.isFinite(data.volume)
+      ? Math.max(0, Math.min(100, data.volume))
+      : undefined;
   return {
     segments: segments && segments.length > 0 ? segments : createFullSegment(duration),
     zoomFragments,
@@ -754,6 +765,8 @@ function parseEditorState(raw: unknown, duration: number): {
     faceCam,
     aspectRatioPresetId,
     background: parsePersistedBackground(data.background),
+    muted,
+    volume,
   };
 }
 
@@ -1009,6 +1022,8 @@ export const useEditorStore = create<EditorStore>((set, get) => ({
       cursorSettings,
       faceCam,
       aspectRatioPresetId,
+      muted: parsed?.muted ?? get().muted,
+      volume: parsed?.volume ?? get().volume,
       mediaInitialized: true,
     });
 
@@ -1259,9 +1274,11 @@ export const useEditorStore = create<EditorStore>((set, get) => ({
   },
   setMuted(muted) {
     set({ muted });
+    schedulePersist(get);
   },
   setVolume(volume) {
     set({ volume });
+    schedulePersist(get);
   },
   setExporting(exporting) {
     set({ exporting, exportProgress: exporting ? 0 : get().exportProgress });
