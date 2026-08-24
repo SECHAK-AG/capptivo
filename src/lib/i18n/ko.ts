@@ -359,6 +359,15 @@ export const ko: Record<TranslationKey, string> = {
 
   "library.back": "뒤로",
 
+  "library.title": "녹화",
+  "library.subtitle": "영상은 이 기기에 저장됩니다. 녹화를 클릭하면 편집기가 열립니다.",
+  "library.empty": "아직 녹화가 없습니다. 메뉴 바에서 녹화한 뒤 여기로 돌아오세요.",
+  "library.delete": "삭제",
+  "library.deleteConfirm": "“{title}”을 삭제할까요? 이 작업은 취소할 수 없습니다.",
+  "library.rowActions": "{title} 작업",
+  "library.loadFailed": "녹화를 불러오지 못했습니다",
+  "library.deleteFailed": "삭제하지 못했습니다",
+
   "library.search.placeholder": "이름으로 검색…",
   "library.search.filter": "필터",
   "library.search.clear": "검색 지우기",

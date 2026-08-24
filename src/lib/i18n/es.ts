@@ -369,6 +369,15 @@ export const es: Record<TranslationKey, string> = {
 
   "library.back": "Atrás",
 
+  "library.title": "Grabaciones",
+  "library.subtitle": "Tus vídeos permanecen en este dispositivo. Haz clic en una grabación para abrir el editor.",
+  "library.empty": "Aún no hay grabaciones. Captura desde la barra de menús y vuelve aquí.",
+  "library.delete": "Eliminar",
+  "library.deleteConfirm": "¿Eliminar «{title}»? Esta acción no se puede deshacer.",
+  "library.rowActions": "Acciones para {title}",
+  "library.loadFailed": "No se pudieron cargar las grabaciones",
+  "library.deleteFailed": "No se pudo eliminar",
+
   "library.search.placeholder": "Buscar por nombre…",
   "library.search.filter": "Filtrar",
   "library.search.clear": "Borrar búsqueda",

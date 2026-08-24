@@ -369,6 +369,15 @@ export const it: Record<TranslationKey, string> = {
 
   "library.back": "Indietro",
 
+  "library.title": "Registrazioni",
+  "library.subtitle": "I tuoi video restano su questo dispositivo. Fai clic su una registrazione per aprire l’editor.",
+  "library.empty": "Nessuna registrazione per ora. Avvia una cattura dalla barra dei menu, poi torna qui.",
+  "library.delete": "Elimina",
+  "library.deleteConfirm": "Eliminare «{title}»? L’operazione non può essere annullata.",
+  "library.rowActions": "Azioni per {title}",
+  "library.loadFailed": "Caricamento delle registrazioni non riuscito",
+  "library.deleteFailed": "Eliminazione non riuscita",
+
   "library.search.placeholder": "Cerca per nome…",
   "library.search.filter": "Filtra",
   "library.search.clear": "Cancella ricerca",
