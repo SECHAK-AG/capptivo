@@ -30,3 +30,5 @@ src-tauri/binaries/
 # Updater signing private key (pubkey lives in tauri.conf.json)
 src-tauri/.updater-keys/
 .pnpm-store
+.agents
+.crewhandle
