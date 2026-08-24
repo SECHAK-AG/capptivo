@@ -107,6 +107,7 @@ export const zh: Record<TranslationKey, string> = {
   "look.custom": "自定义",
   "look.uploadImage": "上传图片",
   "look.deleteImage": "删除图片",
+  "look.deleteImageConfirm": "删除此背景图片？此操作无法撤消。",
   "look.start": "起点",
   "look.end": "终点",
   "look.angle": "角度",

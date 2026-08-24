@@ -111,6 +111,7 @@ export const ja: Record<TranslationKey, string> = {
   "look.custom": "カスタム",
   "look.uploadImage": "画像をアップロード",
   "look.deleteImage": "画像を削除",
+  "look.deleteImageConfirm": "この背景画像を削除しますか？この操作は取り消せません。",
   "look.start": "開始",
   "look.end": "終了",
   "look.angle": "角度",

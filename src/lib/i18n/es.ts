@@ -114,6 +114,7 @@ export const es: Record<TranslationKey, string> = {
   "look.custom": "Personalizado",
   "look.uploadImage": "Subir imagen",
   "look.deleteImage": "Eliminar imagen",
+  "look.deleteImageConfirm": "¿Eliminar esta imagen de fondo? Esta acción no se puede deshacer.",
   "look.start": "Inicio",
   "look.end": "Fin",
   "look.angle": "Ángulo",

@@ -112,6 +112,7 @@ export const ru: Record<TranslationKey, string> = {
   "look.custom": "Свой",
   "look.uploadImage": "Загрузить изображение",
   "look.deleteImage": "Удалить изображение",
+  "look.deleteImageConfirm": "Удалить это фоновое изображение? Это действие нельзя отменить.",
   "look.start": "Начало",
   "look.end": "Конец",
   "look.angle": "Угол",
