@@ -109,9 +109,11 @@ Platform notes:
 
 - **macOS** captures through native **ScreenCaptureKit** with **VideoToolbox** hardware
   H.264 encoding; system audio comes from a companion SCK stream.
-- **Windows** captures through native **Windows.Graphics.Capture**, with hardware
-  encoding probed per machine (NVENC / QuickSync / AMF / Media Foundation) and
-  system audio via **WASAPI loopback**.
+- **Windows** captures through native **Windows.Graphics.Capture**.
+  Capptivo's current Windows capture backend requires Direct3D feature level
+  11_0 or later on the hardware adapter Windows selects by default.
+  Hardware encoding is probed per machine (NVENC / QuickSync / AMF / Media
+  Foundation), with system audio via **WASAPI loopback**.
 - **Linux** captures through **xdg-desktop-portal + PipeWire** — the screen/window is
   picked in the system dialog. System audio comes from the PulseAudio/PipeWire
   monitor. Cursor replay / follow-zoom use an X11 pointer probe on X11 sessions,
