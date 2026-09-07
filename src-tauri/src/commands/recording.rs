@@ -95,15 +95,6 @@ pub fn recorder_state(state: State<AppState>) -> RecorderState {
     state.recorder.state()
 }
 
-/// `(async)` — the body creates the project directory, writes and fsyncs the
-/// recording stub, and brings the whole capture pipeline up (~330 ms; see the
-/// `starting` state in `src/windows/recorder/RecorderApp.tsx`). On the main
-/// thread that is a visible freeze of every window right as the countdown ends.
-///
-/// The post-start chrome calls are safe off-main: `set_capture_exclusion` is an
-/// empty no-op on macOS (`windows.rs`) and its Windows arm is already invoked
-/// off-main by [`stop_recording`], which is an `async fn`; the `emit_*` calls
-/// are Tauri events, which are thread-safe by construction.
 /// `(async)` — raises/unminimizes a window source during the countdown so the
 /// user sees what will be recorded before capture starts.
 #[tauri::command(async)]
@@ -119,12 +110,25 @@ pub fn prepare_window_capture(source_id: String) -> AppResult<()> {
     Ok(())
 }
 
+/// `(async)` — creates the project directory, writes and fsyncs the recording
+/// stub, and brings the capture pipeline up (~330 ms; see the `starting` state
+/// in `src/windows/recorder/RecorderApp.tsx`). On the main thread that would
+/// freeze every window as the countdown ends.
+///
+/// Display capture excludes Capptivo chrome before the backend can receive its
+/// first frame. Selected-window capture does not need display affinity because
+/// its WGC target is one HWND. The `emit_*` calls are thread-safe Tauri events.
 #[tauri::command(async)]
 pub fn start_recording(
     app: AppHandle,
     state: State<AppState>,
     config: RecorderConfig,
 ) -> AppResult<()> {
+    let _transition = state
+        .recording_transition
+        .try_lock()
+        .map_err(|_| AppError::Busy("starting or stopping".into()))?;
+
     if state.current_project.lock().is_some() {
         return Err(AppError::Busy("recording".into()));
     }
@@ -140,11 +144,22 @@ pub fn start_recording(
         config: config.clone(),
     });
 
+    let captures_display = config.source_id.starts_with("display:");
+    if captures_display {
+        if let Err(e) = windows::enable_capture_exclusion(&app) {
+            let _ = state.current_project.lock().take();
+            windows::clear_capture_exclusion(&app);
+            let _ = state.store.delete(&id);
+            return Err(AppError::Other(format!(
+                "could not exclude Capptivo controls from the recording: {e}"
+            )));
+        }
+    }
+
     // Native screen first; `start()` returns once capture is live — then start
     // the face-cam MediaRecorder.
     match state.recorder.start(&config, &dir) {
         Ok(()) => {
-            windows::set_capture_exclusion(&app, true);
             if app.get_webview_window(windows::CAMERA_LABEL).is_some() {
                 windows::emit_camera_capture_start(&app, &id);
             }
@@ -152,6 +167,9 @@ pub fn start_recording(
         }
         Err(e) => {
             let _ = state.current_project.lock().take();
+            if captures_display {
+                windows::clear_capture_exclusion(&app);
+            }
             let _ = state.store.delete(&id);
             Err(e)
         }
@@ -277,13 +295,16 @@ pub async fn finish_camera_file(state: State<'_, AppState>) -> AppResult<Option<
 /// while SCK is still live would paint the shell into the last frames.
 #[tauri::command]
 pub async fn stop_recording(app: AppHandle, state: State<'_, AppState>) -> AppResult<String> {
+    // A stop emitted by an early backend failure can arrive before startup has
+    // returned. Wait for that transition instead of dropping the only stop.
+    let transition = state.recording_transition.lock().await;
+
     // Read, do not take. `current_project` is the only thing preventing a second
     // `start_recording` (see the `Busy` guard), so it must stay in place until
     // the capture backend has actually stopped — clearing it up front is what
     // used to leave the app believing it was idle while the HUD was still up and
-    // capture exclusion still applied. Concurrent stops are still safe:
-    // `RecorderController::stop` claims its own `active` atomically, so the
-    // losing caller gets `NotRecording` from there.
+    // capture exclusion still applied. The transition mutex serializes
+    // concurrent stops before they read this session.
     //
     // The guard is dropped at the end of this statement — it must not be held
     // across the `await` below.
@@ -311,10 +332,9 @@ pub async fn stop_recording(app: AppHandle, state: State<'_, AppState>) -> AppRe
         Err(e) => (None, Some(e)),
     };
 
-    // `RecorderController::stop` has already joined the encode thread — holding
-    // the session open protects nothing. Retire it on every path so a failed
-    // stop never wedges `start_recording` or leaves overlays up.
-    let _ = state.current_project.lock().take();
+    // `RecorderController::stop` has already joined the encode thread. Keep the
+    // session published until its overlays are hidden so late overlay work is
+    // ordered before the final affinity reset below.
     let _ = state.camera_sink.lock().take();
     let config = current.config;
 
@@ -323,7 +343,15 @@ pub async fn stop_recording(app: AppHandle, state: State<'_, AppState>) -> AppRe
     let _ = windows::hide_annotation_overlay(app.clone());
     let _ = windows::dismiss_camera_preview(app.clone());
     crate::area_picker::hide_area_frame_guide(&app);
-    windows::set_capture_exclusion(&app, false);
+
+    // This lock is also used by late overlay shows. Reset affinity and retire
+    // the session as one operation so no overlay can restore affinity after it.
+    {
+        let mut current_project = state.current_project.lock();
+        windows::clear_capture_exclusion(&app);
+        let _ = current_project.take();
+    }
+    drop(transition);
 
     if let Some(e) = stop_err {
         tracing::error!(

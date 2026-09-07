@@ -454,7 +454,8 @@ fn set_follows_spaces(_win: &tauri::WebviewWindow, _follows: bool) {}
 /// Annotation is deliberately omitted — ink is meant to land in the recording.
 /// Area frame is chrome (crop guide), never content. Editor / library are never
 /// listed (title-based matching used to collide with the HUD's `"Capptivo"`
-/// title and black out fullscreen shells).
+/// title and black out fullscreen shells). Invisible exclusion requires Windows
+/// 10 version 2004, build 19041 or later.
 #[cfg(any(target_os = "macos", target_os = "windows"))]
 const CAPTURE_EXCLUDED_LABELS: &[&str] = &[RECORDER_LABEL, CAMERA_LABEL, "area-frame"];
 
@@ -484,28 +485,51 @@ pub fn overlay_cgwindow_ids(app: &AppHandle) -> Vec<u32> {
 }
 
 #[cfg(target_os = "windows")]
-pub fn set_capture_exclusion(app: &AppHandle, excluded: bool) {
+pub fn enable_capture_exclusion(app: &AppHandle) -> tauri::Result<()> {
     use windows::Win32::UI::WindowsAndMessaging::{WDA_EXCLUDEFROMCAPTURE, WDA_NONE};
 
-    let affinity = if excluded {
-        WDA_EXCLUDEFROMCAPTURE
-    } else {
-        WDA_NONE
-    };
+    let mut excluded_windows = Vec::with_capacity(CAPTURE_EXCLUDED_LABELS.len());
     for label in CAPTURE_EXCLUDED_LABELS {
         let Some(win) = app.get_webview_window(label) else {
             continue;
         };
-        apply_display_affinity(&win, affinity, label);
+        if let Err(e) = apply_display_affinity(&win, WDA_EXCLUDEFROMCAPTURE, label) {
+            for (excluded_label, excluded_window) in excluded_windows {
+                if let Err(reset_error) =
+                    apply_display_affinity(&excluded_window, WDA_NONE, excluded_label)
+                {
+                    tracing::warn!(
+                        %reset_error,
+                        label = excluded_label,
+                        "failed to roll back capture exclusion"
+                    );
+                }
+            }
+            return Err(e);
+        }
+        excluded_windows.push((*label, win));
+    }
+    Ok(())
+}
+
+#[cfg(target_os = "windows")]
+pub fn clear_capture_exclusion(app: &AppHandle) {
+    use windows::Win32::UI::WindowsAndMessaging::WDA_NONE;
+
+    for label in CAPTURE_EXCLUDED_LABELS {
+        let Some(win) = app.get_webview_window(label) else {
+            continue;
+        };
+        if let Err(e) = apply_display_affinity(&win, WDA_NONE, label) {
+            tracing::warn!(%e, label, "failed to clear capture exclusion");
+        }
     }
 }
 
-/// Mark one overlay HWND as capture-excluded. Used when chrome is shown after
-/// `set_capture_exclusion(true)` already ran (area frame after record start).
 #[cfg(target_os = "windows")]
-pub fn exclude_overlay_from_capture(win: &tauri::WebviewWindow) {
+fn exclude_overlay_from_capture(win: &tauri::WebviewWindow) -> tauri::Result<()> {
     use windows::Win32::UI::WindowsAndMessaging::WDA_EXCLUDEFROMCAPTURE;
-    apply_display_affinity(win, WDA_EXCLUDEFROMCAPTURE, "overlay");
+    apply_display_affinity(win, WDA_EXCLUDEFROMCAPTURE, win.label())
 }
 
 #[cfg(target_os = "windows")]
@@ -513,31 +537,77 @@ fn apply_display_affinity(
     win: &tauri::WebviewWindow,
     affinity: windows::Win32::UI::WindowsAndMessaging::WINDOW_DISPLAY_AFFINITY,
     label: &str,
-) {
+) -> tauri::Result<()> {
     use windows::Win32::Foundation::HWND;
     use windows::Win32::UI::WindowsAndMessaging::SetWindowDisplayAffinity;
 
-    let Ok(hwnd) = win.hwnd() else {
-        return;
-    };
+    let hwnd = win.hwnd().map_err(|e| {
+        tauri::Error::Anyhow(anyhow::anyhow!(
+            "failed to access the `{label}` window handle: {e}"
+        ))
+    })?;
     let hwnd = HWND(hwnd.0 as *mut std::ffi::c_void);
-    if let Err(e) = unsafe { SetWindowDisplayAffinity(hwnd, affinity) } {
-        tracing::warn!(%e, label, "failed to set capture exclusion");
-    }
+    unsafe { SetWindowDisplayAffinity(hwnd, affinity) }.map_err(|e| {
+        tauri::Error::Anyhow(anyhow::anyhow!(
+            "failed to set display affinity for `{label}`: {e}"
+        ))
+    })
 }
 
 #[cfg(not(target_os = "windows"))]
-pub fn set_capture_exclusion(_app: &AppHandle, _excluded: bool) {}
+pub fn enable_capture_exclusion(_app: &AppHandle) -> tauri::Result<()> {
+    Ok(())
+}
 
 #[cfg(not(target_os = "windows"))]
-pub fn exclude_overlay_from_capture(_win: &tauri::WebviewWindow) {}
+pub fn clear_capture_exclusion(_app: &AppHandle) {}
 
-/// Whether a recording is currently active (used to apply capture exclusion to
-/// overlay windows created mid-recording, e.g. the camera bubble).
-fn recording_active(app: &AppHandle) -> bool {
-    app.try_state::<crate::state::AppState>()
-        .map(|s| s.recorder.state().is_active())
-        .unwrap_or(false)
+/// Show recorder chrome only after its Windows capture exclusion is active.
+/// Holding `current_project` through both operations orders late windows before
+/// the final affinity reset in `stop_recording`.
+#[cfg(target_os = "windows")]
+pub(crate) fn show_capture_overlay(
+    app: &AppHandle,
+    win: &tauri::WebviewWindow,
+) -> tauri::Result<()> {
+    let Some(state) = app.try_state::<crate::state::AppState>() else {
+        return win.show();
+    };
+    let current_project = state.current_project.lock();
+    let captures_display = current_project
+        .as_ref()
+        .map(|project| project.config.source_id.starts_with("display:"))
+        .unwrap_or(false);
+    if !captures_display {
+        return win.show();
+    }
+
+    if let Err(e) = exclude_overlay_from_capture(win) {
+        let _ = win.hide();
+        return Err(e);
+    }
+    if let Err(e) = win.show() {
+        use windows::Win32::UI::WindowsAndMessaging::WDA_NONE;
+        if let Err(reset_error) = apply_display_affinity(win, WDA_NONE, win.label()) {
+            tracing::warn!(
+                %reset_error,
+                label = win.label(),
+                "failed to clear capture exclusion after show failed"
+            );
+        }
+        let _ = win.hide();
+        return Err(e);
+    }
+    drop(current_project);
+    Ok(())
+}
+
+#[cfg(not(target_os = "windows"))]
+pub(crate) fn show_capture_overlay(
+    _app: &AppHandle,
+    win: &tauri::WebviewWindow,
+) -> tauri::Result<()> {
+    win.show()
 }
 
 fn pin_to_all_spaces_if_shown(win: &tauri::WebviewWindow) {
@@ -1312,7 +1382,7 @@ pub fn show_recorder_popover(app: &AppHandle) -> tauri::Result<()> {
             }
         }
         set_follows_spaces(&win, true);
-        win.show()?;
+        show_capture_overlay(app, &win)?;
         win.set_focus()?;
         if geometry().layout.is_setup_bar() {
             ensure_setup_click_through(app.clone());
@@ -1368,7 +1438,7 @@ fn create_recorder_popover(app: &AppHandle) -> tauri::Result<()> {
     .build()?;
     apply_setup_overlay(app, &win)?;
     set_follows_spaces(&win, true);
-    win.show()?;
+    show_capture_overlay(app, &win)?;
     win.set_focus()?;
     ensure_setup_click_through(app.clone());
     let _ = app.emit("recorder://shown", ());
@@ -1409,7 +1479,7 @@ pub fn show_camera_preview(app: AppHandle, device_id: String) -> tauri::Result<(
         }
         let _ = win.set_content_protected(false);
         set_follows_spaces(&win, true);
-        win.show()?;
+        show_capture_overlay(&app, &win)?;
         return Ok(());
     }
 
@@ -1432,7 +1502,7 @@ fn create_camera_preview_window(app: &AppHandle, device_id: &str) -> tauri::Resu
         let _ = win.emit(CAMERA_DEVICE_EVENT, device_id);
         let _ = win.set_content_protected(false);
         set_follows_spaces(&win, true);
-        win.show()?;
+        show_capture_overlay(app, &win)?;
         return Ok(());
     }
 
@@ -1462,12 +1532,7 @@ fn create_camera_preview_window(app: &AppHandle, device_id: &str) -> tauri::Resu
     .build()?;
     let _ = win.set_content_protected(false);
     set_follows_spaces(&win, true);
-    win.show()?;
-    // Bubble opened mid-recording: apply the Windows capture opt-out now
-    // (recordings started later re-apply it to all overlay chrome).
-    if recording_active(app) {
-        set_capture_exclusion(app, true);
-    }
+    show_capture_overlay(app, &win)?;
     Ok(())
 }
 
@@ -1505,7 +1570,7 @@ pub fn set_camera_preview_visible(app: AppHandle, visible: bool) -> tauri::Resul
     if let Some(win) = app.get_webview_window(CAMERA_LABEL) {
         if visible {
             set_follows_spaces(&win, true);
-            win.show()?;
+            show_capture_overlay(&app, &win)?;
         } else {
             set_follows_spaces(&win, false);
             win.hide()?;

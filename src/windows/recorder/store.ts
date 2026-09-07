@@ -761,9 +761,6 @@ export const useRecorderStore = create<RecorderStore>((set, get) => {
       prewarmInFlight = null;
       await commands.startRecording(config);
       set({ micSessionMuted: false });
-      if (captureMode === "area" && areaSelection) {
-        await commands.showAreaFrameGuide(areaSelection).catch(() => undefined);
-      }
     } catch (e) {
       reportError(describeError(e));
       // Warm mic was taken for the failed start — reopen if still selected.

@@ -102,7 +102,7 @@ integration”, set Settings → Actions → General → Workflow permissions to
 Capptivo runs on:
 
 - **macOS** 13.0+
-- **Windows** 10 build 1903+ (May 2019 Update)
+- **Windows** 10 version 2004, build 19041 or later, required to keep Capptivo overlays out of recordings
 - **Linux** on modern distros with PipeWire 1.0+ (e.g. Ubuntu 24.04+) — X11 and Wayland
 
 Platform notes:

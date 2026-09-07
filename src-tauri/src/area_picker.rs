@@ -6,14 +6,16 @@
 //! the same space scap/WGC use for source rects.
 
 use crate::error::{AppError, AppResult};
-use crate::recorder::types::{CaptureAreaSelection, CaptureCrop};
 #[cfg(target_os = "macos")]
 use crate::recorder::backend::picker_sources;
+use crate::recorder::types::{CaptureAreaSelection, CaptureCrop};
 #[cfg(target_os = "macos")]
 use core_graphics::display::CGDisplay;
-use tauri::{AppHandle, Emitter, Manager, PhysicalPosition, PhysicalSize, WebviewUrl, WebviewWindowBuilder};
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::mpsc;
+use std::sync::{mpsc, Mutex};
+use tauri::{
+    AppHandle, Emitter, Manager, PhysicalPosition, PhysicalSize, WebviewUrl, WebviewWindowBuilder,
+};
 
 pub const AREA_PICKER_LABEL: &str = "area-picker";
 pub const AREA_FRAME_LABEL: &str = "area-frame";
@@ -24,6 +26,7 @@ const FRAME_OUTSET: f64 = 3.0;
 /// Bumped on every show/hide so a deferred Windows create can’t resurrect a
 /// guide the user already dismissed (or a newer show replaced).
 static FRAME_EPOCH: AtomicU64 = AtomicU64::new(0);
+static FRAME_OPERATION: Mutex<()> = Mutex::new(());
 
 struct VirtualDesktop {
     x: f64,
@@ -119,22 +122,18 @@ fn open_area_picker_window(app: &AppHandle) -> AppResult<()> {
     }
 
     let win = crate::webview_gpu::apply_gpu_args(
-        WebviewWindowBuilder::new(
-            app,
-            AREA_PICKER_LABEL,
-            WebviewUrl::App("area.html".into()),
-        )
-        .title("Select area")
-        .inner_size(vd.width, vd.height)
-        .position(vd.x, vd.y)
-        .resizable(false)
-        .decorations(false)
-        .transparent(true)
-        .shadow(false)
-        .always_on_top(true)
-        .accept_first_mouse(true)
-        .skip_taskbar(true)
-        .visible(true),
+        WebviewWindowBuilder::new(app, AREA_PICKER_LABEL, WebviewUrl::App("area.html".into()))
+            .title("Select area")
+            .inner_size(vd.width, vd.height)
+            .position(vd.x, vd.y)
+            .resizable(false)
+            .decorations(false)
+            .transparent(true)
+            .shadow(false)
+            .always_on_top(true)
+            .accept_first_mouse(true)
+            .skip_taskbar(true)
+            .visible(true),
     )
     .build()
     .map_err(|e| AppError::Other(format!("failed to open area picker: {e}")))?;
@@ -145,16 +144,17 @@ fn open_area_picker_window(app: &AppHandle) -> AppResult<()> {
     Ok(())
 }
 
-fn apply_picker_geometry(
-    win: &tauri::WebviewWindow,
-    vd: &VirtualDesktop,
-) -> AppResult<()> {
+fn apply_picker_geometry(win: &tauri::WebviewWindow, vd: &VirtualDesktop) -> AppResult<()> {
     let scale = win
         .scale_factor()
         .map_err(|e| AppError::Other(format!("scale factor: {e}")))?;
 
-    let _ = win.set_size(tauri::Size::Logical(tauri::LogicalSize::new(vd.width, vd.height)));
-    let _ = win.set_position(tauri::Position::Logical(tauri::LogicalPosition::new(vd.x, vd.y)));
+    let _ = win.set_size(tauri::Size::Logical(tauri::LogicalSize::new(
+        vd.width, vd.height,
+    )));
+    let _ = win.set_position(tauri::Position::Logical(tauri::LogicalPosition::new(
+        vd.x, vd.y,
+    )));
     let _ = win.set_position(tauri::Position::Physical(PhysicalPosition::new(
         (vd.x * scale) as i32,
         (vd.y * scale) as i32,
@@ -432,7 +432,16 @@ fn match_display_source(mx: f64, my: f64, mw: f64, mh: f64) -> AppResult<String>
     let mut best: Option<(u32, f64)> = None;
     for (id, _) in picker_sources::list_displays()? {
         let b = CGDisplay::new(id).bounds();
-        let overlap = rect_overlap(mx, my, mw, mh, b.origin.x, b.origin.y, b.size.width, b.size.height);
+        let overlap = rect_overlap(
+            mx,
+            my,
+            mw,
+            mh,
+            b.origin.x,
+            b.origin.y,
+            b.size.width,
+            b.size.height,
+        );
         if overlap > 0.0 {
             let prev = best.map(|(_, o)| o).unwrap_or(0.0);
             if overlap > prev {
@@ -466,12 +475,13 @@ fn rect_overlap(ax: f64, ay: f64, aw: f64, ah: f64, bx: f64, by: f64, bw: f64, b
 /// New WebView creation is deferred (`defer_on_ui`) — same Windows WebView2
 /// rule as camera/library/editor (blank HWND if built inside sync IPC).
 pub fn show_area_frame_guide(app: &AppHandle, selection: &CaptureAreaSelection) -> AppResult<()> {
+    // Claim the request before geometry lookup so a concurrent hide can cancel
+    // the whole operation, including work that has not reached the HWND yet.
     let epoch = FRAME_EPOCH.fetch_add(1, Ordering::AcqRel) + 1;
     let bounds = selection_frame_bounds(app, selection)?;
 
     if let Some(win) = app.get_webview_window(AREA_FRAME_LABEL) {
-        apply_frame_geometry(&win, &bounds)?;
-        return present_area_frame(app, &win, selection, &bounds);
+        return present_area_frame(app, &win, selection, &bounds, epoch);
     }
 
     let selection = selection.clone();
@@ -492,46 +502,39 @@ fn create_and_present_area_frame(
     selection: &CaptureAreaSelection,
     epoch: u64,
 ) -> AppResult<()> {
+    let _operation = FRAME_OPERATION.lock().unwrap_or_else(|e| e.into_inner());
     if FRAME_EPOCH.load(Ordering::Acquire) != epoch {
         return Ok(());
     }
     let bounds = selection_frame_bounds(app, selection)?;
     // Race: another deferred create may have won.
     if app.get_webview_window(AREA_FRAME_LABEL).is_none() {
-        let win = crate::webview_gpu::apply_gpu_args(
-            WebviewWindowBuilder::new(
-                app,
-                AREA_FRAME_LABEL,
-                WebviewUrl::App("frame.html".into()),
-            )
-            .title("Area guide")
-            .inner_size(bounds.width, bounds.height)
-            .position(bounds.x, bounds.y)
-            .resizable(false)
-            .decorations(false)
-            .transparent(true)
-            .shadow(false)
-            .always_on_top(true)
-            .skip_taskbar(true)
-            .focused(false)
-            .visible(false),
+        crate::webview_gpu::apply_gpu_args(
+            WebviewWindowBuilder::new(app, AREA_FRAME_LABEL, WebviewUrl::App("frame.html".into()))
+                .title("Area guide")
+                .inner_size(bounds.width, bounds.height)
+                .position(bounds.x, bounds.y)
+                .resizable(false)
+                .decorations(false)
+                .transparent(true)
+                .shadow(false)
+                .always_on_top(true)
+                .skip_taskbar(true)
+                .focused(false)
+                .visible(false),
         )
         .build()
         .map_err(|e| AppError::Other(format!("failed to open area frame: {e}")))?;
-        apply_frame_geometry(&win, &bounds)?;
-    } else if let Some(win) = app.get_webview_window(AREA_FRAME_LABEL) {
-        apply_frame_geometry(&win, &bounds)?;
     }
     if FRAME_EPOCH.load(Ordering::Acquire) != epoch {
-        // Don't bump epoch — a newer show/hide owns it. Just park if we raced
-        // a hide that ran before the HWND existed.
-        park_area_frame(app);
         return Ok(());
     }
     let Some(win) = app.get_webview_window(AREA_FRAME_LABEL) else {
-        return Err(AppError::Other("area frame window missing after open".into()));
+        return Err(AppError::Other(
+            "area frame window missing after open".into(),
+        ));
     };
-    present_area_frame(app, &win, selection, &bounds)
+    present_area_frame_locked(app, &win, selection, &bounds, epoch)
 }
 
 fn present_area_frame(
@@ -539,16 +542,39 @@ fn present_area_frame(
     win: &tauri::WebviewWindow,
     selection: &CaptureAreaSelection,
     bounds: &FrameBounds,
+    epoch: u64,
 ) -> AppResult<()> {
+    let _operation = FRAME_OPERATION.lock().unwrap_or_else(|e| e.into_inner());
+    present_area_frame_locked(app, win, selection, bounds, epoch)
+}
+
+fn present_area_frame_locked(
+    app: &AppHandle,
+    win: &tauri::WebviewWindow,
+    selection: &CaptureAreaSelection,
+    bounds: &FrameBounds,
+    epoch: u64,
+) -> AppResult<()> {
+    if FRAME_EPOCH.load(Ordering::Acquire) != epoch {
+        return Ok(());
+    }
+    apply_frame_geometry(win, bounds)?;
     // Must be click-through: an interactive always-on-top frame eats the desktop.
     win.set_ignore_cursor_events(true).map_err(|e| {
-        hide_area_frame_guide(app);
-        AppError::Other(format!(
-            "area guide could not enable click-through: {e}"
-        ))
+        FRAME_EPOCH.fetch_add(1, Ordering::AcqRel);
+        park_area_frame(app);
+        AppError::Other(format!("area guide could not enable click-through: {e}"))
     })?;
     let _ = win.set_always_on_top(true);
-    crate::windows::exclude_overlay_from_capture(win);
+    if FRAME_EPOCH.load(Ordering::Acquire) != epoch {
+        return Ok(());
+    }
+    crate::windows::show_capture_overlay(app, win).map_err(|e| {
+        let _ = win.hide();
+        AppError::Other(format!(
+            "area guide could not be shown with capture exclusion: {e}"
+        ))
+    })?;
     let scale = win.scale_factor().unwrap_or(1.0);
     tracing::info!(
         source_id = %selection.source_id,
@@ -563,7 +589,6 @@ fn present_area_frame(
         scale,
         "area frame guide shown"
     );
-    let _ = win.show();
     // Last word on focus must be the recorder bar, not the guide: `show()` above
     // activates the guide on every reuse (tao clears a window's don't-focus
     // marker after the first show), and the bar's Escape-to-cancel handler is a
@@ -574,6 +599,7 @@ fn present_area_frame(
 }
 
 pub fn hide_area_frame_guide(app: &AppHandle) {
+    let _operation = FRAME_OPERATION.lock().unwrap_or_else(|e| e.into_inner());
     FRAME_EPOCH.fetch_add(1, Ordering::AcqRel);
     park_area_frame(app);
 }
@@ -582,7 +608,9 @@ fn park_area_frame(app: &AppHandle) {
     if let Some(win) = app.get_webview_window(AREA_FRAME_LABEL) {
         let _ = win.hide();
         // Park off-screen so a transient show/reuse cannot flash the old crop.
-        let _ = win.set_position(tauri::Position::Physical(PhysicalPosition::new(-10_000, -10_000)));
+        let _ = win.set_position(tauri::Position::Physical(PhysicalPosition::new(
+            -10_000, -10_000,
+        )));
         let _ = win.set_size(tauri::Size::Physical(PhysicalSize::new(1, 1)));
     }
 }
@@ -602,10 +630,7 @@ fn apply_frame_geometry(win: &tauri::WebviewWindow, bounds: &FrameBounds) -> App
     Ok(())
 }
 
-fn selection_frame_bounds(
-    app: &AppHandle,
-    sel: &CaptureAreaSelection,
-) -> AppResult<FrameBounds> {
+fn selection_frame_bounds(app: &AppHandle, sel: &CaptureAreaSelection) -> AppResult<FrameBounds> {
     let (mx, my) = monitor_origin_for_source(app, &sel.source_id)?;
     let c = sel.crop;
     Ok(frame_guide_bounds(mx + c.x, my + c.y, c.width, c.height))
@@ -638,7 +663,9 @@ mod frame_guide_tests {
 #[cfg(target_os = "windows")]
 fn monitor_origin_for_source(_app: &AppHandle, source_id: &str) -> AppResult<(f64, f64)> {
     let Some(("display", id_str)) = source_id.split_once(':') else {
-        return Err(AppError::InvalidSource(format!("expected display id, got {source_id}")));
+        return Err(AppError::InvalidSource(format!(
+            "expected display id, got {source_id}"
+        )));
     };
     let display_id: isize = id_str
         .parse()
@@ -653,7 +680,9 @@ fn monitor_origin_for_source(_app: &AppHandle, source_id: &str) -> AppResult<(f6
 #[cfg(target_os = "macos")]
 fn monitor_origin_for_source(app: &AppHandle, source_id: &str) -> AppResult<(f64, f64)> {
     let Some(("display", id_str)) = source_id.split_once(':') else {
-        return Err(AppError::InvalidSource(format!("expected display id, got {source_id}")));
+        return Err(AppError::InvalidSource(format!(
+            "expected display id, got {source_id}"
+        )));
     };
     let display_id: u32 = id_str
         .parse()
@@ -671,7 +700,16 @@ fn monitor_origin_for_source(app: &AppHandle, source_id: &str) -> AppResult<(f64
         let my = m.position().y as f64 / scale;
         let mw = m.size().width as f64 / scale;
         let mh = m.size().height as f64 / scale;
-        let overlap = rect_overlap(mx, my, mw, mh, b.origin.x, b.origin.y, b.size.width, b.size.height);
+        let overlap = rect_overlap(
+            mx,
+            my,
+            mw,
+            mh,
+            b.origin.x,
+            b.origin.y,
+            b.size.width,
+            b.size.height,
+        );
         if overlap > 0.0 {
             let prev = best.map(|(_, _, o)| o).unwrap_or(0.0);
             if overlap > prev {
