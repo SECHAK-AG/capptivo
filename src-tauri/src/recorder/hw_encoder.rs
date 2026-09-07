@@ -6,8 +6,8 @@
 //!
 //! The startup probe runs at 256×144, which says nothing about frames a
 //! hardware encoder caps below the capture size. Callers that know their frame
-//! size go through [`pick_for`], which re-probes the pick at the exact size
-//! once it exceeds what the startup probe covers.
+//! size go through [`pick_for`], which re-probes a hardware pick at the exact
+//! size before opening the real pipeline.
 
 use crate::proc;
 use std::collections::HashMap;
@@ -120,7 +120,8 @@ const SOFTWARE_FALLBACK: EncoderChoice = EncoderChoice {
     tuning_args: &["-preset", "veryfast"],
 };
 
-/// The software fallback as handed out for frames a hardware encoder refused.
+/// The software fallback as handed out for a frame size a hardware encoder
+/// refused.
 ///
 /// `veryfast` — the regular fallback — measured 1.24× realtime for 5120×2820
 /// at 60 fps on an M4, reading BGRA from a file with nothing else running. The
@@ -128,7 +129,7 @@ const SOFTWARE_FALLBACK: EncoderChoice = EncoderChoice {
 /// and in a real 51 s take it shed close to half the captured frames.
 /// `ultrafast` measured 2.34× on the same input. Frames this size get ~28 Mbps,
 /// where the preset's quality cost does not show; the dropped frames do.
-const OVERSIZE_SOFTWARE_FALLBACK: EncoderChoice = EncoderChoice {
+const FRAME_SIZE_SOFTWARE_FALLBACK: EncoderChoice = EncoderChoice {
     tuning_args: &["-preset", "ultrafast"],
     ..SOFTWARE_FALLBACK
 };
@@ -272,50 +273,79 @@ pub fn scaled_capture_notice(native: (u32, u32), actual: (u32, u32)) -> Option<S
     ))
 }
 
-/// What to tell the user when the hardware encoder refused the frame size and
+/// What to tell the user when the hardware encoder refused this frame size and
 /// the take runs on `fallback` instead (see [`pick_for`]).
-pub fn software_fallback_notice(
-    width: u32,
-    height: u32,
-    refused: &str,
-    fallback: &str,
-) -> String {
+pub fn software_fallback_notice(width: u32, height: u32, refused: &str, fallback: &str) -> String {
+    let size = if width.max(height) > HW_ENCODER_EDGE {
+        format!("oversize {width}×{height}")
+    } else {
+        format!("{width}×{height}")
+    };
     format!(
-        "{width}×{height} is more than the {refused} hardware encoder accepts; recording with the {fallback} software encoder instead, which costs CPU and may drop frames."
+        "The {refused} hardware encoder rejected {size}. Recording with the {fallback} software encoder instead costs CPU and may drop frames"
     )
 }
 
-/// The encoder for frames of `width`×`height`: the cached [`pick`] for any
-/// size inside [`HW_ENCODER_EDGE`], otherwise that pick re-probed at the exact
-/// size and demoted to the software fallback if it refuses. Oversize answers
+/// The encoder for frames of `width`×`height`: a hardware [`pick`] is re-probed
+/// at the exact size and demoted to the software fallback if it refuses. Results
 /// are cached per size, so the probe (~0.1 s) runs once per size, not once per
-/// recording.
+/// recording. A startup software pick is returned directly.
 pub fn pick_for(ffmpeg: &Path, width: u32, height: u32) -> EncoderChoice {
     let chosen = *pick(ffmpeg);
-    if width.max(height) <= HW_ENCODER_EDGE {
+    if chosen.name == SOFTWARE_FALLBACK.name {
         return chosen;
     }
-    static OVERSIZE: OnceLock<Mutex<HashMap<(u32, u32), EncoderChoice>>> = OnceLock::new();
-    let cache = OVERSIZE.get_or_init(|| Mutex::new(HashMap::new()));
+    static FRAME_SIZES: OnceLock<Mutex<HashMap<(u32, u32), EncoderChoice>>> = OnceLock::new();
+    let cache = FRAME_SIZES.get_or_init(|| Mutex::new(HashMap::new()));
+    pick_for_chosen(chosen, width, height, cache, |chosen, width, height| {
+        select_for(ffmpeg, chosen, width, height)
+    })
+}
+
+/// Apply the per-size cache to a startup choice. The actual FFmpeg probe stays
+/// outside the lock: duplicate probes are cheaper than serialising a recording
+/// and an export behind the cache mutex.
+fn pick_for_chosen(
+    chosen: EncoderChoice,
+    width: u32,
+    height: u32,
+    cache: &Mutex<HashMap<(u32, u32), EncoderChoice>>,
+    select: impl FnOnce(EncoderChoice, u32, u32) -> EncoderChoice,
+) -> EncoderChoice {
+    if chosen.name == SOFTWARE_FALLBACK.name {
+        // Nothing to demote to; libx264 handles the accepted capture sizes itself.
+        return chosen;
+    }
     if let Some(cached) = cache.lock().unwrap().get(&(width, height)) {
         return *cached;
     }
-    // Probe outside the lock: a recording and an export may ask concurrently,
-    // and a duplicate probe is cheaper than serialising them on a mutex.
-    let choice = select_for(ffmpeg, chosen, width, height);
+    let choice = select(chosen, width, height);
     cache.lock().unwrap().insert((width, height), choice);
     choice
 }
 
-/// The oversize decision behind [`pick_for`], without the cache. Split out for
+/// The frame-size decision behind [`pick_for`], without the cache. Split out for
 /// the same reason as [`select`]: a test must not depend on who warmed the
 /// `OnceLock`.
 fn select_for(ffmpeg: &Path, chosen: EncoderChoice, width: u32, height: u32) -> EncoderChoice {
+    select_for_with_probe(chosen, width, height, |choice, width, height| {
+        probe_at(ffmpeg, choice, width, height)
+    })
+}
+
+/// Demote a hardware choice only when its exact-size probe fails. Keeping the
+/// probe as an argument makes this routing testable without a driver or sidecar.
+fn select_for_with_probe(
+    chosen: EncoderChoice,
+    width: u32,
+    height: u32,
+    probe: impl FnOnce(&EncoderChoice, u32, u32) -> Result<(), ProbeFailure>,
+) -> EncoderChoice {
     if chosen.name == SOFTWARE_FALLBACK.name {
         // Nothing to demote to; libx264 handles Level 6 sizes on its own.
         return chosen;
     }
-    match probe_at(ffmpeg, &chosen, width, height) {
+    match probe(&chosen, width, height) {
         Ok(()) => chosen,
         Err(failure) => {
             // WARN, not INFO: this is the one place a hardware machine silently
@@ -325,11 +355,11 @@ fn select_for(ffmpeg: &Path, chosen: EncoderChoice, width: u32, height: u32) -> 
                 encoder = chosen.name,
                 width,
                 height,
-                fallback = OVERSIZE_SOFTWARE_FALLBACK.name,
+                fallback = FRAME_SIZE_SOFTWARE_FALLBACK.name,
                 reason = %failure,
                 "hardware encoder rejected the frame size; using the software encoder for it"
             );
-            OVERSIZE_SOFTWARE_FALLBACK
+            FRAME_SIZE_SOFTWARE_FALLBACK
         }
     }
 }
@@ -604,8 +634,18 @@ mod tests {
     }
 
     #[test]
+    fn software_pick_is_never_size_probed_or_cached() {
+        let cache = Mutex::new(HashMap::<(u32, u32), EncoderChoice>::new());
+        let choice = pick_for_chosen(SOFTWARE_FALLBACK, 64, 62, &cache, |_, _, _| {
+            panic!("libx264 must not be probed for a frame size")
+        });
+        assert_eq!(choice.name, "libx264");
+        assert!(cache.lock().unwrap().is_empty());
+    }
+
+    #[test]
     fn a_software_pick_is_never_reprobed() {
-        // There is nothing to demote libx264 to, so an oversize frame must not
+        // There is nothing to demote libx264 to, so any frame size must not
         // spawn ffmpeg at all — a missing binary proves it was never consulted.
         let choice = select_for(
             Path::new("/nonexistent/ffmpeg-for-test"),
@@ -614,6 +654,62 @@ mod tests {
             2880,
         );
         assert_eq!(choice.name, "libx264");
+    }
+
+    #[test]
+    fn hardware_pick_is_probed_and_cached_at_an_in_edge_size() {
+        let hardware = EncoderChoice {
+            name: "h264-test",
+            pre_input_args: &[],
+            pix_fmt: Some("yuv420p"),
+            upload_filter: None,
+            tuning_args: &[],
+        };
+        let cache = Mutex::new(HashMap::<(u32, u32), EncoderChoice>::new());
+        let mut calls = 0;
+        let selected = pick_for_chosen(hardware, 64, 62, &cache, |choice, width, height| {
+            calls += 1;
+            assert_eq!(choice.name, "h264-test");
+            assert_eq!((width, height), (64, 62));
+            choice
+        });
+        assert_eq!(selected.name, "h264-test");
+        let cached = pick_for_chosen(hardware, 64, 62, &cache, |_, _, _| {
+            panic!("the same frame size must use its cached choice")
+        });
+        assert_eq!(cached.name, "h264-test");
+        assert_eq!(calls, 1);
+    }
+
+    #[test]
+    fn rejected_in_edge_hardware_frame_uses_fast_software_fallback() {
+        let hardware = EncoderChoice {
+            name: "h264-test",
+            pre_input_args: &[],
+            pix_fmt: Some("yuv420p"),
+            upload_filter: None,
+            tuning_args: &[],
+        };
+        let fallback = select_for_with_probe(hardware, 64, 62, |choice, width, height| {
+            assert_eq!(choice.name, "h264-test");
+            assert_eq!((width, height), (64, 62));
+            Err(ProbeFailure::Rejected("test rejection".into()))
+        });
+        assert_eq!(fallback.name, "libx264");
+        assert_eq!(fallback.tuning_args, &["-preset", "ultrafast"]);
+    }
+
+    #[test]
+    fn size_fallback_notice_names_the_rejected_geometry_and_encoders() {
+        let notice = software_fallback_notice(64, 62, "h264_amf", "libx264");
+        assert!(notice.contains("h264_amf"), "{notice}");
+        assert!(notice.contains("64×62"), "{notice}");
+        assert!(notice.contains("libx264"), "{notice}");
+        assert!(notice.contains("rejected"), "{notice}");
+        assert!(!notice.contains("oversize"), "{notice}");
+
+        let oversize = software_fallback_notice(5120, 2880, "h264_videotoolbox", "libx264");
+        assert!(oversize.contains("oversize 5120×2880"), "{oversize}");
     }
 
     #[cfg(target_os = "macos")]
@@ -632,7 +728,7 @@ mod tests {
         assert_eq!(
             select_for(&ffmpeg, chosen, 3840, 2160).name,
             "h264_videotoolbox",
-            "4K is inside the edge and must keep the hardware encoder"
+            "4K must keep the hardware encoder when its exact probe succeeds"
         );
         let demoted = select_for(&ffmpeg, chosen, 5120, 2880);
         assert_eq!(
@@ -641,31 +737,37 @@ mod tests {
         );
         assert!(
             demoted.tuning_args.contains(&"ultrafast"),
-            "the oversize fallback needs the headroom preset, got {:?}",
+            "the frame-size fallback needs the headroom preset, got {:?}",
             demoted.tuning_args
         );
     }
 
     #[test]
-    fn oversize_fallback_only_differs_in_its_preset() {
+    fn frame_size_fallback_only_differs_in_its_preset() {
         // Same encoder, same pixel format, same plumbing — only the speed knob
         // moves, so everything the recorder assumes about libx264 still holds.
-        assert_eq!(OVERSIZE_SOFTWARE_FALLBACK.name, SOFTWARE_FALLBACK.name);
-        assert_eq!(OVERSIZE_SOFTWARE_FALLBACK.pix_fmt, SOFTWARE_FALLBACK.pix_fmt);
+        assert_eq!(FRAME_SIZE_SOFTWARE_FALLBACK.name, SOFTWARE_FALLBACK.name);
         assert_eq!(
-            OVERSIZE_SOFTWARE_FALLBACK.pre_input_args,
+            FRAME_SIZE_SOFTWARE_FALLBACK.pix_fmt,
+            SOFTWARE_FALLBACK.pix_fmt
+        );
+        assert_eq!(
+            FRAME_SIZE_SOFTWARE_FALLBACK.pre_input_args,
             SOFTWARE_FALLBACK.pre_input_args
         );
         assert_eq!(
-            OVERSIZE_SOFTWARE_FALLBACK.tuning_args,
+            FRAME_SIZE_SOFTWARE_FALLBACK.tuning_args,
             &["-preset", "ultrafast"]
         );
     }
 
     #[test]
     fn probe_reports_a_spawn_failure_when_ffmpeg_is_missing() {
-        let err = probe(Path::new("/nonexistent/ffmpeg-for-test"), &SOFTWARE_FALLBACK)
-            .expect_err("a missing ffmpeg must not probe successfully");
+        let err = probe(
+            Path::new("/nonexistent/ffmpeg-for-test"),
+            &SOFTWARE_FALLBACK,
+        )
+        .expect_err("a missing ffmpeg must not probe successfully");
         assert!(
             matches!(err, ProbeFailure::FfmpegUnavailable(_)),
             "a missing binary is an install problem, not an encoder rejection: {err:?}"
