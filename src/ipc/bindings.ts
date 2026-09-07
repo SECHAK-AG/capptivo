@@ -162,10 +162,20 @@ export const commands = {
   deleteCustomBackground: (id: string) =>
     invoke<void>("delete_custom_background", { id }),
 
-  // Save path: use `@tauri-apps/plugin-dialog` `save()` — never a blocking Rust picker.
-  beginExport: (path: string) => invoke<number>("begin_export", { path }),
+  /** Native save selection retained by Rust; the renderer receives no path. */
+  selectExportDestination: (args: {
+    suggestedName: string;
+    fileType: "mp4" | "webm" | "gif";
+    needed: number;
+  }) =>
+    invoke<{ handle: string; displayName: string } | null>(
+      "select_export_destination",
+      args,
+    ),
+  beginExport: (destination: string) =>
+    invoke<string>("begin_export", { destination }),
   // Chunk is the whole invoke arg; handle/position ride in headers for out-of-order muxers.
-  writeExportChunk: (handle: number, position: number, chunk: Uint8Array) =>
+  writeExportChunk: (handle: string, position: number, chunk: Uint8Array) =>
     invoke<void>("write_export_chunk", chunk, {
       headers: {
         "x-export-handle": String(handle),
@@ -173,31 +183,31 @@ export const commands = {
       },
     }),
   /** Annex-B H.264 → ffmpeg `-c copy` MP4 (mux outside the WebView). */
-  beginExportH264Stream: (args: { path: string; fps: number }) =>
-    invoke<number>("begin_export_h264_stream", args),
-  writeExportH264Chunk: (handle: number, chunk: Uint8Array) =>
+  beginExportH264Stream: (args: { destination: string; fps: number }) =>
+    invoke<string>("begin_export_h264_stream", args),
+  writeExportH264Chunk: (handle: string, chunk: Uint8Array) =>
     invoke<void>("write_export_h264_chunk", chunk, {
       headers: { "x-export-handle": String(handle) },
     }),
-  finishExportH264Stream: (handle: number) =>
-    invoke<string>("finish_export_h264_stream", { handle }),
-  abortExportH264Stream: (handle: number, reason: string) =>
+  finishExportH264Stream: (handle: string) =>
+    invoke<void>("finish_export_h264_stream", { handle }),
+  abortExportH264Stream: (handle: string, reason: string) =>
     invoke<void>("abort_export_h264_stream", { handle, reason }),
   /** Pixi RGBA frames → ffmpeg H.264 encode (Path B; encode outside WebView). */
   beginExportRawvideoStream: (args: {
-    path: string;
+    destination: string;
     width: number;
     height: number;
     fps: number;
     bitrate: number;
-  }) => invoke<number>("begin_export_rawvideo_stream", args),
-  writeExportRawvideoFrame: (handle: number, chunk: Uint8Array) =>
+  }) => invoke<string>("begin_export_rawvideo_stream", args),
+  writeExportRawvideoFrame: (handle: string, chunk: Uint8Array) =>
     invoke<void>("write_export_rawvideo_frame", chunk, {
       headers: { "x-export-handle": String(handle) },
     }),
-  finishExportRawvideoStream: (handle: number) =>
-    invoke<string>("finish_export_rawvideo_stream", { handle }),
-  abortExportRawvideoStream: (handle: number, reason: string) =>
+  finishExportRawvideoStream: (handle: string) =>
+    invoke<void>("finish_export_rawvideo_stream", { handle }),
+  abortExportRawvideoStream: (handle: string, reason: string) =>
     invoke<void>("abort_export_rawvideo_stream", { handle, reason }),
   /** Returns original dimensions and proxy filename when ready. */
   ensureProxy: (projectId: string) =>
@@ -220,34 +230,41 @@ export const commands = {
   /** Migrates fragmented recordings to seekable MP4; no-op once progressive. */
   ensureSeekableRecording: (projectId: string) =>
     invoke<void>("ensure_seekable_recording", { projectId }),
-  /** Fail before encode when the destination volume is too full. */
-  checkExportDiskSpace: (args: { path: string; needed: number }) =>
-    invoke<void>("check_export_disk_space", args),
-  finishExport: (handle: number) => invoke<string>("finish_export", { handle }),
-  abortExport: (handle: number, reason: string) =>
+  finishExport: (handle: string) => invoke<void>("finish_export", { handle }),
+  abortExport: (handle: string, reason: string) =>
     invoke<void>("abort_export", { handle, reason }),
   /** Mux trimmed audio into a video-only export; no-op when silent. */
   muxExportAudio: (args: {
+    destination: string;
     projectId: string;
-    videoPath: string;
     audioSource: string;
     segments: { start: number; end: number }[];
     preset: "off" | "podcast";
     hasSystemAudio: boolean;
   }) => invoke<void>("mux_export_audio", args),
-  /** Prepare a trimmed audio sidecar while video encodes; returns path or null when silent. */
+  /** Prepare a project-scoped audio sidecar; returns no filesystem path. */
   prepareExportAudio: (args: {
     projectId: string;
-    outName: string;
+    fileExt: "m4a" | "webm";
     audioSource: string;
     segments: { start: number; end: number }[];
     preset: "off" | "podcast";
     hasSystemAudio: boolean;
-  }) => invoke<string | null>("prepare_export_audio", args),
-  attachExportAudio: (args: { videoPath: string; audioPath: string }) =>
+  }) =>
+    invoke<{ handle: string; fileName: string } | null>(
+      "prepare_export_audio",
+      args,
+    ),
+  attachExportAudio: (args: { destination: string; audio: string }) =>
     invoke<void>("attach_export_audio", args),
-  removeTempFile: (args: { path: string }) =>
+  removeTempFile: (args: { handle: string }) =>
     invoke<void>("remove_temp_file", args),
+  /** Reveal and retire a completed export destination. */
+  completeExport: (destination: string) =>
+    invoke<void>("complete_export", { destination }),
+  /** Retire a cancelled or failed export destination without touching its file. */
+  discardExportDestination: (destination: string) =>
+    invoke<void>("discard_export_destination", { destination }),
   /** Append one error line to `errors.log`. */
   logClientError: (source: string, message: string) =>
     invoke<void>("log_client_error", { source, message }),

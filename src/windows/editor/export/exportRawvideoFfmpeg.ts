@@ -33,11 +33,11 @@ function throwIfGpuLost(isLost: () => boolean): void {
 }
 
 /**
- * Compose + CPU readback → ffmpeg H.264 encode at `path`.
+ * Compose + CPU readback → ffmpeg H.264 encode at the selected destination.
  * Audio is attached afterward by the caller.
  */
 export async function renderMp4ViaFfmpegRawvideo(
-  path: string,
+  destination: string,
   screenUrl: string,
   faceCam: FaceCamTrack,
   params: ResolvedExportParams,
@@ -53,7 +53,7 @@ export async function renderMp4ViaFfmpegRawvideo(
   }
 
   const handle = await commands.beginExportRawvideoStream({
-    path,
+    destination,
     width,
     height,
     fps,
@@ -354,8 +354,8 @@ export async function renderMp4ViaFfmpegRawvideo(
     const breakdown = stats();
     if (breakdown) console.info(`[export] composite breakdown: ${breakdown}`);
 
-    settled = true;
     await commands.finishExportRawvideoStream(handle);
+    settled = true;
   } catch (e) {
     const reason = describeError(e);
     console.error(`[export] ffmpeg-rawvideo failed: ${reason}`);

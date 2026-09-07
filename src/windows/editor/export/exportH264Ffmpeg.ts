@@ -53,11 +53,11 @@ function throwIfGpuLost(isLost: () => boolean): void {
 }
 
 /**
- * Compose + WebCodecs Annex-B encode → ffmpeg stream-copy MP4 at `path`.
+ * Compose + WebCodecs Annex-B encode → ffmpeg stream-copy MP4 at the selected destination.
  * Audio is attached afterward by the caller (video-only + post-mux).
  */
 export async function renderMp4ViaFfmpegH264(
-  path: string,
+  destination: string,
   screenUrl: string,
   faceCam: FaceCamTrack,
   params: ResolvedExportParams,
@@ -67,7 +67,7 @@ export async function renderMp4ViaFfmpegH264(
   const { width, height, fps, bitrate } = params;
   throwIfAborted(signal);
 
-  const handle = await commands.beginExportH264Stream({ path, fps });
+  const handle = await commands.beginExportH264Stream({ destination, fps });
   let settled = false;
   const abortMux = async (reason: string) => {
     if (settled) return;
@@ -296,8 +296,8 @@ export async function renderMp4ViaFfmpegH264(
     const breakdown = stats();
     if (breakdown) console.info(`[export] composite breakdown: ${breakdown}`);
 
-    settled = true;
     await commands.finishExportH264Stream(handle);
+    settled = true;
   } catch (e) {
     const reason = describeError(e);
     console.error(`[export] ffmpeg-h264 failed: ${reason}`);

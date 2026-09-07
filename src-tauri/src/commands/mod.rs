@@ -83,7 +83,7 @@ macro_rules! command_handlers {
             $crate::commands::backgrounds::delete_custom_background,
             // export
             $crate::commands::export::ensure_seekable_recording,
-            $crate::commands::export::check_export_disk_space,
+            $crate::commands::export::select_export_destination,
             $crate::commands::export::begin_export,
             $crate::commands::export::write_export_chunk,
             $crate::commands::export::finish_export,
@@ -100,6 +100,8 @@ macro_rules! command_handlers {
             $crate::commands::export::prepare_export_audio,
             $crate::commands::export::attach_export_audio,
             $crate::commands::export::remove_temp_file,
+            $crate::commands::export::complete_export,
+            $crate::commands::export::discard_export_destination,
             // error log (friend-install diagnostics)
             $crate::commands::error_log::log_client_error,
             $crate::commands::error_log::log_client_info,

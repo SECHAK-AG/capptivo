@@ -19,13 +19,16 @@ pub struct AppState {
     /// The recording currently being captured (set on start, cleared on stop).
     /// Holds the config so `stop_recording` can finalize the project manifest.
     pub current_project: Mutex<Option<CurrentProject>>,
-    /// Open export file sinks, keyed by handle id (see `commands::export`).
-    pub exports: Mutex<HashMap<u64, ExportSink>>,
+    /// Save-dialog selections and their lifecycle, keyed by opaque capability.
+    pub export_destinations: Mutex<HashMap<String, ExportDestination>>,
+    /// Open export file sinks, keyed by stream handle (see `commands::export`).
+    pub exports: Mutex<HashMap<String, FileExport>>,
     /// Annex-B H.264 → ffmpeg MP4 sessions (see `commands::export` h264 stream).
-    pub h264_exports: Mutex<HashMap<u64, H264StreamMuxer>>,
+    pub h264_exports: Mutex<HashMap<String, H264ExportSlot>>,
     /// Pixi RGBA → ffmpeg encode sessions (Windows Path B; see rawvideo stream).
-    pub rawvideo_exports: Mutex<HashMap<u64, RawvideoStreamEncoder>>,
-    pub next_export_id: Mutex<u64>,
+    pub rawvideo_exports: Mutex<HashMap<String, RawvideoExportSlot>>,
+    /// Project-scoped prepared audio sidecars, keyed by opaque capability.
+    pub prepared_export_audio: Mutex<HashMap<String, PathBuf>>,
     /// Optional face-cam file being written by the camera WebView during capture.
     pub camera_sink: Mutex<Option<ExportSink>>,
     /// Project ids with a preview-proxy transcode in flight, so concurrent
@@ -43,6 +46,46 @@ pub struct ExportSink {
     /// User-chosen export destination. On `finish`, `path` is renamed here.
     pub final_path: Option<PathBuf>,
 }
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ExportDestinationState {
+    Available,
+    Writing,
+    Ready,
+    Processing,
+}
+
+pub struct ExportDestination {
+    pub path: PathBuf,
+    pub reservation_keys: [String; 2],
+    pub state: ExportDestinationState,
+}
+
+pub struct FileExport {
+    pub sink: ExportSink,
+    pub destination: String,
+}
+
+pub struct H264Export {
+    pub muxer: H264StreamMuxer,
+    pub destination: String,
+}
+
+pub struct RawvideoExport {
+    pub encoder: RawvideoStreamEncoder,
+    pub destination: String,
+}
+
+pub enum StreamExportSlot<T> {
+    Ready(T),
+    Writing {
+        destination: String,
+        cancel_requested: bool,
+    },
+}
+
+pub type H264ExportSlot = StreamExportSlot<H264Export>;
+pub type RawvideoExportSlot = StreamExportSlot<RawvideoExport>;
 
 #[derive(Clone)]
 pub struct CurrentProject {
@@ -78,10 +121,11 @@ impl AppState {
             recorder,
             store,
             current_project: Mutex::new(None),
+            export_destinations: Mutex::new(HashMap::new()),
             exports: Mutex::new(HashMap::new()),
             h264_exports: Mutex::new(HashMap::new()),
             rawvideo_exports: Mutex::new(HashMap::new()),
-            next_export_id: Mutex::new(1),
+            prepared_export_audio: Mutex::new(HashMap::new()),
             camera_sink: Mutex::new(None),
             proxy_jobs: Mutex::new(HashSet::new()),
             camera_jobs: Mutex::new(HashSet::new()),

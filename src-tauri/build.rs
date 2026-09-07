@@ -73,7 +73,7 @@ fn main() {
         "delete_custom_background",
         // export
         "ensure_seekable_recording",
-        "check_export_disk_space",
+        "select_export_destination",
         "begin_export",
         "write_export_chunk",
         "finish_export",
@@ -90,6 +90,8 @@ fn main() {
         "prepare_export_audio",
         "attach_export_audio",
         "remove_temp_file",
+        "complete_export",
+        "discard_export_destination",
         // error log
         "log_client_error",
         "log_client_info",
