@@ -1,7 +1,7 @@
 /**
- * Persist JS diagnostics to on-disk logs.
- * - `logClientError` → `errors.log` (+ tracing error)
- * - `logClientInfo` → rolling `capptivo.log` (info only; targeted call sites)
+ * Native diagnostics persist only an allowlisted code for each error source
+ * Error text is not written to the diagnostics file
+ * Info messages go only to the development console
  */
 
 import { commands } from "../ipc/bindings";
@@ -26,14 +26,14 @@ function describe(e: unknown): string {
 
 let installed = false;
 
-/** Fire-and-forget append to `errors.log`; never throws into UI. */
+/** Fire-and-forget diagnostic code, never throws into UI */
 export function logClientError(source: string, error: unknown): void {
   const message = describe(error);
   if (!message) return;
   void commands.logClientError(source, message).catch(() => undefined);
 }
 
-/** Fire-and-forget info line into rolling `capptivo.log`. */
+/** Fire-and-forget development console information, not persisted */
 export function logClientInfo(source: string, message: string): void {
   const msg = message.trim();
   if (!msg) return;

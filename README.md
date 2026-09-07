@@ -293,6 +293,25 @@ cargo check --no-default-features
 
 ---
 
+## Local diagnostics
+
+Capptivo keeps the latest 200 diagnostic codes in `diagnostics/diagnostics-v1.log` under its application-data directory
+Each JSON line contains a Unix timestamp and a fixed code identifying a native, recorder, export, or renderer failure category
+The file contains no error text, file or media names, paths, stack traces, recordings, or device identifiers
+It is not uploaded automatically
+Detailed console output during development remains separate from this file
+
+While not recording, right-click the tray icon and choose **Open Diagnostics…** to locate the file, or **Clear Diagnostics** to empty it
+Only the current diagnostic file is cleared
+Older `logs/errors.log` and `capptivo.*` files are neither imported nor deleted
+The application does not add a warning history to recordings
+
+The file remains local to the current user's application data and is not encrypted
+Older entries are removed as new ones arrive, with no age-based expiration
+Clearing and writing are serialized, but a later failure can create a new entry after a clear
+Writes are best effort, and an interrupted write can lose diagnostic history
+An unavailable application-data path or failed write does not prevent recording and is not redirected to a temporary directory
+
 ## License
 
 Copyright (c) 2026 idboussadel

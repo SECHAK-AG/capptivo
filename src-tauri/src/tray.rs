@@ -13,6 +13,7 @@ use tauri::image::Image;
 use tauri::menu::{Menu, MenuItem, PredefinedMenuItem};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
 use tauri::{AppHandle, Manager};
+use tauri_plugin_dialog::{DialogExt, MessageDialogKind};
 
 pub const TRAY_ID: &str = "capptivo-tray";
 
@@ -87,9 +88,20 @@ fn idle_menu(app: &AppHandle) -> tauri::Result<Menu<tauri::Wry>> {
         MenuItem::with_id(app, "annotate", "Annotate Screen…", true, None::<&str>)?;
     let open_library = MenuItem::with_id(app, "open_library", "Recordings…", true, None::<&str>)?;
     let settings = MenuItem::with_id(app, "settings", "Settings…", true, None::<&str>)?;
-    // ponytail: "Open Logs…" disabled with file logging for release — uncomment with init_tracing.
-    // let open_logs =
-    //     MenuItem::with_id(app, "open_logs", "Open Logs…", true, None::<&str>)?;
+    let open_diagnostics = MenuItem::with_id(
+        app,
+        "open_diagnostics",
+        "Open Diagnostics…",
+        true,
+        None::<&str>,
+    )?;
+    let clear_diagnostics = MenuItem::with_id(
+        app,
+        "clear_diagnostics",
+        "Clear Diagnostics",
+        true,
+        None::<&str>,
+    )?;
     let check_updates =
         MenuItem::with_id(app, "check_updates", "Check for Updates…", true, None::<&str>)?;
     let separator = PredefinedMenuItem::separator(app)?;
@@ -102,7 +114,8 @@ fn idle_menu(app: &AppHandle) -> tauri::Result<Menu<tauri::Wry>> {
             &open_library,
             &settings,
             &separator,
-            // &open_logs,
+            &open_diagnostics,
+            &clear_diagnostics,
             &check_updates,
             &separator,
             &quit,
@@ -192,12 +205,22 @@ fn on_menu_event(app: &AppHandle, event: tauri::menu::MenuEvent) {
                 tracing::warn!(%e, "failed to open recordings library");
             }
         }
-        // ponytail: disabled with file logging for release.
-        // "open_logs" => {
-        //     if let Err(e) = crate::error_log::reveal_dir() {
-        //         tracing::error!(%e, "failed to reveal logs folder");
-        //     }
-        // }
+        "open_diagnostics" => {
+            if crate::error_log::reveal().is_err() {
+                app.dialog()
+                    .message("Could not open local diagnostics")
+                    .kind(MessageDialogKind::Error)
+                    .show(|_| {});
+            }
+        }
+        "clear_diagnostics" => {
+            if crate::error_log::clear().is_err() {
+                app.dialog()
+                    .message("Could not clear local diagnostics")
+                    .kind(MessageDialogKind::Error)
+                    .show(|_| {});
+            }
+        }
         "settings" => {
             // Settings window is a Phase 5 item; open the popover for now.
             let _ = windows::show_recorder_popover(app);

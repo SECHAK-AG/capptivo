@@ -248,15 +248,15 @@ export const commands = {
     invoke<void>("attach_export_audio", args),
   removeTempFile: (args: { path: string }) =>
     invoke<void>("remove_temp_file", args),
-  /** Append one error line to `errors.log`. */
+  /** Persist an allowlisted source code, never the supplied error text */
   logClientError: (source: string, message: string) =>
     invoke<void>("log_client_error", { source, message }),
-  /** Append one info line to rolling `capptivo.log` (not `errors.log`). */
+  /** Development console information, not persisted to diagnostics */
   logClientInfo: (source: string, message: string) =>
     invoke<void>("log_client_info", { source, message }),
-  /** Reveal `logs/errors.log` in Finder / Explorer. */
+  /** Reveal the native-owned code-only diagnostics file */
   revealErrorLog: () => invoke<string>("reveal_error_log"),
-  /** Reveal the logs folder (`capptivo.*` + `errors.log`). */
+  /** Reveal the separate diagnostics folder without touching legacy logs */
   revealLogsDir: () => invoke<string>("reveal_logs_dir"),
   errorLogPath: () => invoke<string>("error_log_path"),
 } as const;
