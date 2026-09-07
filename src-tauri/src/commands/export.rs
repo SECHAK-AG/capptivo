@@ -9,10 +9,8 @@ use crate::error::{AppError, AppResult};
 use crate::export_h264::H264StreamMuxer;
 use crate::export_rawvideo::RawvideoStreamEncoder;
 use crate::recorder::encoder::{
-    attach_export_audio as run_attach_export_audio,
-    mux_export_audio as run_mux_export_audio,
-    prepare_export_audio as run_prepare_export_audio,
-    AudioEnhancePreset,
+    attach_export_audio as run_attach_export_audio, mux_export_audio as run_mux_export_audio,
+    prepare_export_audio as run_prepare_export_audio, AudioEnhancePreset,
 };
 use crate::state::{AppState, ExportSink};
 use std::io::{Seek, SeekFrom, Write};
@@ -304,11 +302,7 @@ pub fn abort_export(state: State<AppState>, handle: u64, reason: String) -> AppR
 /// Start ffmpeg reading Annex-B H.264 from IPC writes; output is a temp MP4
 /// promoted on [`finish_export_h264_stream`].
 #[tauri::command(async)]
-pub fn begin_export_h264_stream(
-    state: State<AppState>,
-    path: String,
-    fps: u32,
-) -> AppResult<u64> {
+pub fn begin_export_h264_stream(state: State<AppState>, path: String, fps: u32) -> AppResult<u64> {
     let final_path = PathBuf::from(path);
     let muxer = H264StreamMuxer::spawn(&final_path, fps)?;
     let mut next = state.next_export_id.lock();
@@ -521,15 +515,10 @@ fn volume_available_bytes_at(path: &Path) -> Option<u64> {
     use windows::core::PCWSTR;
     use windows::Win32::Storage::FileSystem::GetDiskFreeSpaceExW;
 
-    let wide: Vec<u16> = path
-        .as_os_str()
-        .encode_wide()
-        .chain([0])
-        .collect();
+    let wide: Vec<u16> = path.as_os_str().encode_wide().chain([0]).collect();
     let mut free = 0u64;
-    let ok = unsafe {
-        GetDiskFreeSpaceExW(PCWSTR(wide.as_ptr()), Some(&mut free), None, None).is_ok()
-    };
+    let ok =
+        unsafe { GetDiskFreeSpaceExW(PCWSTR(wide.as_ptr()), Some(&mut free), None, None).is_ok() };
     ok.then_some(free)
 }
 

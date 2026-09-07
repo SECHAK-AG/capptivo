@@ -274,12 +274,7 @@ pub fn scaled_capture_notice(native: (u32, u32), actual: (u32, u32)) -> Option<S
 
 /// What to tell the user when the hardware encoder refused the frame size and
 /// the take runs on `fallback` instead (see [`pick_for`]).
-pub fn software_fallback_notice(
-    width: u32,
-    height: u32,
-    refused: &str,
-    fallback: &str,
-) -> String {
+pub fn software_fallback_notice(width: u32, height: u32, refused: &str, fallback: &str) -> String {
     format!(
         "{width}×{height} is more than the {refused} hardware encoder accepts; recording with the {fallback} software encoder instead, which costs CPU and may drop frames."
     )
@@ -651,7 +646,10 @@ mod tests {
         // Same encoder, same pixel format, same plumbing — only the speed knob
         // moves, so everything the recorder assumes about libx264 still holds.
         assert_eq!(OVERSIZE_SOFTWARE_FALLBACK.name, SOFTWARE_FALLBACK.name);
-        assert_eq!(OVERSIZE_SOFTWARE_FALLBACK.pix_fmt, SOFTWARE_FALLBACK.pix_fmt);
+        assert_eq!(
+            OVERSIZE_SOFTWARE_FALLBACK.pix_fmt,
+            SOFTWARE_FALLBACK.pix_fmt
+        );
         assert_eq!(
             OVERSIZE_SOFTWARE_FALLBACK.pre_input_args,
             SOFTWARE_FALLBACK.pre_input_args
@@ -664,8 +662,11 @@ mod tests {
 
     #[test]
     fn probe_reports_a_spawn_failure_when_ffmpeg_is_missing() {
-        let err = probe(Path::new("/nonexistent/ffmpeg-for-test"), &SOFTWARE_FALLBACK)
-            .expect_err("a missing ffmpeg must not probe successfully");
+        let err = probe(
+            Path::new("/nonexistent/ffmpeg-for-test"),
+            &SOFTWARE_FALLBACK,
+        )
+        .expect_err("a missing ffmpeg must not probe successfully");
         assert!(
             matches!(err, ProbeFailure::FfmpegUnavailable(_)),
             "a missing binary is an install problem, not an encoder rejection: {err:?}"
