@@ -884,6 +884,68 @@ pub fn prepare_export_audio(
     }
 }
 
+/// Stream-copy the recording to `out_path` with no decode and no re-encode —
+/// the export dialog's "Original" fast path for takes with no edits. Video is
+/// copied bit-exact; audio is copied too, or re-encoded through the voice
+/// enhance chain when a preset is chosen (video stays untouched either way).
+///
+/// Works on the still-fragmented file as well: reading fMP4 and writing
+/// progressive MP4 is exactly what a remux is.
+pub fn passthrough_export(
+    screen_path: &Path,
+    out_path: &Path,
+    preset: AudioEnhancePreset,
+    has_system_audio: bool,
+) -> AppResult<()> {
+    if !screen_path.is_file() {
+        return Err(AppError::Encoder(
+            "passthrough export: missing screen recording".into(),
+        ));
+    }
+    let enhance = match build_enhance_chain(preset, has_system_audio) {
+        Some(chain) if mp4_has_audio_stream(screen_path) => Some(chain),
+        _ => None,
+    };
+    match run_passthrough(screen_path, out_path, enhance.as_deref()) {
+        Ok(()) => Ok(()),
+        Err(e) if enhance.is_some() => {
+            tracing::warn!(error = %e, "passthrough enhance failed; retrying with plain copy");
+            run_passthrough(screen_path, out_path, None)
+        }
+        Err(e) => Err(e),
+    }
+}
+
+fn run_passthrough(screen_path: &Path, out_path: &Path, enhance: Option<&str>) -> AppResult<()> {
+    let ffmpeg = ffmpeg_path();
+    let mut cmd = proc::command(&ffmpeg);
+    cmd.args(["-hide_banner", "-loglevel", "error", "-y", "-i"])
+        .arg(screen_path);
+    match enhance {
+        Some(chain) => {
+            let filter = format!("[0:a]{chain}[aout]");
+            cmd.args(["-map", "0:v:0", "-c:v", "copy"])
+                .args(["-filter_complex", &filter])
+                .args(["-map", "[aout]", "-c:a", "aac", "-b:a", "192k"]);
+        }
+        None => {
+            cmd.args(["-map", "0", "-c", "copy"]);
+        }
+    }
+    let status = cmd
+        .args(["-movflags", "+faststart"])
+        .arg(out_path)
+        .status()
+        .map_err(|e| AppError::Encoder(format!("passthrough export spawn failed: {e}")))?;
+    if !status.success() {
+        let _ = fs::remove_file(out_path);
+        return Err(AppError::Encoder(format!(
+            "passthrough export failed with {status}"
+        )));
+    }
+    Ok(())
+}
+
 /// Attach a previously prepared audio sidecar to a video-only export with
 /// stream copy on both tracks (no re-encode).
 pub fn attach_export_audio(video_path: &Path, audio_path: &Path) -> AppResult<()> {
@@ -1267,6 +1329,43 @@ mod tests {
         assert!(f.contains("[0:a]atrim="));
         assert!(f.contains("concat=n=1:v=0:a=1[ac]"));
         assert_eq!(map, "[ac]");
+    }
+
+    /// The "Original" export fast path: both the plain copy and the
+    /// voice-enhance variant must produce a real MP4 from a real recording.
+    #[test]
+    fn passthrough_copies_and_enhances_a_real_file() {
+        let ffmpeg = ffmpeg_path();
+        if proc::command(&ffmpeg).arg("-version").output().is_err() {
+            eprintln!("ffmpeg not found — skipping passthrough test");
+            return;
+        }
+        let dir = std::env::temp_dir().join(format!("capptivo-passthrough-{}", uuid::Uuid::new_v4()));
+        fs::create_dir_all(&dir).unwrap();
+        let src = dir.join("screen.mp4");
+
+        // 1s of video + tone, the same two-stream shape a real take has.
+        let make = proc::command(&ffmpeg)
+            .args([
+                "-hide_banner", "-loglevel", "error", "-y",
+                "-f", "lavfi", "-i", "testsrc=size=320x240:rate=30:duration=1",
+                "-f", "lavfi", "-i", "sine=frequency=440:duration=1",
+                "-c:v", "libx264", "-pix_fmt", "yuv420p", "-c:a", "aac",
+            ])
+            .arg(&src)
+            .status()
+            .unwrap();
+        assert!(make.success(), "failed to synthesize the source recording");
+
+        let plain = dir.join("plain.mp4");
+        passthrough_export(&src, &plain, AudioEnhancePreset::Off, false).unwrap();
+        assert!(fs::metadata(&plain).unwrap().len() > 1024, "copy produced a trivial file");
+
+        let enhanced = dir.join("enhanced.mp4");
+        passthrough_export(&src, &enhanced, AudioEnhancePreset::Podcast, false).unwrap();
+        assert!(fs::metadata(&enhanced).unwrap().len() > 1024, "enhance produced a trivial file");
+
+        let _ = fs::remove_dir_all(&dir);
     }
 
     #[test]

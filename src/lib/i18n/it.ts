@@ -86,6 +86,8 @@ export const it: Record<TranslationKey, string> = {
   "export.error.gpuContextLost": "Esportazione interrotta: il driver grafico si è resettato durante il rendering. Prova di nuovo.",
   "editor.previewGpuLost": "Anteprima interrotta: il driver grafico si è resettato. Riapri l’editor se non si ripristina.",
   "editor.gpuReloaded": "L’editor si è ricaricato dopo un reset grafico. Puoi esportare di nuovo.",
+  "editor.framesDropped":
+    "Questa registrazione ha perso {seconds} s di fotogrammi per carico di sistema — quei momenti appaiono bloccati. Chiudi le app pesanti durante la registrazione per evitarlo.",
   "export.dialog.title": "Esporta",
   "export.dialog.description":
     "Scegli formato, codifica, fotogrammi al secondo e tipo di file.",
@@ -103,7 +105,10 @@ export const it: Record<TranslationKey, string> = {
   "export.enhanceVoice.on": "On",
   "export.enhanceVoice.hint":
     "Riduce il rumore, comprime e livella la narrazione per un parlato più chiaro.",
-  "encoding.fast": "Veloce",
+  "export.passthrough": "Originale (il più veloce)",
+  "export.passthrough.hint":
+    "Copia la registrazione così com’è — senza stile, cursore o sovrapposizioni. Tagli e camera richiedono un’esportazione completa.",
+  "encoding.fast":"Veloce",
   "encoding.balanced": "Bilanciato",
   "encoding.quality": "Qualità",
 

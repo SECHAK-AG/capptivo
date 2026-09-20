@@ -84,6 +84,8 @@ export const ar: Record<TranslationKey, string> = {
   "export.error.gpuContextLost": "توقف التصدير: أعاد برنامج الرسوميات التعيين أثناء العرض. حاول التصدير مرة أخرى.",
   "editor.previewGpuLost": "توقفت المعاينة: أعاد برنامج الرسوميات التعيين. أعد فتح المحرر إن لم تتعافَ.",
   "editor.gpuReloaded": "أُعيد تحميل المحرر بعد إعادة تعيين الرسوميات. يمكنك التصدير مرة أخرى.",
+  "editor.framesDropped":
+    "فقد هذا التسجيل {seconds} ثانية من الإطارات بسبب حمل النظام — ستظهر تلك اللحظات كصورة ثابتة. أغلق التطبيقات الثقيلة أثناء التسجيل لتجنّب ذلك.",
   "export.dialog.title": "تصدير",
   "export.dialog.description":
     "اختر التنسيق والترميز ومعدل الإطارات ونوع الملف.",
@@ -101,7 +103,10 @@ export const ar: Record<TranslationKey, string> = {
   "export.enhanceVoice.on": "تشغيل",
   "export.enhanceVoice.hint":
     "إزالة الضوضاء وضغط وتسوية السرد لصوت أوضح.",
-  "encoding.fast": "سريع",
+  "export.passthrough": "الأصلي (الأسرع)",
+  "export.passthrough.hint":
+    "ينسخ التسجيل كما هو — بدون تنسيق أو مؤشر أو طبقات. القص والكاميرا يتطلبان تصديرًا كاملًا.",
+  "encoding.fast":"سريع",
   "encoding.balanced": "متوازن",
   "encoding.quality": "جودة",
 

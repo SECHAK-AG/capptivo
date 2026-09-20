@@ -90,6 +90,7 @@ export function CameraApp() {
   };
 
   useLayoutEffect(() => {
+    const video = videoRef.current;
     ensureCameraCaptureSubscribed();
     bindCameraCaptureApi({
       getDeviceId: () => deviceRef.current,
