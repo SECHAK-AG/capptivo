@@ -20,6 +20,8 @@
 import { annexBHardwareProbeOrder, type AnnexBHwMode } from "./exportRouting";
 import { ANNEX_B_CODEC, isAnnexBStartCode } from "./h264Keyframe";
 import { withDeadline } from "./exportStall";
+import { exportLog } from "./exportLog";
+import { logClientError } from "@/lib/errorLogging";
 
 /** Try High@L4.2 first (1080p60), then High@L4.0. */
 const ANNEX_B_CODEC_CANDIDATES = [ANNEX_B_CODEC, "avc1.640028"] as const;
@@ -116,17 +118,15 @@ async function verifyEncoder(
   bitrate: number,
   fps: number,
 ): Promise<{ ok: true } | { ok: false; reason: string }> {
-  let resolveFirstChunk: (chunk: EncodedVideoChunk) => void = () => undefined;
-  let rejectFirstChunk: (e: Error) => void = () => undefined;
-  const firstChunk = new Promise<EncodedVideoChunk>((resolve, reject) => {
-    resolveFirstChunk = resolve;
-    rejectFirstChunk = reject;
-  });
+  const chunks: EncodedVideoChunk[] = [];
+  let encoderError: unknown = null;
   // The encoder reports fatal errors out-of-band; without this the deadline
   // would be the only thing that ever notices, wasting the full timeout.
   const encoder = new VideoEncoder({
-    output: (chunk) => resolveFirstChunk(chunk),
-    error: (e) => rejectFirstChunk(e instanceof Error ? e : new Error(String(e))),
+    output: (chunk) => chunks.push(chunk),
+    error: (e) => {
+      encoderError = e instanceof Error ? e : new Error(String(e));
+    },
   });
 
   const frameDurationUs = Math.round(1_000_000 / Math.max(1, fps));
@@ -144,11 +144,24 @@ async function verifyEncoder(
       }
     }
 
-    const chunk = await withDeadline(
-      firstChunk,
+    await withDeadline(
+      encoder.flush(),
       ANNEX_B_PROBE_TIMEOUT_MS,
       `annex-b probe (${tuning.hardwareAcceleration}/${tuning.latencyMode})`,
     );
+    if (encoderError) {
+      return {
+        ok: false,
+        reason: encoderError instanceof Error ? encoderError.message : String(encoderError),
+      };
+    }
+    if (chunks.length < PROBE_FRAMES) {
+      return {
+        ok: false,
+        reason: `encoder emitted ${chunks.length}/${PROBE_FRAMES} chunks`,
+      };
+    }
+    const chunk = chunks[0]!;
     const bytes = new Uint8Array(chunk.byteLength);
     chunk.copyTo(bytes);
     if (!isAnnexBStartCode(bytes)) {
@@ -236,11 +249,15 @@ export async function probeAnnexBConfig(
             fps,
           );
           if (verdict.ok) {
-            console.info(`[export] Annex-B verified: ${label}`);
+            exportLog(`[export] Annex-B verified: ${label}`);
             return tuning;
           }
           rejected.push(`${label}: ${verdict.reason}`);
           console.warn(`[export] Annex-B rejected ${label} — ${verdict.reason}`);
+          logClientError(
+            "export:annexb-probe",
+            `rejected ${label} — ${verdict.reason}`,
+          );
         }
       }
     }

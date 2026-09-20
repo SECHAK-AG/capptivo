@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-discard-export-destination"
+description = "Enables the discard_export_destination command without any pre-configured scope."
+commands.allow = ["discard_export_destination"]
+
+[[permission]]
+identifier = "deny-discard-export-destination"
+description = "Denies the discard_export_destination command without any pre-configured scope."
+commands.deny = ["discard_export_destination"]

@@ -1,6 +1,6 @@
 /**
  * Runs every `src/**\/*.selfcheck.ts` and fails if any of them does.
- * Run: `node scripts/run-selfchecks.mjs` (or `pnpm test:selfcheck`)
+ * Run: `node scripts/run-selfchecks.mjs` (or `corepack pnpm test:selfcheck`)
  *
  * The repo's tests are dependency-free selfchecks: each file is a standalone
  * ES module that asserts at import time, prints `<name>.selfcheck: ok`, and

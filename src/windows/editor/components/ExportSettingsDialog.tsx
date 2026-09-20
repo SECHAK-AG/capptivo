@@ -10,6 +10,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Slider } from "@/components/ui/slider";
+import { Switch } from "@/components/ui/switch";
 import { cn } from "@/lib/utils";
 import { useI18n } from "@/lib/settings";
 import type { TranslationKey } from "@/lib/i18n";
@@ -33,6 +34,8 @@ import {
   loadLastExportSettings,
   saveLastExportSettings,
 } from "../lib/editorPresets";
+import { useEditorStore } from "../store";
+import { isPassthroughEligible } from "../export/passthrough";
 import { SectionLabel } from "./ui";
 
 const ENCODING_LABEL_KEY: Record<ExportEncoding, TranslationKey> = {
@@ -99,6 +102,24 @@ export function ExportSettingsDialog({
   // can never outrun the source.
   const aboveSource = !isGif && exceedsSourceFps(settings.fps, sourceFps);
 
+  // "Original" is only honest when nothing would be silently dropped: no cuts,
+  // zooms, blurs, captions, camera, or crop. Styling/cursor are the point of
+  // the option, so they don't disqualify it.
+  const passthroughEligible = useEditorStore((s) =>
+    isPassthroughEligible({
+      segments: s.segments,
+      duration: s.duration,
+      zoomFragments: s.zoomFragments,
+      blurRegions: s.blurRegions,
+      captions: s.captions,
+      cameraUrl: s.cameraUrl,
+      screenContentCrop: s.screenContentCrop,
+    }),
+  );
+  const showPassthrough =
+    settings.format === "mp4" && settings.container === "mp4" && passthroughEligible;
+  const passthrough = showPassthrough && settings.passthrough;
+
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="gap-6 border-border bg-card p-5 sm:max-w-md">
@@ -136,31 +157,38 @@ export function ExportSettingsDialog({
           </p>
         </div>
 
-        <Field label={isGif ? t("export.gifQuality") : t("export.encoding")}>
-          <PillGroup
-            value={settings.encoding}
-            onChange={(v) => patch("encoding", v)}
-            options={ENCODINGS.map((id) => ({ id, label: t(ENCODING_LABEL_KEY[id]) }))}
-          />
-        </Field>
+        {/* Encoding/fps are meaningless for a stream copy — dim them while
+            "Original" is on so the dialog doesn't imply otherwise. */}
+        <div
+          className={cn("space-y-6", passthrough && "pointer-events-none opacity-40")}
+          aria-disabled={passthrough}
+        >
+          <Field label={isGif ? t("export.gifQuality") : t("export.encoding")}>
+            <PillGroup
+              value={settings.encoding}
+              onChange={(v) => patch("encoding", v)}
+              options={ENCODINGS.map((id) => ({ id, label: t(ENCODING_LABEL_KEY[id]) }))}
+            />
+          </Field>
 
-        <Field label={t("export.fps")}>
-          <PillGroup
-            value={String(settings.fps)}
-            onChange={(v) => patch("fps", Number(v) as ExportFps)}
-            options={FPS_OPTIONS.map((fps) => ({
-              id: String(fps),
-              label: String(isGif ? gifFpsForPreset(fps) : fps),
-            }))}
-          />
-          {/* Say what a rate above the capture rate actually buys, rather than
-              clamping it away — overlay motion really does get smoother. */}
-          {aboveSource ? (
-            <p className="text-[11px] leading-snug text-muted-foreground">
-              {t("export.fps.aboveSource", { fps: sourceFps ?? 0 })}
-            </p>
-          ) : null}
-        </Field>
+          <Field label={t("export.fps")}>
+            <PillGroup
+              value={String(settings.fps)}
+              onChange={(v) => patch("fps", Number(v) as ExportFps)}
+              options={FPS_OPTIONS.map((fps) => ({
+                id: String(fps),
+                label: String(isGif ? gifFpsForPreset(fps) : fps),
+              }))}
+            />
+            {/* Say what a rate above the capture rate actually buys, rather than
+                clamping it away — overlay motion really does get smoother. */}
+            {aboveSource ? (
+              <p className="text-[11px] leading-snug text-muted-foreground">
+                {t("export.fps.aboveSource", { fps: sourceFps ?? 0 })}
+              </p>
+            ) : null}
+          </Field>
+        </div>
 
         {!isGif ? (
           <>
@@ -184,6 +212,20 @@ export function ExportSettingsDialog({
                 {t("export.enhanceVoice.hint")}
               </p>
             </Field>
+            {showPassthrough ? (
+              <Field label={t("export.passthrough")}>
+                <div className="flex items-center justify-between gap-3">
+                  <p className="text-[11px] leading-snug text-muted-foreground">
+                    {t("export.passthrough.hint")}
+                  </p>
+                  <Switch
+                    checked={settings.passthrough}
+                    onCheckedChange={(v) => patch("passthrough", v)}
+                    aria-label={t("export.passthrough")}
+                  />
+                </div>
+              </Field>
+            ) : null}
           </>
         ) : (
           <Field label={t("export.gifSpeed")}>

@@ -5,18 +5,18 @@
 //! lives in the domain modules, none of which import `tauri` except `commands`,
 //! `state`, `tray`, `windows`, and this file (§14).
 
-pub mod captions;
-mod capabilities;
-mod commands;
-mod proc;
-mod export_h264;
-mod export_rawvideo;
-mod webview_gpu;
 #[cfg(any(
     all(target_os = "macos", feature = "scap-capture"),
     all(target_os = "windows", feature = "wgc-capture")
 ))]
 mod area_picker;
+mod capabilities;
+pub mod captions;
+mod commands;
+mod export_h264;
+mod export_rawvideo;
+mod proc;
+mod webview_gpu;
 #[cfg(not(any(
     all(target_os = "macos", feature = "scap-capture"),
     all(target_os = "windows", feature = "wgc-capture")
@@ -165,14 +165,16 @@ pub fn run() {
 fn register_global_hotkey(app: &tauri::AppHandle) {
     use tauri_plugin_global_shortcut::GlobalShortcutExt;
 
-    let result = app.global_shortcut().on_shortcut(RECORDER_HOTKEY, |app, _shortcut, event| {
-        // Fire once, on key-down.
-        if event.state() == tauri_plugin_global_shortcut::ShortcutState::Pressed {
-            if let Err(e) = windows::toggle_recorder_popover(app) {
-                tracing::warn!(%e, "hotkey: failed to toggle recorder popover");
+    let result = app
+        .global_shortcut()
+        .on_shortcut(RECORDER_HOTKEY, |app, _shortcut, event| {
+            // Fire once, on key-down.
+            if event.state() == tauri_plugin_global_shortcut::ShortcutState::Pressed {
+                if let Err(e) = windows::toggle_recorder_popover(app) {
+                    tracing::warn!(%e, "hotkey: failed to toggle recorder popover");
+                }
             }
-        }
-    });
+        });
     if let Err(e) = result {
         tracing::warn!(%e, hotkey = RECORDER_HOTKEY, "failed to register global hotkey");
     }
@@ -186,7 +188,7 @@ fn init_tracing() {
     let env = std::env::var("RUST_LOG").unwrap_or_else(|_| "info,desktop_lib=debug".into());
     let console_filter = EnvFilter::new(&env);
 
-    // Console details remain separate from the code-only persistent layer
+    // Console keeps detail; ErrorFileLayer persists allowlisted codes only (no event text).
     let _ = tracing_subscriber::registry()
         .with(fmt::layer().with_target(false).with_filter(console_filter))
         .with(crate::error_log::ErrorFileLayer)

@@ -25,7 +25,8 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use windows::Win32::Graphics::Gdi::HMONITOR;
-use windows_capture::capture::{Context, GraphicsCaptureApiHandler};
+use windows_capture::capture::{Context, GraphicsCaptureApiError, GraphicsCaptureApiHandler};
+use windows_capture::d3d11::Error as DirectXError;
 use windows_capture::frame::Frame;
 use windows_capture::graphics_capture_api::{GraphicsCaptureApi, InternalCaptureControl};
 use windows_capture::monitor::Monitor;
@@ -37,6 +38,21 @@ use windows_capture::window::Window;
 
 /// Sources smaller than this are noise (tooltips, hidden helpers), not targets.
 const MIN_WINDOW_SIDE: i32 = 96;
+
+fn map_wgc_start_error<E: std::fmt::Display>(error: GraphicsCaptureApiError<E>) -> AppError {
+    match error {
+        GraphicsCaptureApiError::DirectXError(DirectXError::FeatureLevelNotSatisfied) => {
+            AppError::Other(
+                "failed to start Windows capture: this capture backend requires Direct3D feature \
+                 level 11_0 or later on the hardware adapter Windows selects by default. The \
+                 selected adapter returned a lower level. Ensure a compatible graphics driver is \
+                 installed and enabled, or use compatible graphics hardware"
+                    .into(),
+            )
+        }
+        error => AppError::Other(format!("failed to start WGC capture: {error}")),
+    }
+}
 
 pub struct WgcBackend;
 
@@ -67,12 +83,12 @@ impl CaptureBackend for WgcBackend {
 
         let mut sources = Vec::new();
 
-        let primary = Monitor::primary().ok().map(|m| m.as_raw_hmonitor() as isize);
+        let primary = Monitor::primary()
+            .ok()
+            .map(|m| m.as_raw_hmonitor() as isize);
         for monitor in Monitor::enumerate().map_err(|e| AppError::Other(e.to_string()))? {
             let id = monitor.as_raw_hmonitor() as isize;
-            let title = monitor
-                .name()
-                .unwrap_or_else(|_| format!("Display {id}"));
+            let title = monitor.name().unwrap_or_else(|_| format!("Display {id}"));
             let width = monitor.width().unwrap_or(0);
             let height = monitor.height().unwrap_or(0);
             let preview = if include_thumbnails {
@@ -98,10 +114,7 @@ impl CaptureBackend for WgcBackend {
             if title.trim().is_empty() {
                 continue;
             }
-            let (w, h) = (
-                window.width().unwrap_or(0),
-                window.height().unwrap_or(0),
-            );
+            let (w, h) = (window.width().unwrap_or(0), window.height().unwrap_or(0));
             if w < MIN_WINDOW_SIDE || h < MIN_WINDOW_SIDE {
                 continue;
             }
@@ -167,13 +180,12 @@ impl CaptureBackend for WgcBackend {
         };
         // MinUpdateInterval is Win11 24H2+ (build ≥ 26100); Custom fails the
         // whole session on older builds. FramePacer still enforces target fps.
-        let min_interval = if GraphicsCaptureApi::is_minimum_update_interval_supported()
-            .unwrap_or(false)
-        {
-            MinimumUpdateIntervalSettings::Custom(Duration::from_secs_f64(1.0 / f64::from(fps)))
-        } else {
-            MinimumUpdateIntervalSettings::Default
-        };
+        let min_interval =
+            if GraphicsCaptureApi::is_minimum_update_interval_supported().unwrap_or(false) {
+                MinimumUpdateIntervalSettings::Custom(Duration::from_secs_f64(1.0 / f64::from(fps)))
+            } else {
+                MinimumUpdateIntervalSettings::Default
+            };
 
         let control = match target {
             Target::Monitor(monitor) => FrameForwarder::start_free_threaded(Settings::new(
@@ -197,7 +209,7 @@ impl CaptureBackend for WgcBackend {
                 flags,
             )),
         }
-        .map_err(|e| AppError::Other(format!("failed to start WGC capture: {e}")))?;
+        .map_err(map_wgc_start_error)?;
 
         // First frame carries the exact output size (crop-adjusted) plus the
         // timestamp epoch the forwarder anchored at session start.
@@ -357,9 +369,7 @@ struct ForwarderFlags {
 /// `std::time::Instant` on Windows. Reading it next to an `Instant::now()`
 /// anchors the two time axes. Returns 0 if QPC is unavailable.
 fn qpc_now_100ns() -> i64 {
-    use windows::Win32::System::Performance::{
-        QueryPerformanceCounter, QueryPerformanceFrequency,
-    };
+    use windows::Win32::System::Performance::{QueryPerformanceCounter, QueryPerformanceFrequency};
     let mut counts = 0i64;
     let mut freq = 0i64;
     unsafe {
@@ -535,5 +545,37 @@ impl GraphicsCaptureApiHandler for FrameForwarder {
         // Captured window closed: dropping the sender disconnects the channel,
         // which ends the encode loop cleanly with whatever was recorded.
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn feature_level_failure_names_requirement_and_remediation() {
+        let error =
+            GraphicsCaptureApiError::<String>::DirectXError(DirectXError::FeatureLevelNotSatisfied);
+
+        assert_eq!(
+            map_wgc_start_error(error).to_string(),
+            "failed to start Windows capture: this capture backend requires Direct3D feature \
+             level 11_0 or later on the hardware adapter Windows selects by default. The selected \
+             adapter returned a lower level. Ensure a compatible graphics driver is installed and \
+             enabled, or use compatible graphics hardware"
+        );
+    }
+
+    #[test]
+    fn other_directx_failure_keeps_dependency_error() {
+        let error = GraphicsCaptureApiError::<String>::DirectXError(
+            DirectXError::UnexpectedNullResult("an ID3D11Device"),
+        );
+
+        assert_eq!(
+            map_wgc_start_error(error).to_string(),
+            "failed to start WGC capture: DirectX error: Windows API succeeded but did not return \
+             an ID3D11Device"
+        );
     }
 }

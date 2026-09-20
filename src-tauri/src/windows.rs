@@ -109,6 +109,8 @@ const LAYOUT_ALERT_H: f64 = 120.0;
 const LAYOUT_HUD: (f64, f64) = (448.0, 56.0);
 /// Collapsed HUD chip (grip + REC + timer + expand).
 const LAYOUT_HUD_MINI: (f64, f64) = (196.0, 48.0);
+/// Live HUD with a temporary non-fatal recording notice
+const LAYOUT_HUD_NOTICE: (f64, f64) = (448.0, 128.0);
 /// Countdown badge (centered on the primary display).
 /// Must stay square — a wide leftover setup width makes the digit look
 /// top/bottom-cramped with huge side gaps.
@@ -123,6 +125,7 @@ enum RecorderLayout {
     Alert,
     Hud,
     HudMini,
+    HudNotice,
     Countdown,
 }
 
@@ -132,6 +135,7 @@ impl RecorderLayout {
             "alert" => Self::Alert,
             "hud" => Self::Hud,
             "hud-mini" => Self::HudMini,
+            "hud-notice" => Self::HudNotice,
             "countdown" => Self::Countdown,
             _ => Self::Setup,
         }
@@ -143,6 +147,7 @@ impl RecorderLayout {
             Self::Alert => LAYOUT_ALERT_H,
             Self::Hud => LAYOUT_HUD.1,
             Self::HudMini => LAYOUT_HUD_MINI.1,
+            Self::HudNotice => LAYOUT_HUD_NOTICE.1,
             Self::Countdown => LAYOUT_COUNTDOWN.1,
         }
     }
@@ -156,6 +161,7 @@ impl RecorderLayout {
             Self::Alert => (LAYOUT_SETUP_W_FALLBACK, LAYOUT_ALERT_H),
             Self::Hud => LAYOUT_HUD,
             Self::HudMini => LAYOUT_HUD_MINI,
+            Self::HudNotice => LAYOUT_HUD_NOTICE,
             Self::Countdown => LAYOUT_COUNTDOWN,
         };
         tauri::LogicalSize::new(w, h)
@@ -257,7 +263,10 @@ fn bar_edges(win: &tauri::WebviewWindow) -> tauri::Result<(f64, f64)> {
         return Ok((rect.y + y, rect.y + y + h));
     }
     let chrome = geometry().layout.chrome_height();
-    Ok((rect.bottom() - chrome - RECORDER_BOTTOM_MARGIN, rect.bottom() - RECORDER_BOTTOM_MARGIN))
+    Ok((
+        rect.bottom() - chrome - RECORDER_BOTTOM_MARGIN,
+        rect.bottom() - RECORDER_BOTTOM_MARGIN,
+    ))
 }
 
 /// Move + resize the recorder as a **single** window-server update.
@@ -454,7 +463,8 @@ fn set_follows_spaces(_win: &tauri::WebviewWindow, _follows: bool) {}
 /// Annotation is deliberately omitted — ink is meant to land in the recording.
 /// Area frame is chrome (crop guide), never content. Editor / library are never
 /// listed (title-based matching used to collide with the HUD's `"Capptivo"`
-/// title and black out fullscreen shells).
+/// title and black out fullscreen shells). Invisible exclusion requires Windows
+/// 10 version 2004, build 19041 or later.
 #[cfg(any(target_os = "macos", target_os = "windows"))]
 const CAPTURE_EXCLUDED_LABELS: &[&str] = &[RECORDER_LABEL, CAMERA_LABEL, "area-frame"];
 
@@ -484,28 +494,51 @@ pub fn overlay_cgwindow_ids(app: &AppHandle) -> Vec<u32> {
 }
 
 #[cfg(target_os = "windows")]
-pub fn set_capture_exclusion(app: &AppHandle, excluded: bool) {
+pub fn enable_capture_exclusion(app: &AppHandle) -> tauri::Result<()> {
     use windows::Win32::UI::WindowsAndMessaging::{WDA_EXCLUDEFROMCAPTURE, WDA_NONE};
 
-    let affinity = if excluded {
-        WDA_EXCLUDEFROMCAPTURE
-    } else {
-        WDA_NONE
-    };
+    let mut excluded_windows = Vec::with_capacity(CAPTURE_EXCLUDED_LABELS.len());
     for label in CAPTURE_EXCLUDED_LABELS {
         let Some(win) = app.get_webview_window(label) else {
             continue;
         };
-        apply_display_affinity(&win, affinity, label);
+        if let Err(e) = apply_display_affinity(&win, WDA_EXCLUDEFROMCAPTURE, label) {
+            for (excluded_label, excluded_window) in excluded_windows {
+                if let Err(reset_error) =
+                    apply_display_affinity(&excluded_window, WDA_NONE, excluded_label)
+                {
+                    tracing::warn!(
+                        %reset_error,
+                        label = excluded_label,
+                        "failed to roll back capture exclusion"
+                    );
+                }
+            }
+            return Err(e);
+        }
+        excluded_windows.push((*label, win));
+    }
+    Ok(())
+}
+
+#[cfg(target_os = "windows")]
+pub fn clear_capture_exclusion(app: &AppHandle) {
+    use windows::Win32::UI::WindowsAndMessaging::WDA_NONE;
+
+    for label in CAPTURE_EXCLUDED_LABELS {
+        let Some(win) = app.get_webview_window(label) else {
+            continue;
+        };
+        if let Err(e) = apply_display_affinity(&win, WDA_NONE, label) {
+            tracing::warn!(%e, label, "failed to clear capture exclusion");
+        }
     }
 }
 
-/// Mark one overlay HWND as capture-excluded. Used when chrome is shown after
-/// `set_capture_exclusion(true)` already ran (area frame after record start).
 #[cfg(target_os = "windows")]
-pub fn exclude_overlay_from_capture(win: &tauri::WebviewWindow) {
+fn exclude_overlay_from_capture(win: &tauri::WebviewWindow) -> tauri::Result<()> {
     use windows::Win32::UI::WindowsAndMessaging::WDA_EXCLUDEFROMCAPTURE;
-    apply_display_affinity(win, WDA_EXCLUDEFROMCAPTURE, "overlay");
+    apply_display_affinity(win, WDA_EXCLUDEFROMCAPTURE, win.label())
 }
 
 #[cfg(target_os = "windows")]
@@ -513,31 +546,77 @@ fn apply_display_affinity(
     win: &tauri::WebviewWindow,
     affinity: windows::Win32::UI::WindowsAndMessaging::WINDOW_DISPLAY_AFFINITY,
     label: &str,
-) {
+) -> tauri::Result<()> {
     use windows::Win32::Foundation::HWND;
     use windows::Win32::UI::WindowsAndMessaging::SetWindowDisplayAffinity;
 
-    let Ok(hwnd) = win.hwnd() else {
-        return;
-    };
+    let hwnd = win.hwnd().map_err(|e| {
+        tauri::Error::Anyhow(anyhow::anyhow!(
+            "failed to access the `{label}` window handle: {e}"
+        ))
+    })?;
     let hwnd = HWND(hwnd.0 as *mut std::ffi::c_void);
-    if let Err(e) = unsafe { SetWindowDisplayAffinity(hwnd, affinity) } {
-        tracing::warn!(%e, label, "failed to set capture exclusion");
-    }
+    unsafe { SetWindowDisplayAffinity(hwnd, affinity) }.map_err(|e| {
+        tauri::Error::Anyhow(anyhow::anyhow!(
+            "failed to set display affinity for `{label}`: {e}"
+        ))
+    })
 }
 
 #[cfg(not(target_os = "windows"))]
-pub fn set_capture_exclusion(_app: &AppHandle, _excluded: bool) {}
+pub fn enable_capture_exclusion(_app: &AppHandle) -> tauri::Result<()> {
+    Ok(())
+}
 
 #[cfg(not(target_os = "windows"))]
-pub fn exclude_overlay_from_capture(_win: &tauri::WebviewWindow) {}
+pub fn clear_capture_exclusion(_app: &AppHandle) {}
 
-/// Whether a recording is currently active (used to apply capture exclusion to
-/// overlay windows created mid-recording, e.g. the camera bubble).
-fn recording_active(app: &AppHandle) -> bool {
-    app.try_state::<crate::state::AppState>()
-        .map(|s| s.recorder.state().is_active())
-        .unwrap_or(false)
+/// Show recorder chrome only after its Windows capture exclusion is active.
+/// Holding `current_project` through both operations orders late windows before
+/// the final affinity reset in `stop_recording`.
+#[cfg(target_os = "windows")]
+pub(crate) fn show_capture_overlay(
+    app: &AppHandle,
+    win: &tauri::WebviewWindow,
+) -> tauri::Result<()> {
+    let Some(state) = app.try_state::<crate::state::AppState>() else {
+        return win.show();
+    };
+    let current_project = state.current_project.lock();
+    let captures_display = current_project
+        .as_ref()
+        .map(|project| project.config.source_id.starts_with("display:"))
+        .unwrap_or(false);
+    if !captures_display {
+        return win.show();
+    }
+
+    if let Err(e) = exclude_overlay_from_capture(win) {
+        let _ = win.hide();
+        return Err(e);
+    }
+    if let Err(e) = win.show() {
+        use windows::Win32::UI::WindowsAndMessaging::WDA_NONE;
+        if let Err(reset_error) = apply_display_affinity(win, WDA_NONE, win.label()) {
+            tracing::warn!(
+                %reset_error,
+                label = win.label(),
+                "failed to clear capture exclusion after show failed"
+            );
+        }
+        let _ = win.hide();
+        return Err(e);
+    }
+    drop(current_project);
+    Ok(())
+}
+
+#[cfg(not(target_os = "windows"))]
+pub(crate) fn show_capture_overlay(
+    _app: &AppHandle,
+    win: &tauri::WebviewWindow,
+) -> tauri::Result<()> {
+    win.show()
 }
 
 fn pin_to_all_spaces_if_shown(win: &tauri::WebviewWindow) {
@@ -560,8 +639,7 @@ static DOCK_REGULAR: AtomicBool = AtomicBool::new(false);
 fn wants_dock_presence(app: &AppHandle, except: Option<&str>) -> bool {
     app.webview_windows().keys().any(|label| {
         let label = label.as_str();
-        Some(label) != except
-            && (label == LIBRARY_LABEL || label.starts_with(EDITOR_LABEL_PREFIX))
+        Some(label) != except && (label == LIBRARY_LABEL || label.starts_with(EDITOR_LABEL_PREFIX))
     })
 }
 
@@ -923,7 +1001,7 @@ pub fn restore_recorder_setup_layout(app: &AppHandle) -> tauri::Result<()> {
     Ok(())
 }
 
-/// Resize the recorder window: `setup` | `alert` | `hud` | `hud-mini` |
+/// Resize the recorder window: `setup` | `alert` | `hud` | `hud-mini` | `hud-notice` |
 /// `countdown`. Setup/alert cover the monitor work area so the pill can
 /// CSS-drag and popovers can flip inside the window — never a per-drag resize.
 #[tauri::command]
@@ -1312,7 +1390,7 @@ pub fn show_recorder_popover(app: &AppHandle) -> tauri::Result<()> {
             }
         }
         set_follows_spaces(&win, true);
-        win.show()?;
+        show_capture_overlay(app, &win)?;
         win.set_focus()?;
         if geometry().layout.is_setup_bar() {
             ensure_setup_click_through(app.clone());
@@ -1368,7 +1446,7 @@ fn create_recorder_popover(app: &AppHandle) -> tauri::Result<()> {
     .build()?;
     apply_setup_overlay(app, &win)?;
     set_follows_spaces(&win, true);
-    win.show()?;
+    show_capture_overlay(app, &win)?;
     win.set_focus()?;
     ensure_setup_click_through(app.clone());
     let _ = app.emit("recorder://shown", ());
@@ -1409,7 +1487,7 @@ pub fn show_camera_preview(app: AppHandle, device_id: String) -> tauri::Result<(
         }
         let _ = win.set_content_protected(false);
         set_follows_spaces(&win, true);
-        win.show()?;
+        show_capture_overlay(&app, &win)?;
         return Ok(());
     }
 
@@ -1432,14 +1510,11 @@ fn create_camera_preview_window(app: &AppHandle, device_id: &str) -> tauri::Resu
         let _ = win.emit(CAMERA_DEVICE_EVENT, device_id);
         let _ = win.set_content_protected(false);
         set_follows_spaces(&win, true);
-        win.show()?;
+        show_capture_overlay(app, &win)?;
         return Ok(());
     }
 
-    let url = format!(
-        "camera.html?device={}",
-        urlencoding_minimal(device_id)
-    );
+    let url = format!("camera.html?device={}", urlencoding_minimal(device_id));
     let (x, y) = camera_default_position(app);
     let win = crate::webview_gpu::apply_gpu_args(
         WebviewWindowBuilder::new(app, CAMERA_LABEL, WebviewUrl::App(url.into()))
@@ -1462,12 +1537,7 @@ fn create_camera_preview_window(app: &AppHandle, device_id: &str) -> tauri::Resu
     .build()?;
     let _ = win.set_content_protected(false);
     set_follows_spaces(&win, true);
-    win.show()?;
-    // Bubble opened mid-recording: apply the Windows capture opt-out now
-    // (recordings started later re-apply it to all overlay chrome).
-    if recording_active(app) {
-        set_capture_exclusion(app, true);
-    }
+    show_capture_overlay(app, &win)?;
     Ok(())
 }
 
@@ -1505,7 +1575,7 @@ pub fn set_camera_preview_visible(app: AppHandle, visible: bool) -> tauri::Resul
     if let Some(win) = app.get_webview_window(CAMERA_LABEL) {
         if visible {
             set_follows_spaces(&win, true);
-            win.show()?;
+            show_capture_overlay(&app, &win)?;
         } else {
             set_follows_spaces(&win, false);
             win.hide()?;
@@ -1632,18 +1702,20 @@ fn arm_annotation_escape(app: &AppHandle) {
         return;
     }
     use tauri_plugin_global_shortcut::{GlobalShortcutExt, ShortcutState};
-    let result = app.global_shortcut().on_shortcut(ANNOTATION_ESCAPE_HOTKEY, |app, _, event| {
-        if event.state() != ShortcutState::Pressed {
-            return;
-        }
-        let Some(win) = app.get_webview_window(ANNOTATION_LABEL) else {
-            return;
-        };
-        if !win.is_visible().unwrap_or(false) {
-            return;
-        }
-        let _ = app.emit(ANNOTATION_ESCAPE_EVENT, ());
-    });
+    let result = app
+        .global_shortcut()
+        .on_shortcut(ANNOTATION_ESCAPE_HOTKEY, |app, _, event| {
+            if event.state() != ShortcutState::Pressed {
+                return;
+            }
+            let Some(win) = app.get_webview_window(ANNOTATION_LABEL) else {
+                return;
+            };
+            if !win.is_visible().unwrap_or(false) {
+                return;
+            }
+            let _ = app.emit(ANNOTATION_ESCAPE_EVENT, ());
+        });
     if let Err(e) = result {
         ANNOTATION_ESCAPE_ARMED.store(false, Ordering::SeqCst);
         tracing::warn!(%e, "failed to register annotation Escape hotkey");
@@ -2032,12 +2104,7 @@ fn build_editor_window(
 /// Focus an existing editor/library window, or schedule creation off the caller
 /// stack. New WebViews must never be built inside a sync IPC invoke from another
 /// WebView (Windows WebView2 blank/abort) — see [`defer_on_ui`].
-fn ensure_editor_window(
-    app: &AppHandle,
-    label: &str,
-    url: &str,
-    title: &str,
-) -> tauri::Result<()> {
+fn ensure_editor_window(app: &AppHandle, label: &str, url: &str, title: &str) -> tauri::Result<()> {
     if let Some(win) = app.get_webview_window(label) {
         return present_on_active_monitor(app, &win);
     }
@@ -2127,6 +2194,21 @@ pub fn close_editor_if_open(app: &AppHandle, project_id: &str) {
     let label = format!("{EDITOR_LABEL_PREFIX}{project_id}");
     if let Some(win) = app.get_webview_window(&label) {
         let _ = win.close();
+    }
+}
+
+#[cfg(test)]
+mod recorder_layout_tests {
+    use super::{RecorderLayout, LAYOUT_HUD_NOTICE};
+
+    #[test]
+    fn hud_notice_is_a_compact_docked_layout() {
+        let layout = RecorderLayout::parse("hud-notice");
+        let size = layout.size();
+        assert!(layout == RecorderLayout::HudNotice);
+        assert_eq!(size.width, LAYOUT_HUD_NOTICE.0);
+        assert_eq!(size.height, LAYOUT_HUD_NOTICE.1);
+        assert!(!layout.is_setup_bar());
     }
 }
 

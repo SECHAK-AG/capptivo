@@ -612,7 +612,7 @@ export function PreviewStage({
       host.replaceChildren();
       releasePreviewGpu();
     };
-  }, []);
+  }, [videoRef]);
 
   useEffect(() => {
     const comp = compositorRef.current;
@@ -659,14 +659,14 @@ export function PreviewStage({
     if (isPlaying)
       video.play().catch(() => useEditorStore.getState().setPlaying(false));
     else video.pause();
-  }, [isPlaying, playbackUrl]);
+  }, [isPlaying, playbackUrl, videoRef]);
 
   useEffect(() => {
     const video = videoRef.current;
     if (!video) return;
     video.muted = muted;
     video.volume = Math.max(0, Math.min(1, volume / 100));
-  }, [muted, volume]);
+  }, [muted, volume, videoRef]);
 
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
@@ -694,7 +694,7 @@ export function PreviewStage({
       // `currentTime` change always schedules one — two writers reading the
       // clock from different places is what let a seek pull the cam both ways.
     });
-  }, []);
+  }, [videoRef]);
 
   return (
     <div className="flex h-full min-h-0 w-full flex-col gap-3 overflow-hidden p-4">

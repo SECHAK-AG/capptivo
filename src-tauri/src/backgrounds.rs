@@ -68,14 +68,14 @@ pub fn list(app_data: &Path) -> AppResult<Vec<CustomBackground>> {
         let Some(id) = parse_id(file_name) else {
             continue;
         };
-        let modified = entry
-            .metadata()
-            .and_then(|m| m.modified())
-            .ok();
-        out.push((modified, CustomBackground {
-            id,
-            file_name: file_name.to_string(),
-        }));
+        let modified = entry.metadata().and_then(|m| m.modified()).ok();
+        out.push((
+            modified,
+            CustomBackground {
+                id,
+                file_name: file_name.to_string(),
+            },
+        ));
     }
     // Newest first so a just-uploaded swatch sits near the +.
     out.sort_by(|a, b| b.0.cmp(&a.0));
@@ -93,7 +93,9 @@ pub fn delete(app_data: &Path, id: &str) -> AppResult<()> {
             return Ok(());
         }
     }
-    Err(AppError::Other(format!("custom background not found: {id}")))
+    Err(AppError::Other(format!(
+        "custom background not found: {id}"
+    )))
 }
 
 fn normalize_ext(raw: &str) -> AppResult<&'static str> {

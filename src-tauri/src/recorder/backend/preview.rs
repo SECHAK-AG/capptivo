@@ -44,7 +44,8 @@ pub fn encode_bgra(raw: &[u8], width: u32, height: u32, stride: usize) -> Option
 
     let buf: RgbaImage = ImageBuffer::from_raw(tw, th, rgba)?;
     let mut out = Vec::new();
-    buf.write_to(&mut Cursor::new(&mut out), ImageFormat::Png).ok()?;
+    buf.write_to(&mut Cursor::new(&mut out), ImageFormat::Png)
+        .ok()?;
     Some(SourcePreview {
         png_base64: STANDARD.encode(out),
     })

@@ -11,23 +11,31 @@ export class ExportCancelledError extends Error {
   }
 }
 
-let active: AbortController | null = null;
+let active: { id: number; controller: AbortController } | null = null;
+let nextId = 1;
+
+export type ExportAbortSession = {
+  id: number;
+  signal: AbortSignal;
+};
 
 /** Start a new export session; returns the signal the loops must honor. */
-export function beginExportAbort(): AbortSignal {
-  active?.abort();
-  active = new AbortController();
-  return active.signal;
+export function beginExportAbort(): ExportAbortSession {
+  active?.controller.abort();
+  const controller = new AbortController();
+  const session = { id: nextId++, controller };
+  active = session;
+  return { id: session.id, signal: controller.signal };
 }
 
 /** User Cancel — no-op if nothing is exporting. */
 export function cancelActiveExport(): void {
-  active?.abort();
+  active?.controller.abort();
 }
 
 /** Drop the session handle once the export try/finally finishes. */
-export function endExportAbort(): void {
-  active = null;
+export function endExportAbort(id: number): void {
+  if (active?.id === id) active = null;
 }
 
 export function throwIfAborted(signal: AbortSignal): void {

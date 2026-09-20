@@ -141,6 +141,8 @@ export type FrameCompositor = {
     force?: boolean,
   ): "pending" | "done" | "failed";
   backend: "pixi";
+  /** Pixi renderer backend used for this session. */
+  gpu: "webgl" | "webgpu";
   resize(
     width: number,
     height: number,
