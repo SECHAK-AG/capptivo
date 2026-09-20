@@ -8,8 +8,7 @@ import { X } from "lucide-react";
 import { useI18n } from "@/lib/settings";
 import { cn } from "@/lib/utils";
 import { useRecorderStore } from "./store";
-
-const DISMISS_MS = 6000;
+import { recorderErrorDismissDelay } from "./recorderErrorPresentation";
 /** Sit above the dock + recorder bar (bar ~56px + margin). */
 const TOAST_BOTTOM_PX = 88;
 
@@ -32,15 +31,20 @@ export function RecorderBarAnchor({ children }: { children: ReactNode }) {
 export function RecorderErrorToast({ className }: { className?: string }) {
   const { t } = useI18n();
   const error = useRecorderStore((s) => s.lastError);
+  const status = useRecorderStore((s) => s.state.status);
   const clear = () => useRecorderStore.setState({ lastError: null });
+  const live =
+    status === "recording" || status === "paused" || status === "finalizing";
 
   useEffect(() => {
-    if (!error?.trim()) return;
-    const id = window.setTimeout(clear, DISMISS_MS);
+    if (!error?.message.trim()) return;
+    const delay = recorderErrorDismissDelay(error);
+    if (delay === null) return;
+    const id = window.setTimeout(clear, delay);
     return () => window.clearTimeout(id);
   }, [error]);
 
-  if (!error?.trim()) return null;
+  if (!error?.message.trim() || (live && !error.fatal)) return null;
 
   return (
     <div
@@ -51,7 +55,7 @@ export function RecorderErrorToast({ className }: { className?: string }) {
         className,
       )}
     >
-      <p className="min-w-0 flex-1 break-words">{error}</p>
+      <p className="min-w-0 flex-1 break-words">{error.message}</p>
       <button
         type="button"
         aria-label={t("recorder.error.dismiss")}

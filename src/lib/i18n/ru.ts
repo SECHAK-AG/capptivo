@@ -85,6 +85,8 @@ export const ru: Record<TranslationKey, string> = {
   "export.error.gpuContextLost": "Экспорт остановлен: графический драйвер сбросился во время рендера. Попробуйте снова.",
   "editor.previewGpuLost": "Превью остановлено: графический драйвер сбросился. Откройте редактор снова, если оно не восстановится.",
   "editor.gpuReloaded": "Редактор перезагрузился после сброса графики. Можно экспортировать снова.",
+  "editor.framesDropped":
+    "В этой записи из-за нагрузки на систему потеряно {seconds} с кадров — эти моменты выглядят как зависание. Закрывайте тяжёлые приложения во время записи.",
   "export.dialog.title": "Экспорт",
   "export.dialog.description": "Выберите формат, кодирование, частоту кадров и тип файла.",
   "export.format": "Формат",
@@ -101,7 +103,10 @@ export const ru: Record<TranslationKey, string> = {
   "export.enhanceVoice.on": "Вкл.",
   "export.enhanceVoice.hint":
     "Шумоподавление, компрессия и выравнивание уровня для более чистой речи.",
-  "encoding.fast": "Быстро",
+  "export.passthrough": "Оригинал (быстрее всего)",
+  "export.passthrough.hint":
+    "Копирует запись как есть — без стиля, курсора и оверлеев. Склейки и камера требуют полного экспорта.",
+  "encoding.fast":"Быстро",
   "encoding.balanced": "Баланс",
   "encoding.quality": "Качество",
 

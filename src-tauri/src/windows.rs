@@ -109,6 +109,8 @@ const LAYOUT_ALERT_H: f64 = 120.0;
 const LAYOUT_HUD: (f64, f64) = (448.0, 56.0);
 /// Collapsed HUD chip (grip + REC + timer + expand).
 const LAYOUT_HUD_MINI: (f64, f64) = (196.0, 48.0);
+/// Live HUD with a temporary non-fatal recording notice
+const LAYOUT_HUD_NOTICE: (f64, f64) = (448.0, 128.0);
 /// Countdown badge (centered on the primary display).
 /// Must stay square — a wide leftover setup width makes the digit look
 /// top/bottom-cramped with huge side gaps.
@@ -123,6 +125,7 @@ enum RecorderLayout {
     Alert,
     Hud,
     HudMini,
+    HudNotice,
     Countdown,
 }
 
@@ -132,6 +135,7 @@ impl RecorderLayout {
             "alert" => Self::Alert,
             "hud" => Self::Hud,
             "hud-mini" => Self::HudMini,
+            "hud-notice" => Self::HudNotice,
             "countdown" => Self::Countdown,
             _ => Self::Setup,
         }
@@ -143,6 +147,7 @@ impl RecorderLayout {
             Self::Alert => LAYOUT_ALERT_H,
             Self::Hud => LAYOUT_HUD.1,
             Self::HudMini => LAYOUT_HUD_MINI.1,
+            Self::HudNotice => LAYOUT_HUD_NOTICE.1,
             Self::Countdown => LAYOUT_COUNTDOWN.1,
         }
     }
@@ -156,6 +161,7 @@ impl RecorderLayout {
             Self::Alert => (LAYOUT_SETUP_W_FALLBACK, LAYOUT_ALERT_H),
             Self::Hud => LAYOUT_HUD,
             Self::HudMini => LAYOUT_HUD_MINI,
+            Self::HudNotice => LAYOUT_HUD_NOTICE,
             Self::Countdown => LAYOUT_COUNTDOWN,
         };
         tauri::LogicalSize::new(w, h)
@@ -257,7 +263,10 @@ fn bar_edges(win: &tauri::WebviewWindow) -> tauri::Result<(f64, f64)> {
         return Ok((rect.y + y, rect.y + y + h));
     }
     let chrome = geometry().layout.chrome_height();
-    Ok((rect.bottom() - chrome - RECORDER_BOTTOM_MARGIN, rect.bottom() - RECORDER_BOTTOM_MARGIN))
+    Ok((
+        rect.bottom() - chrome - RECORDER_BOTTOM_MARGIN,
+        rect.bottom() - RECORDER_BOTTOM_MARGIN,
+    ))
 }
 
 /// Move + resize the recorder as a **single** window-server update.
@@ -630,8 +639,7 @@ static DOCK_REGULAR: AtomicBool = AtomicBool::new(false);
 fn wants_dock_presence(app: &AppHandle, except: Option<&str>) -> bool {
     app.webview_windows().keys().any(|label| {
         let label = label.as_str();
-        Some(label) != except
-            && (label == LIBRARY_LABEL || label.starts_with(EDITOR_LABEL_PREFIX))
+        Some(label) != except && (label == LIBRARY_LABEL || label.starts_with(EDITOR_LABEL_PREFIX))
     })
 }
 
@@ -993,7 +1001,7 @@ pub fn restore_recorder_setup_layout(app: &AppHandle) -> tauri::Result<()> {
     Ok(())
 }
 
-/// Resize the recorder window: `setup` | `alert` | `hud` | `hud-mini` |
+/// Resize the recorder window: `setup` | `alert` | `hud` | `hud-mini` | `hud-notice` |
 /// `countdown`. Setup/alert cover the monitor work area so the pill can
 /// CSS-drag and popovers can flip inside the window — never a per-drag resize.
 #[tauri::command]
@@ -1506,10 +1514,7 @@ fn create_camera_preview_window(app: &AppHandle, device_id: &str) -> tauri::Resu
         return Ok(());
     }
 
-    let url = format!(
-        "camera.html?device={}",
-        urlencoding_minimal(device_id)
-    );
+    let url = format!("camera.html?device={}", urlencoding_minimal(device_id));
     let (x, y) = camera_default_position(app);
     let win = crate::webview_gpu::apply_gpu_args(
         WebviewWindowBuilder::new(app, CAMERA_LABEL, WebviewUrl::App(url.into()))
@@ -1697,18 +1702,20 @@ fn arm_annotation_escape(app: &AppHandle) {
         return;
     }
     use tauri_plugin_global_shortcut::{GlobalShortcutExt, ShortcutState};
-    let result = app.global_shortcut().on_shortcut(ANNOTATION_ESCAPE_HOTKEY, |app, _, event| {
-        if event.state() != ShortcutState::Pressed {
-            return;
-        }
-        let Some(win) = app.get_webview_window(ANNOTATION_LABEL) else {
-            return;
-        };
-        if !win.is_visible().unwrap_or(false) {
-            return;
-        }
-        let _ = app.emit(ANNOTATION_ESCAPE_EVENT, ());
-    });
+    let result = app
+        .global_shortcut()
+        .on_shortcut(ANNOTATION_ESCAPE_HOTKEY, |app, _, event| {
+            if event.state() != ShortcutState::Pressed {
+                return;
+            }
+            let Some(win) = app.get_webview_window(ANNOTATION_LABEL) else {
+                return;
+            };
+            if !win.is_visible().unwrap_or(false) {
+                return;
+            }
+            let _ = app.emit(ANNOTATION_ESCAPE_EVENT, ());
+        });
     if let Err(e) = result {
         ANNOTATION_ESCAPE_ARMED.store(false, Ordering::SeqCst);
         tracing::warn!(%e, "failed to register annotation Escape hotkey");
@@ -2097,12 +2104,7 @@ fn build_editor_window(
 /// Focus an existing editor/library window, or schedule creation off the caller
 /// stack. New WebViews must never be built inside a sync IPC invoke from another
 /// WebView (Windows WebView2 blank/abort) — see [`defer_on_ui`].
-fn ensure_editor_window(
-    app: &AppHandle,
-    label: &str,
-    url: &str,
-    title: &str,
-) -> tauri::Result<()> {
+fn ensure_editor_window(app: &AppHandle, label: &str, url: &str, title: &str) -> tauri::Result<()> {
     if let Some(win) = app.get_webview_window(label) {
         return present_on_active_monitor(app, &win);
     }
@@ -2192,6 +2194,21 @@ pub fn close_editor_if_open(app: &AppHandle, project_id: &str) {
     let label = format!("{EDITOR_LABEL_PREFIX}{project_id}");
     if let Some(win) = app.get_webview_window(&label) {
         let _ = win.close();
+    }
+}
+
+#[cfg(test)]
+mod recorder_layout_tests {
+    use super::{RecorderLayout, LAYOUT_HUD_NOTICE};
+
+    #[test]
+    fn hud_notice_is_a_compact_docked_layout() {
+        let layout = RecorderLayout::parse("hud-notice");
+        let size = layout.size();
+        assert!(layout == RecorderLayout::HudNotice);
+        assert_eq!(size.width, LAYOUT_HUD_NOTICE.0);
+        assert_eq!(size.height, LAYOUT_HUD_NOTICE.1);
+        assert!(!layout.is_setup_bar());
     }
 }
 

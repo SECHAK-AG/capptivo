@@ -561,8 +561,8 @@ fn present_area_frame_locked(
     apply_frame_geometry(win, bounds)?;
     // Must be click-through: an interactive always-on-top frame eats the desktop.
     win.set_ignore_cursor_events(true).map_err(|e| {
-        FRAME_EPOCH.fetch_add(1, Ordering::AcqRel);
-        park_area_frame(app);
+        // Fail closed: bump epoch and park so a broken guide cannot linger on top.
+        hide_area_frame_guide(app);
         AppError::Other(format!("area guide could not enable click-through: {e}"))
     })?;
     let _ = win.set_always_on_top(true);

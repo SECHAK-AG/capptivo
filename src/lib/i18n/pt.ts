@@ -85,6 +85,8 @@ export const pt: Record<TranslationKey, string> = {
   "export.error.gpuContextLost": "Exportação interrompida: o controlador gráfico reiniciou a meio do render. Tente exportar de novo.",
   "editor.previewGpuLost": "Pré-visualização parada: o controlador gráfico reiniciou. Reabra o editor se não recuperar.",
   "editor.gpuReloaded": "O editor recarregou após um reinício gráfico. Já pode exportar novamente.",
+  "editor.framesDropped":
+    "Esta gravação perdeu {seconds}s de quadros devido à carga do sistema — esses momentos aparecem congelados. Feche apps pesados durante a gravação para evitar isso.",
   "export.dialog.title": "Exportar",
   "export.dialog.description": "Escolha formato, codificação, taxa de fotogramas e tipo de ficheiro.",
   "export.format": "Formato",
@@ -101,7 +103,10 @@ export const pt: Record<TranslationKey, string> = {
   "export.enhanceVoice.on": "Ligado",
   "export.enhanceVoice.hint":
     "Reduzir ruído, comprimir e nivelar a narração para uma fala mais clara.",
-  "encoding.fast": "Rápido",
+  "export.passthrough": "Original (mais rápido)",
+  "export.passthrough.hint":
+    "Copia a gravação como está — sem estilo, cursor ou sobreposições. Cortes e câmera exigem a exportação completa.",
+  "encoding.fast":"Rápido",
   "encoding.balanced": "Equilibrado",
   "encoding.quality": "Qualidade",
 

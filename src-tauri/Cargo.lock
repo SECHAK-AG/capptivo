@@ -1034,7 +1034,7 @@ dependencies = [
  "ureq",
  "uuid",
  "windows 0.62.2",
- "windows-capture 2.0.0",
+ "windows-capture 2.0.1",
  "x11rb",
 ]
 
@@ -5846,9 +5846,9 @@ dependencies = [
 
 [[package]]
 name = "windows-capture"
-version = "2.0.0"
+version = "2.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0f9460c7b82f6b7d314d85b45610481f26a1159a42dadf1e13a329041553e060"
+checksum = "09046acbe9b6d039cde50e8c8178d95bb0f9b33ed7feccc4465dadc5404b31b4"
 dependencies = [
  "parking_lot",
  "rayon",

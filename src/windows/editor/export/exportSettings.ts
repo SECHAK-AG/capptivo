@@ -42,6 +42,12 @@ export type ExportSettings = {
   encoding: ExportEncoding;
   fps: ExportFps;
   audioEnhance: ExportAudioEnhance;
+  /**
+   * "Original" fast path: stream-copy the recording untouched (no styling,
+   * cursor, or overlays). Only meaningful for MP4 exports of takes that pass
+   * `isPassthroughEligible`; encoding/fps/bitrate do not apply.
+   */
+  passthrough: boolean;
   /** GIF-only playback speed (1…4). Ignored when format is video. */
   gifSpeed: number;
 };
@@ -52,6 +58,7 @@ export const DEFAULT_EXPORT_SETTINGS: ExportSettings = {
   encoding: "balanced",
   fps: 30,
   audioEnhance: "off",
+  passthrough: false,
   gifSpeed: DEFAULT_GIF_SPEED,
 };
 

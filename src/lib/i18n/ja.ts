@@ -84,6 +84,8 @@ export const ja: Record<TranslationKey, string> = {
   "export.error.gpuContextLost": "書き出しが停止しました。レンダリング中にグラフィックドライバーがリセットされました。もう一度書き出してください。",
   "editor.previewGpuLost": "プレビューが停止しました。グラフィックドライバーがリセットされました。復帰しない場合はエディターを開き直してください。",
   "editor.gpuReloaded": "グラフィックのリセット後にエディターを再読み込みしました。再び書き出せます。",
+  "editor.framesDropped":
+    "この録画はシステム負荷により {seconds} 秒分のフレームが欠落しました。その箇所は静止画のように再生されます。録画中は重いアプリを閉じてください。",
   "export.dialog.title": "書き出し",
   "export.dialog.description": "形式、エンコード、フレームレート、ファイル種別を選びます。",
   "export.format": "形式",
@@ -100,7 +102,10 @@ export const ja: Record<TranslationKey, string> = {
   "export.enhanceVoice.on": "オン",
   "export.enhanceVoice.hint":
     "ノイズ除去・圧縮・レベル調整でナレーションをはっきりさせます。",
-  "encoding.fast": "高速",
+  "export.passthrough": "オリジナル（最速）",
+  "export.passthrough.hint":
+    "録画をそのままコピーします。スタイル・カーソル・オーバーレイは適用されません。カットやカメラがある場合は通常の書き出しが必要です。",
+  "encoding.fast":"高速",
   "encoding.balanced": "バランス",
   "encoding.quality": "高品質",
 

@@ -1,46 +1,93 @@
-# Build Capptivo installers for macOS (Intel + Apple Silicon), Windows, and Linux.
-# Trigger: push a version tag (v*) or run manually from the Actions tab.
-#
-# macOS: ad-hoc signed via tauri.conf.json (`signingIdentity: "-"`) so Screen
-# Recording TCC binds to com.capptivo.desktop. Not notarized — users still
-# right-click → Open once. Swap in APPLE_* secrets when you have a cert.
-
 name: Release
 
 on:
-  push:
-    tags:
-      - "v*"
   workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing vMAJOR.MINOR.PATCH tag to build
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ inputs.tag }}
+  cancel-in-progress: false
 
 jobs:
-  publish:
+  validate:
+    name: Validate release input
+    if: github.ref_type == 'branch' && github.ref_name == github.event.repository.default_branch
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    outputs:
+      tag: ${{ steps.release.outputs.tag }}
+      version: ${{ steps.release.outputs.version }}
+      sha: ${{ steps.release.outputs.sha }}
+      pub-date: ${{ steps.release.outputs.pub_date }}
+    steps:
+      - name: Checkout trusted workflow revision
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Install Node
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: .node-version
+          package-manager-cache: false
+
+      - name: Validate tag, commit, and version
+        id: release
+        env:
+          RELEASE_TAG: ${{ inputs.tag }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+        run: >-
+          node scripts/release-contract.mjs validate
+          --tag "$RELEASE_TAG"
+          --default-branch "$DEFAULT_BRANCH"
+          --repository ${{ github.repository }}
+          --github-output "$GITHUB_OUTPUT"
+
+  build:
+    name: Build ${{ matrix.id }}
+    needs: validate
     permissions:
-      contents: write
+      contents: read
     strategy:
       fail-fast: false
       matrix:
         include:
-          - platform: macos-latest
-            args: --target aarch64-apple-darwin
-          - platform: macos-latest
-            args: --target x86_64-apple-darwin
-          # 24.04+: pipewire-rs 0.8 needs PipeWire 1.0 headers (22.04 is 0.3.48).
-          - platform: ubuntu-24.04
-            args: ""
-          - platform: windows-latest
-            args: ""
-
-    runs-on: ${{ matrix.platform }}
-
+          - id: macos-aarch64
+            runner: macos-15
+            target: aarch64-apple-darwin
+          - id: macos-x86_64
+            runner: macos-15
+            target: x86_64-apple-darwin
+          - id: linux-x86_64
+            runner: ubuntu-24.04
+            target: x86_64-unknown-linux-gnu
+          - id: windows-x86_64
+            runner: windows-2025
+            target: x86_64-pc-windows-msvc
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 60
+    env:
+      RUSTUP_TOOLCHAIN: 1.98.0
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout validated commit
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.validate.outputs.sha }}
+          persist-credentials: false
 
       - name: Install Linux dependencies
-        if: matrix.platform == 'ubuntu-24.04'
+        if: matrix.id == 'linux-x86_64'
         run: |
           sudo apt-get update
-          sudo apt-get install -y \
+          sudo apt-get install --no-install-recommends -y \
             libwebkit2gtk-4.1-dev \
             libayatana-appindicator3-dev \
             librsvg2-dev \
@@ -50,64 +97,382 @@ jobs:
             libpipewire-0.3-dev \
             libpulse-dev
 
-      - uses: pnpm/action-setup@v4
+      - name: Install Node
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
-          version: 11.1.2
+          node-version-file: .node-version
+          package-manager-cache: false
 
-      - uses: actions/setup-node@v4
+      - name: Install Rust 1.98.0
+        uses: dtolnay/rust-toolchain@f8be11a05b1d4f3fcebe6410cc16743212b999b0 # 1.98.0
         with:
-          node-version: lts/*
-          cache: pnpm
-
-      - name: Install Rust stable
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: ${{ matrix.platform == 'macos-latest' && 'aarch64-apple-darwin,x86_64-apple-darwin' || '' }}
-
-      - uses: swatinem/rust-cache@v2
-        with:
-          workspaces: ./src-tauri -> target
+          targets: ${{ matrix.target }}
 
       - name: Install frontend dependencies
-        run: pnpm install --frozen-lockfile
+        run: corepack pnpm install --frozen-lockfile
 
-      - uses: tauri-apps/tauri-action@v1
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
-          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
-        with:
-          tagName: v__VERSION__
-          releaseName: Capptivo v__VERSION__
-          releaseBody: |
-            Download the installer for your platform below.
+      - name: Verify FFmpeg sidecars
+        run: corepack pnpm fetch:ffmpeg --target ${{ matrix.target }}
 
-            **macOS:** first launch — right-click the app → **Open** (Gatekeeper;
-            builds are ad-hoc signed, not notarized). Then grant **Screen
-            Recording** in System Settings and **quit & reopen** Capptivo.
+      - name: Build unsigned bundles
+        run: >-
+          corepack pnpm tauri build
+          --target ${{ matrix.target }}
+          --config .github/tauri.unsigned.conf.json
 
-            **Captions:** need a system `whisper-cli` binary; the app downloads model
-            weights on first use.
+      - name: Verify lockfiles are unchanged
+        run: git diff --exit-code -- pnpm-lock.yaml src-tauri/Cargo.lock
 
-            Installed apps can update automatically via **Check for Updates**.
-          releaseDraft: true
-          prerelease: false
-          includeUpdaterJson: true
-          args: ${{ matrix.args }}
-
-      # Catch linker-signed / unbound Info.plist regressions before a draft is published.
       - name: Verify macOS code identity
-        if: matrix.platform == 'macos-latest'
+        if: startsWith(matrix.id, 'macos-')
+        shell: bash
         run: |
           set -euo pipefail
-          APP=$(find src-tauri/target -path '*/bundle/macos/Capptivo.app' -type d | head -1)
-          if [[ -z "$APP" ]]; then
-            echo "Capptivo.app not found under src-tauri/target" >&2
-            exit 1
+          app="src-tauri/target/${{ matrix.target }}/release/bundle/macos/Capptivo.app"
+          test -d "$app"
+          codesign --verify --deep --strict "$app"
+          codesign -dv --verbose=4 "$app" 2>&1 | tee "$RUNNER_TEMP/codesign.txt"
+          grep -q 'Identifier=com.capptivo.desktop' "$RUNNER_TEMP/codesign.txt"
+          ! grep -q 'Info.plist=not bound' "$RUNNER_TEMP/codesign.txt"
+          ! grep -q 'linker-signed' "$RUNNER_TEMP/codesign.txt"
+          tar -czf "$(dirname "$app")/Capptivo.app.tar.gz" -C "$(dirname "$app")" Capptivo.app
+
+      - name: Stage expected bundles
+        run: >-
+          node scripts/release-contract.mjs stage
+          --platform ${{ matrix.id }}
+          --target ${{ matrix.target }}
+          --version ${{ needs.validate.outputs.version }}
+          --commit ${{ needs.validate.outputs.sha }}
+          --output release-stage
+
+      - name: Upload staged bundles
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: release-${{ matrix.id }}
+          path: release-stage
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 7
+
+  verify:
+    name: Verify release set
+    needs: [validate, build]
+    permissions:
+      contents: read
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - name: Checkout validated commit
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.validate.outputs.sha }}
+          persist-credentials: false
+
+      - name: Install Node
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: .node-version
+          package-manager-cache: false
+
+      - name: Download staged bundles
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: release-*
+          path: staged
+
+      - name: Verify and assemble unsigned release
+        run: >-
+          node scripts/release-contract.mjs assemble-unsigned
+          --staged-root staged
+          --output unsigned-release
+          --notes .github/release-body.md
+          --tag ${{ needs.validate.outputs.tag }}
+          --version ${{ needs.validate.outputs.version }}
+          --commit ${{ needs.validate.outputs.sha }}
+          --pub-date ${{ needs.validate.outputs.pub-date }}
+          --repository ${{ github.repository }}
+
+      - name: Upload verified unsigned release
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: unsigned-release
+          path: unsigned-release
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 7
+
+  sign:
+    name: Sign verified updater artifacts
+    needs: [validate, verify]
+    permissions:
+      contents: read
+    runs-on: ubuntu-24.04
+    environment: release
+    timeout-minutes: 15
+    steps:
+      - name: Checkout validated commit
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.validate.outputs.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Install Node
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: .node-version
+          package-manager-cache: false
+
+      - name: Install signer without lifecycle scripts
+        run: corepack pnpm install --frozen-lockfile --ignore-scripts
+
+      - name: Download verified unsigned release
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: unsigned-release
+          path: unsigned-release
+
+      - name: Revalidate tag and unsigned artifacts
+        env:
+          RELEASE_TAG: ${{ needs.validate.outputs.tag }}
+          RELEASE_SHA: ${{ needs.validate.outputs.sha }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+        run: |
+          node scripts/release-contract.mjs validate \
+            --tag "$RELEASE_TAG" \
+            --expected-sha "$RELEASE_SHA" \
+            --default-branch "$DEFAULT_BRANCH" \
+            --repository ${{ github.repository }} \
+            --github-output "$RUNNER_TEMP/revalidated"
+          node scripts/release-contract.mjs verify-unsigned \
+            --unsigned-root unsigned-release \
+            --tag "$RELEASE_TAG" \
+            --version ${{ needs.validate.outputs.version }} \
+            --commit "$RELEASE_SHA" \
+            --pub-date ${{ needs.validate.outputs.pub-date }} \
+            --repository ${{ github.repository }}
+
+      - name: Sign updater artifacts
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+          RELEASE_VERSION: ${{ needs.validate.outputs.version }}
+        run: |
+          set -euo pipefail
+          signer=./node_modules/.bin/tauri
+          "$signer" signer sign "unsigned-release/payload/Capptivo_${RELEASE_VERSION}_aarch64.app.tar.gz"
+          "$signer" signer sign "unsigned-release/payload/Capptivo_${RELEASE_VERSION}_x64.app.tar.gz"
+          "$signer" signer sign "unsigned-release/payload/Capptivo_${RELEASE_VERSION}_amd64.deb"
+          "$signer" signer sign "unsigned-release/payload/Capptivo-${RELEASE_VERSION}-1.x86_64.rpm"
+          "$signer" signer sign "unsigned-release/payload/Capptivo_${RELEASE_VERSION}_amd64.AppImage"
+          "$signer" signer sign "unsigned-release/payload/Capptivo_${RELEASE_VERSION}_x64_en-US.msi"
+          "$signer" signer sign "unsigned-release/payload/Capptivo_${RELEASE_VERSION}_x64-setup.exe"
+
+      - name: Finalize signed release
+        run: >-
+          node scripts/release-contract.mjs finalize
+          --unsigned-root unsigned-release
+          --output signed-release
+          --tag ${{ needs.validate.outputs.tag }}
+          --version ${{ needs.validate.outputs.version }}
+          --commit ${{ needs.validate.outputs.sha }}
+          --pub-date ${{ needs.validate.outputs.pub-date }}
+          --repository ${{ github.repository }}
+
+      - name: Upload signed release
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: signed-release
+          path: signed-release
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 7
+
+  publish:
+    name: Publish verified draft
+    needs: [validate, sign]
+    permissions:
+      contents: write
+    runs-on: ubuntu-24.04
+    environment: release
+    timeout-minutes: 15
+    steps:
+      - name: Download signed release
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: signed-release
+          path: signed-release
+
+      - name: Verify publication bundle
+        env:
+          RELEASE_TAG: ${{ needs.validate.outputs.tag }}
+          RELEASE_VERSION: ${{ needs.validate.outputs.version }}
+          RELEASE_SHA: ${{ needs.validate.outputs.sha }}
+          RELEASE_REPOSITORY: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          cd signed-release
+          test "$(find . -mindepth 1 -maxdepth 1 -printf '%f\n' | sort | paste -sd ' ' -)" = "payload release-notes.md verified.sha256"
+          test -d payload
+          test -f release-notes.md
+          test -f verified.sha256
+          test -z "$(find . -type l -print -quit)"
+          sha256sum --check --strict verified.sha256
+          (cd payload && sha256sum --check --strict SHA256SUMS)
+          node <<'NODE'
+          const { lstatSync, readFileSync, readdirSync } = require('node:fs');
+          const manifest = JSON.parse(readFileSync('payload/release-manifest.json', 'utf8'));
+          const expectedMetadata = {
+            tag: process.env.RELEASE_TAG,
+            version: process.env.RELEASE_VERSION,
+            commit: process.env.RELEASE_SHA,
+            repository: process.env.RELEASE_REPOSITORY,
+          };
+          for (const [name, expected] of Object.entries(expectedMetadata)) {
+            if (manifest[name] !== expected) throw new Error(`release manifest has the wrong ${name}`);
+          }
+          if (!Array.isArray(manifest.assets) || manifest.assets.length === 0) {
+            throw new Error('release manifest has no assets');
+          }
+          const expected = new Set(['SHA256SUMS', 'release-manifest.json']);
+          for (const asset of manifest.assets) {
+            if (!/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(asset.name) || expected.has(asset.name)) {
+              throw new Error(`invalid or duplicate release asset: ${asset.name}`);
+            }
+            expected.add(asset.name);
+          }
+          const actual = readdirSync('payload').sort();
+          if (actual.length !== expected.size || actual.some((name) => !expected.has(name))) {
+            throw new Error('publication payload does not match the release manifest');
+          }
+          for (const name of actual) {
+            const status = lstatSync(`payload/${name}`);
+            if (!status.isFile() || status.isSymbolicLink()) throw new Error(`invalid payload entry: ${name}`);
+          }
+          const checksumText = readFileSync('payload/SHA256SUMS', 'utf8');
+          if (!checksumText.endsWith('\n')) throw new Error('SHA256SUMS must end with a newline');
+          const checksumNames = new Set();
+          for (const line of checksumText.trimEnd().split('\n')) {
+            const match = /^[0-9a-f]{64}  ([A-Za-z0-9][A-Za-z0-9._-]*)$/.exec(line);
+            if (!match) throw new Error(`invalid SHA256SUMS line: ${line}`);
+            const name = match[1];
+            if (name === 'SHA256SUMS' || !expected.has(name)) {
+              throw new Error(`unexpected SHA256SUMS entry: ${name}`);
+            }
+            if (checksumNames.has(name)) throw new Error(`duplicate SHA256SUMS entry: ${name}`);
+            checksumNames.add(name);
+          }
+          const expectedChecksumNames = [...expected].filter((name) => name !== 'SHA256SUMS');
+          if (
+            checksumNames.size !== expectedChecksumNames.length ||
+            expectedChecksumNames.some((name) => !checksumNames.has(name))
+          ) {
+            throw new Error('SHA256SUMS does not cover the complete publication payload');
+          }
+          const latest = JSON.parse(readFileSync('payload/latest.json', 'utf8'));
+          const platforms = [
+            'darwin-aarch64',
+            'darwin-aarch64-app',
+            'darwin-x86_64',
+            'darwin-x86_64-app',
+            'linux-x86_64',
+            'linux-x86_64-appimage',
+            'linux-x86_64-deb',
+            'linux-x86_64-rpm',
+            'windows-x86_64',
+            'windows-x86_64-msi',
+            'windows-x86_64-nsis',
+          ];
+          if (latest.version !== process.env.RELEASE_VERSION) throw new Error('latest.json has the wrong version');
+          if (latest.pub_date !== manifest.pubDate) throw new Error('latest.json has the wrong publication date');
+          if (latest.notes !== readFileSync('release-notes.md', 'utf8')) {
+            throw new Error('latest.json has the wrong release notes');
+          }
+          if (JSON.stringify(Object.keys(latest.platforms)) !== JSON.stringify(platforms)) {
+            throw new Error('latest.json has the wrong platform set');
+          }
+          const urlPrefix = `https://github.com/${process.env.RELEASE_REPOSITORY}/releases/download/${encodeURIComponent(process.env.RELEASE_TAG)}/`;
+          for (const [platform, entry] of Object.entries(latest.platforms)) {
+            if (!entry || typeof entry.signature !== 'string' || !entry.url?.startsWith(urlPrefix)) {
+              throw new Error(`latest.json has an invalid ${platform} entry`);
+            }
+            const assetName = decodeURIComponent(entry.url.slice(urlPrefix.length));
+            const signatureName = `${assetName}.sig`;
+            if (!expected.has(assetName) || !expected.has(signatureName)) {
+              throw new Error(`latest.json references an unexpected ${platform} asset`);
+            }
+            if (entry.signature !== readFileSync(`payload/${signatureName}`, 'utf8')) {
+              throw new Error(`latest.json has the wrong ${platform} signature`);
+            }
+          }
+          NODE
+
+      - name: Reconcile draft release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ needs.validate.outputs.tag }}
+          RELEASE_SHA: ${{ needs.validate.outputs.sha }}
+          RELEASE_REPOSITORY: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          cd signed-release
+
+          resolve_tag() {
+            local object type sha count
+            object=$(gh api "repos/$RELEASE_REPOSITORY/git/ref/tags/$RELEASE_TAG")
+            type=$(jq -r '.object.type' <<<"$object")
+            sha=$(jq -r '.object.sha' <<<"$object")
+            count=0
+            while [[ "$type" == "tag" ]]; do
+              object=$(gh api "repos/$RELEASE_REPOSITORY/git/tags/$sha")
+              type=$(jq -r '.object.type' <<<"$object")
+              sha=$(jq -r '.object.sha' <<<"$object")
+              count=$((count + 1))
+              test "$count" -le 5
+            done
+            test "$type" = "commit"
+            printf '%s\n' "$sha"
+          }
+
+          test "$(resolve_tag)" = "$RELEASE_SHA"
+          if release=$(gh api "repos/$RELEASE_REPOSITORY/releases/tags/$RELEASE_TAG" 2>/dev/null); then
+            test "$(jq -r '.draft' <<<"$release")" = "true"
+          else
+            gh release create "$RELEASE_TAG" \
+              --repo "$RELEASE_REPOSITORY" \
+              --verify-tag \
+              --draft \
+              --title "Capptivo $RELEASE_TAG" \
+              --notes-file release-notes.md
+            release=$(gh api "repos/$RELEASE_REPOSITORY/releases/tags/$RELEASE_TAG")
           fi
-          echo "Checking $APP"
-          codesign -dv --verbose=4 "$APP" 2>&1 | tee /tmp/codesign.txt
-          grep -q 'Identifier=com.capptivo.desktop' /tmp/codesign.txt
-          ! grep -q 'Info.plist=not bound' /tmp/codesign.txt
-          ! grep -q 'linker-signed' /tmp/codesign.txt
-          echo "macOS code identity OK"
+          release_id=$(jq -r '.id' <<<"$release")
+
+          gh api --paginate "repos/$RELEASE_REPOSITORY/releases/$release_id/assets?per_page=100" \
+            --jq '.[].id' |
+            while read -r asset_id; do
+              gh api --method DELETE "repos/$RELEASE_REPOSITORY/releases/assets/$asset_id"
+            done
+
+          mapfile -d '' assets < <(find payload -mindepth 1 -maxdepth 1 -type f -print0 | sort -z)
+          test "${#assets[@]}" -gt 0
+          gh release upload "$RELEASE_TAG" "${assets[@]}" --repo "$RELEASE_REPOSITORY"
+
+          rm -rf remote-assets
+          mkdir remote-assets
+          gh release download "$RELEASE_TAG" --repo "$RELEASE_REPOSITORY" --dir remote-assets
+          diff -u \
+            <(find payload -mindepth 1 -maxdepth 1 -type f -printf '%f\n' | sort) \
+            <(find remote-assets -mindepth 1 -maxdepth 1 -type f -printf '%f\n' | sort)
+          cmp payload/SHA256SUMS remote-assets/SHA256SUMS
+          (cd remote-assets && sha256sum --check --strict SHA256SUMS)
+          test "$(resolve_tag)" = "$RELEASE_SHA"
+
+          gh release edit "$RELEASE_TAG" \
+            --repo "$RELEASE_REPOSITORY" \
+            --draft \
+            --title "Capptivo $RELEASE_TAG" \
+            --notes-file release-notes.md
+          test "$(gh api "repos/$RELEASE_REPOSITORY/releases/tags/$RELEASE_TAG" --jq '.draft')" = "true"
+          test "$(resolve_tag)" = "$RELEASE_SHA"
