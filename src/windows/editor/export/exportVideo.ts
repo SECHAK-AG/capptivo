@@ -18,14 +18,12 @@
  * `media://`.
  */
 
-import { save } from "@tauri-apps/plugin-dialog";
 import { translateNow } from "@/lib/i18n";
 import {
   isPermissionGranted,
   requestPermission,
   sendNotification,
 } from "@tauri-apps/plugin-notification";
-import { revealItemInDir } from "@tauri-apps/plugin-opener";
 import {
   CanvasSource,
   canEncodeVideo,
@@ -100,25 +98,11 @@ import {
 
 export { cancelActiveExport } from "./exportCancel";
 
+type ExportDestination = { handle: string; displayName: string };
+
+
 function throwIfGpuLost(isLost: () => boolean): void {
   if (isLost()) throw new GpuContextLostError();
-}
-
-async function pickSavePath(
-  suggestedName: string,
-  fileExt: "mp4" | "webm" | "gif",
-): Promise<string | null> {
-  const path = await save({
-    defaultPath: suggestedName,
-    filters: [
-      fileExt === "gif"
-        ? { name: "GIF animation", extensions: ["gif"] }
-        : fileExt === "webm"
-          ? { name: "WebM video", extensions: ["webm"] }
-          : { name: "MP4 video", extensions: ["mp4"] },
-    ],
-  });
-  return path;
 }
 
 export async function exportProject(
@@ -150,44 +134,39 @@ export async function exportProject(
   const abortSession = beginExportAbort();
   const signal = abortSession.signal;
 
-  // Pick the destination up front: the encoder streams straight into this file
-  // as frames are produced, so peak memory is one chunk rather than the whole
-  // encoded video. Cancelling here also skips all render work. The chosen path
-  // is now final — no route may rewrite the extension, because every route
-  // produces the container the user asked for.
-  let path: string | null = null;
+  const keptDuration =
+    snapshot.segments.length > 0
+      ? totalKeptDuration(snapshot.segments)
+      : snapshot.duration;
+
+  // Rust owns the selected path for the entire export. The renderer receives an
+  // opaque capability that every encode and post-processing route must present.
+  // Disk-space gating happens inside select_export_destination via `needed`.
+  let destination: ExportDestination | null = null;
   try {
     store.setExportStatus(translateNow("export.status.choosePath"));
-    path = await pickSavePath(suggestedName, fileExt);
+    destination = await commands.selectExportDestination({
+      suggestedName,
+      fileType: fileExt,
+      needed: estimateExportBytes(resolved, keptDuration),
+    });
   } catch (e) {
     store.setExportError(describeError(e));
-    logClientError("export:pickPath", e);
+    logClientError("export:pickDestination", e);
   }
-  if (!path || signal.aborted) {
+  if (!destination || signal.aborted) {
+    if (destination) {
+      await commands
+        .discardExportDestination(destination.handle)
+        .catch(() => undefined);
+    }
     endExportAbort(abortSession.id);
     const s = useEditorStore.getState();
     s.setExporting(false);
     s.setExportStatus(null);
     return;
   }
-
-  const keptDuration =
-    store.segments.length > 0
-      ? totalKeptDuration(store.segments)
-      : store.duration;
-  try {
-    await commands.checkExportDiskSpace({
-      path,
-      needed: estimateExportBytes(resolved, keptDuration),
-    });
-  } catch (e) {
-    endExportAbort(abortSession.id);
-    store.setExportError(describeError(e));
-    logClientError("export:diskSpace", e);
-    store.setExporting(false);
-    store.setExportStatus(null);
-    return;
-  }
+  const selectedDestination = destination;
 
   // "Original" fast path: stream-copy, no render. Eligibility is re-checked
   // against live state — if the project gained edits after the dialog opened,
@@ -209,18 +188,24 @@ export async function exportProject(
     try {
       await commands.exportPassthrough({
         projectId: snapshot.project.id,
-        outPath: path,
+        destination: selectedDestination.handle,
         preset: settings.audioEnhance,
         hasSystemAudio: snapshot.project.capture.capturedSystemAudio,
       });
       throwIfAborted(signal);
-      await notifyDone(path);
+      await notifyDone(selectedDestination);
+      destination = null;
     } catch (e) {
       if (!isExportCancelled(e)) {
         store.setExportError(describeError(e));
         logClientError("export:passthrough", e);
       }
     } finally {
+      if (destination) {
+        await commands
+          .discardExportDestination(destination.handle)
+          .catch(() => undefined);
+      }
       endExportAbort(abortSession.id);
       const s = useEditorStore.getState();
       s.setExporting(false);
@@ -242,24 +227,23 @@ export async function exportProject(
   // when mediabunny can open it, packets mux into the container during encode
   // and the post-export FFmpeg attach is skipped.
   let audioPrep: Promise<PreparedExportAudio | null> | null = null;
-  let audioAbsPath: string | null = null;
+  let audioHandle: string | null = null;
   let prepared: PreparedExportAudio | null = null;
   let gpuWasLost = false;
   try {
     // Kick audio prepare before ensureSeekable so FFmpeg overlaps that work.
     if (resolved.format !== "gif") {
-      const outName = `capptivo-export-audio-${crypto.randomUUID()}.${
-        resolved.container === "webm" ? "webm" : "m4a"
-      }`;
-      audioPrep = prepareExportAudioTrack(outName, settings.audioEnhance, snapshot).catch(
-        (e) => {
-          console.warn(
-            "export audio prepare failed; will fall back to post-mux",
-            e,
-          );
-          return null;
-        },
-      );
+      audioPrep = prepareExportAudioTrack(
+        resolved.container === "webm" ? "webm" : "m4a",
+        settings.audioEnhance,
+        snapshot,
+      ).catch((e) => {
+        console.warn(
+          "export audio prepare failed; will fall back to post-mux",
+          e,
+        );
+        return null;
+      });
     }
 
     // Sequential decode opens on Range reads — no upfront migration. If it
@@ -267,44 +251,61 @@ export async function exportProject(
     // openExportSequentialMedia) or migrates before the seek fallback.
 
     if (resolved.format === "gif") {
-      sink = await ExportSink.open(path);
+      sink = await ExportSink.open(selectedDestination.handle);
       await renderGifToSink(sink, screenUrl, faceCam, resolved, signal, snapshot);
       store.setExportStatus(translateNow("export.status.saving"));
-      const saved = await sink.finish();
+      await sink.finish();
       sink = null;
-      await notifyDone(saved);
+      await notifyDone(selectedDestination);
+      destination = null;
       return;
     }
 
-    const attachAudioAndFinish = async (videoPath: string) => {
+    const attachAudioAndFinish = async () => {
       store.setExportStatus(translateNow("export.status.saving"));
       if (prepared) {
         store.setExportStatus(translateNow("export.status.addingAudio"));
         await commands
           .attachExportAudio({
-            videoPath,
-            audioPath: prepared.absPath,
+            destination: selectedDestination.handle,
+            audio: prepared.handle,
           })
           .catch(async (e) => {
             console.warn("export audio attach failed; trying full mux", e);
-            await muxRecordedAudio(videoPath, settings.audioEnhance, snapshot);
+            await muxRecordedAudio(
+              selectedDestination.handle,
+              settings.audioEnhance,
+              snapshot,
+            );
           });
       } else {
-        await muxRecordedAudio(videoPath, settings.audioEnhance, snapshot).catch((e) =>
+        await muxRecordedAudio(
+          selectedDestination.handle,
+          settings.audioEnhance,
+          snapshot,
+        ).catch((e) =>
           console.warn("export audio mux failed; keeping silent video", e),
         );
       }
-      await notifyDone(videoPath);
+      await notifyDone(selectedDestination);
+      destination = null;
     };
 
     if (resolved.container === "mp4") {
       // Audio preparation runs concurrently with video rendering. It is not
       // needed until the video-only MP4 has been finalized.
-      await exportMp4(path, screenUrl, faceCam, resolved, signal, snapshot);
+      await exportMp4(
+        selectedDestination.handle,
+        screenUrl,
+        faceCam,
+        resolved,
+        signal,
+        snapshot,
+      );
       prepared = audioPrep ? await audioPrep : null;
       throwIfAborted(signal);
-      audioAbsPath = prepared?.absPath ?? null;
-      await attachAudioAndFinish(path);
+      audioHandle = prepared?.handle ?? null;
+      await attachAudioAndFinish();
       return;
     }
 
@@ -312,8 +313,8 @@ export async function exportProject(
     // prepared track opens.
     prepared = audioPrep ? await audioPrep : null;
     throwIfAborted(signal);
-    audioAbsPath = prepared?.absPath ?? null;
-    sink = await ExportSink.open(path);
+    audioHandle = prepared?.handle ?? null;
+    sink = await ExportSink.open(selectedDestination.handle);
     const audioMuxed = await renderWebmToSink(
       sink,
       screenUrl,
@@ -325,13 +326,14 @@ export async function exportProject(
     );
     throwIfAborted(signal);
     store.setExportStatus(translateNow("export.status.saving"));
-    const saved = await sink.finish();
+    await sink.finish();
     sink = null;
 
     if (audioMuxed) {
-      await notifyDone(saved);
+      await notifyDone(selectedDestination);
+      destination = null;
     } else {
-      await attachAudioAndFinish(saved);
+      await attachAudioAndFinish();
     }
   } catch (e) {
     await sink?.abort(e);
@@ -353,13 +355,18 @@ export async function exportProject(
     endExportAbort(abortSession.id);
     // Prepare may still be in flight if we failed before awaiting it — wait and
     // delete so capptivo-export-audio-* never accumulates in the project dir.
-    if (!audioAbsPath && audioPrep) {
+    if (!audioHandle && audioPrep) {
       const leftover = await audioPrep.catch(() => null);
-      audioAbsPath = leftover?.absPath ?? null;
+      audioHandle = leftover?.handle ?? null;
     }
-    if (audioAbsPath) {
+    if (audioHandle) {
       void commands
-        .removeTempFile({ path: audioAbsPath })
+        .removeTempFile({ handle: audioHandle })
+        .catch(() => undefined);
+    }
+    if (destination) {
+      await commands
+        .discardExportDestination(destination.handle)
         .catch(() => undefined);
     }
     // Reclaim BEFORE clearing exporting — otherwise preview remounts into a
@@ -390,7 +397,7 @@ export async function exportProject(
  * dead GPU context just fails again more slowly.
  */
 async function exportMp4(
-  path: string,
+  destination: string,
   screenUrl: string,
   faceCam: FaceCamTrack,
   resolved: ResolvedExportParams,
@@ -429,7 +436,7 @@ async function exportMp4(
         throw new Error("annexb-ffmpeg planned without a verified encoder");
       }
       return renderMp4ViaFfmpegH264(
-        path,
+        destination,
         screenUrl,
         faceCam,
         resolved,
@@ -439,7 +446,7 @@ async function exportMp4(
       );
     }
     return renderMp4ViaFfmpegRawvideo(
-      path,
+      destination,
       screenUrl,
       faceCam,
       resolved,
@@ -476,7 +483,7 @@ async function exportMp4(
  * re-encode) and no-ops for silent recordings.
  */
 async function muxRecordedAudio(
-  videoPath: string,
+  destination: string,
   preset: ExportAudioEnhance,
   snapshot: ExportSnapshot,
 ): Promise<void> {
@@ -491,8 +498,8 @@ async function muxRecordedAudio(
     .getState()
     .setExportStatus(translateNow("export.status.addingAudio"));
   await commands.muxExportAudio({
+    destination,
     projectId: project.id,
-    videoPath,
     audioSource: project.files.screen,
     segments: kept,
     preset,
@@ -505,10 +512,10 @@ async function muxRecordedAudio(
  * directory (so the WebView can read it over `media://`). Returns absolute path
  * + media URL, or `null` when there is no audio.
  */
-type PreparedExportAudio = { absPath: string; mediaUrl: string };
+type PreparedExportAudio = { handle: string; mediaUrl: string };
 
 async function prepareExportAudioTrack(
-  outName: string,
+  fileExt: "m4a" | "webm",
   preset: ExportAudioEnhance,
   snapshot: ExportSnapshot,
 ): Promise<PreparedExportAudio | null> {
@@ -519,21 +526,24 @@ async function prepareExportAudioTrack(
       ? segments.map((s) => ({ start: s.start, end: s.end }))
       : [{ start: 0, end: duration }];
 
-  const absPath = await commands.prepareExportAudio({
+  const prepared = await commands.prepareExportAudio({
     projectId: project.id,
-    outName,
+    fileExt,
     audioSource: project.files.screen,
     segments: kept,
     preset,
     hasSystemAudio: project.capture.capturedSystemAudio,
   });
-  if (!absPath) return null;
+  if (!prepared) return null;
   if (preset !== "off") {
     console.info(
       `[export] audio enhance=${preset} systemAudio=${project.capture.capturedSystemAudio}`,
     );
   }
-  return { absPath, mediaUrl: mediaUrl(project.id, outName) };
+  return {
+    handle: prepared.handle,
+    mediaUrl: mediaUrl(project.id, prepared.fileName),
+  };
 }
 
 /** Keyframe spacing: fewer I-frames → less encoder work at the same bitrate. */
@@ -795,17 +805,17 @@ async function renderWebmToSink(
   }
 }
 
-async function notifyDone(location: string): Promise<void> {
+async function notifyDone(destination: ExportDestination): Promise<void> {
   try {
     let granted = await isPermissionGranted();
     if (!granted) granted = (await requestPermission()) === "granted";
-    if (granted) sendNotification({ title: "Export finished", body: location });
+    if (granted)
+      sendNotification({
+        title: "Export finished",
+        body: destination.displayName,
+      });
   } catch {
     /* notifications are best-effort */
   }
-  try {
-    await revealItemInDir(location);
-  } catch {
-    /* reveal is best-effort */
-  }
+  await commands.completeExport(destination.handle);
 }
