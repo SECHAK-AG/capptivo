@@ -7,7 +7,7 @@
 //! doesn't exist.
 
 use super::picker_sources::{
-    display_scale_factor, display_for_window_frame, points_to_even_pixels,
+    display_for_window_frame, display_scale_factor, points_to_even_pixels,
 };
 use super::preview::{SourcePreview, PREVIEW_MAX_WIDTH};
 use crate::cursor::CaptureRect;
@@ -17,9 +17,8 @@ use core_graphics::display::CGDisplay;
 use core_graphics::geometry::{CGPoint, CGRect, CGSize};
 use core_graphics::image::CGImageRef;
 use core_graphics::window::{
-    create_image, kCGNullWindowID, kCGWindowImageBoundsIgnoreFraming,
-    kCGWindowImageBestResolution, kCGWindowListOptionIncludingWindow,
-    kCGWindowListOptionOnScreenOnly,
+    create_image, kCGNullWindowID, kCGWindowImageBestResolution, kCGWindowImageBoundsIgnoreFraming,
+    kCGWindowListOptionIncludingWindow, kCGWindowListOptionOnScreenOnly,
 };
 use foreign_types::ForeignTypeRef;
 use image::{ImageBuffer, ImageFormat, RgbaImage};
@@ -78,8 +77,7 @@ pub fn window_thumbnail(window_id: u32) -> Option<SourcePreview> {
         .map(display_scale_factor)
         .unwrap_or(1);
     let (w, h) = points_to_even_pixels(rect.width, rect.height, scale);
-    let filter =
-        UnsafeContentFilter::init(UnsafeInitParams::DesktopIndependentWindow(window));
+    let filter = UnsafeContentFilter::init(UnsafeInitParams::DesktopIndependentWindow(window));
     sck_screenshot(filter, w, h)
 }
 
@@ -150,9 +148,7 @@ fn encode_preview(image: &CGImageRef) -> Option<SourcePreview> {
         return None;
     }
     let png_base64 = png_base64(image)?;
-    Some(SourcePreview {
-        png_base64,
-    })
+    Some(SourcePreview { png_base64 })
 }
 
 fn png_base64(image: &CGImageRef) -> Option<String> {
@@ -195,6 +191,7 @@ fn png_base64(image: &CGImageRef) -> Option<String> {
 
     let buf: RgbaImage = ImageBuffer::from_raw(tw, th, rgba)?;
     let mut out = Vec::new();
-    buf.write_to(&mut Cursor::new(&mut out), ImageFormat::Png).ok()?;
+    buf.write_to(&mut Cursor::new(&mut out), ImageFormat::Png)
+        .ok()?;
     Some(STANDARD.encode(out))
 }

@@ -79,11 +79,11 @@ fn run_tap(
     debug_assert!(spec.is_valid());
 
     let simple = match Simple::new(
-        None,                       // default server
-        "Capptivo",                 // app name
+        None,       // default server
+        "Capptivo", // app name
         Direction::Record,
-        Some("@DEFAULT_MONITOR@"),  // monitor of the default sink
-        "System audio",             // stream description
+        Some("@DEFAULT_MONITOR@"), // monitor of the default sink
+        "System audio",            // stream description
         &spec,
         None, // default channel map
         None, // default buffering

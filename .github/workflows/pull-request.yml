@@ -1,0 +1,125 @@
+name: Pull request checks
+
+on:
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pull-request-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  frontend:
+    name: Frontend
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install Node
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: .node-version
+          package-manager-cache: false
+
+      - name: Install dependencies
+        run: corepack pnpm install --frozen-lockfile
+
+      - name: Lint
+        run: corepack pnpm lint
+
+      - name: Test
+        run: corepack pnpm test
+
+      - name: Build
+        run: corepack pnpm build
+
+  rust:
+    name: Rust
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    env:
+      RUSTUP_TOOLCHAIN: 1.98.0
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install Linux dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends -y \
+            libwebkit2gtk-4.1-dev \
+            libayatana-appindicator3-dev \
+            librsvg2-dev \
+            libssl-dev
+
+      - name: Install Rust 1.98.0
+        uses: dtolnay/rust-toolchain@f8be11a05b1d4f3fcebe6410cc16743212b999b0 # 1.98.0
+        with:
+          components: clippy, rustfmt
+
+      - name: Check formatting
+        run: cargo fmt --all --manifest-path src-tauri/Cargo.toml -- --check
+
+      - name: Check Rust with Clippy (warnings advisory)
+        run: cargo clippy --manifest-path src-tauri/Cargo.toml --locked --no-default-features --all-targets
+
+      - name: Test Rust
+        run: cargo test --manifest-path src-tauri/Cargo.toml --locked --no-default-features
+
+  windows:
+    name: Windows
+    runs-on: windows-2025
+    timeout-minutes: 30
+    env:
+      RUSTUP_TOOLCHAIN: 1.98.0
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install Node
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: .node-version
+          package-manager-cache: false
+
+      - name: Install Rust 1.98.0
+        uses: dtolnay/rust-toolchain@f8be11a05b1d4f3fcebe6410cc16743212b999b0 # 1.98.0
+
+      - name: Prepare verified FFmpeg test tools
+        shell: pwsh
+        run: |
+          $PSNativeCommandUseErrorActionPreference = $true
+          corepack pnpm fetch:ffmpeg --target x86_64-pc-windows-msvc
+
+          $toolDirectory = Join-Path $env:RUNNER_TEMP "capptivo-ffmpeg"
+          New-Item -ItemType Directory -Path $toolDirectory | Out-Null
+          Copy-Item "src-tauri/binaries/capptivo-ffmpeg-x86_64-pc-windows-msvc.exe" `
+            (Join-Path $toolDirectory "ffmpeg.exe")
+          Copy-Item "src-tauri/binaries/capptivo-ffprobe-x86_64-pc-windows-msvc.exe" `
+            (Join-Path $toolDirectory "ffprobe.exe")
+
+          $toolDirectory | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+          & (Join-Path $toolDirectory "ffmpeg.exe") -version
+          & (Join-Path $toolDirectory "ffprobe.exe") -version
+
+          $vp9Probe = Join-Path $env:RUNNER_TEMP "capptivo-vp9-probe.webm"
+          & (Join-Path $toolDirectory "ffmpeg.exe") `
+            -hide_banner -loglevel error -y `
+            -f lavfi -i "testsrc=size=16x16:rate=1:duration=1" `
+            -c:v libvpx-vp9 -speed 8 $vp9Probe
+          if ((Get-Item -LiteralPath $vp9Probe).Length -eq 0) {
+            throw "The verified FFmpeg sidecar produced an empty VP9 probe"
+          }
+
+      - name: Test Windows targets
+        run: cargo test --manifest-path src-tauri/Cargo.toml --locked --all-targets

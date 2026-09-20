@@ -112,12 +112,14 @@ impl Encoder {
                 ))
             })?;
 
-        let raw_stdin = child.stdin.take().ok_or_else(|| {
-            AppError::Encoder("ffmpeg stdin missing".into())
-        })?;
-        let stderr = child.stderr.take().ok_or_else(|| {
-            AppError::Encoder("ffmpeg stderr missing".into())
-        })?;
+        let raw_stdin = child
+            .stdin
+            .take()
+            .ok_or_else(|| AppError::Encoder("ffmpeg stdin missing".into()))?;
+        let stderr = child
+            .stderr
+            .take()
+            .ok_or_else(|| AppError::Encoder("ffmpeg stderr missing".into()))?;
         let stderr_text = Arc::new(Mutex::new(String::new()));
         let stderr_reader = std::thread::Builder::new()
             .name("ffmpeg-stderr".into())
@@ -134,9 +136,8 @@ impl Encoder {
 
         let (pcm, pcm_path) = if system_audio {
             let path = output.with_file_name("system.pcm");
-            let file = File::create(&path).map_err(|e| {
-                AppError::Encoder(format!("could not create system.pcm: {e}"))
-            })?;
+            let file = File::create(&path)
+                .map_err(|e| AppError::Encoder(format!("could not create system.pcm: {e}")))?;
             (Some(file), Some(path))
         } else {
             (None, None)
@@ -144,9 +145,8 @@ impl Encoder {
 
         let (mic_pcm, mic_pcm_path) = if microphone {
             let path = output.with_file_name("mic.pcm");
-            let file = File::create(&path).map_err(|e| {
-                AppError::Encoder(format!("could not create mic.pcm: {e}"))
-            })?;
+            let file = File::create(&path)
+                .map_err(|e| AppError::Encoder(format!("could not create mic.pcm: {e}")))?;
             (Some(file), Some(path))
         } else {
             (None, None)
@@ -192,9 +192,10 @@ impl Encoder {
     /// Both paths below honor that — the tight path slices to `frame_len`, the
     /// strided path stops at `self.height` — so the extra pixels are dropped.
     pub fn write_frame(&mut self, data: &[u8], bytes_per_row: u32) -> AppResult<()> {
-        let stdin = self.video_stdin.as_mut().ok_or_else(|| {
-            AppError::Encoder("ffmpeg stdin already closed".into())
-        })?;
+        let stdin = self
+            .video_stdin
+            .as_mut()
+            .ok_or_else(|| AppError::Encoder("ffmpeg stdin already closed".into()))?;
         let tight_row = (self.width as usize) * 4;
         let write_res = if bytes_per_row as usize == tight_row {
             if data.len() < self.frame_len {
@@ -517,9 +518,7 @@ fn wait_child(child: &mut Child, timeout: Duration) -> AppResult<std::process::E
             Ok(None) => {
                 let _ = child.kill();
                 let _ = child.wait();
-                return Err(AppError::Encoder(
-                    "ffmpeg timed out during finalize".into(),
-                ));
+                return Err(AppError::Encoder("ffmpeg timed out during finalize".into()));
             }
             Err(e) => return Err(AppError::Encoder(format!("waiting on ffmpeg failed: {e}"))),
         }
@@ -541,13 +540,7 @@ pub fn attach_mic_audio(
     let mix = mix_with_system_audio && mp4_has_audio_stream(video_mp4);
     let status = if mix {
         proc::command(&ffmpeg)
-            .args([
-                "-hide_banner",
-                "-loglevel",
-                "error",
-                "-y",
-                "-i",
-            ])
+            .args(["-hide_banner", "-loglevel", "error", "-y", "-i"])
             .arg(video_mp4)
             .args(["-i"])
             .arg(mic_file)
@@ -572,13 +565,7 @@ pub fn attach_mic_audio(
             .status()
     } else {
         proc::command(&ffmpeg)
-            .args([
-                "-hide_banner",
-                "-loglevel",
-                "error",
-                "-y",
-                "-i",
-            ])
+            .args(["-hide_banner", "-loglevel", "error", "-y", "-i"])
             .arg(video_mp4)
             .args(["-i"])
             .arg(mic_file)
@@ -643,7 +630,8 @@ pub fn finalize_recording_mp4(video_path: &Path) -> AppResult<()> {
         .extension()
         .and_then(|e| e.to_str())
         .unwrap_or("mp4");
-    let tmp = video_path.with_file_name(format!("capptivo-finalize-{}.{ext}", uuid::Uuid::new_v4()));
+    let tmp =
+        video_path.with_file_name(format!("capptivo-finalize-{}.{ext}", uuid::Uuid::new_v4()));
 
     let ffmpeg = ffmpeg_path();
     // `-c copy` keeps every stream (video + any already-muxed audio) byte-for-byte;
@@ -699,8 +687,8 @@ fn is_fragmented_mp4(path: &Path) -> bool {
             header = 16;
         }
         match typ {
-            b"moof" => return true,      // fragmented
-            b"mdat" => return false,     // media data reached with no moof → progressive
+            b"moof" => return true,  // fragmented
+            b"mdat" => return false, // media data reached with no moof → progressive
             _ => {}
         }
         if size < header as u64 {
@@ -775,7 +763,13 @@ fn build_audio_filtergraph(
     if segments.is_empty() {
         return match enhance {
             Some(chain) => (format!("{input_label}{chain}[aout]"), "[aout]".into()),
-            None => (String::new(), input_label.trim_start_matches('[').trim_end_matches(']').to_string()),
+            None => (
+                String::new(),
+                input_label
+                    .trim_start_matches('[')
+                    .trim_end_matches(']')
+                    .to_string(),
+            ),
         };
     }
 
@@ -786,7 +780,10 @@ fn build_audio_filtergraph(
         ));
     }
     let concat_inputs: String = (0..segments.len()).map(|i| format!("[a{i}]")).collect();
-    parts.push(format!("{concat_inputs}concat=n={}:v=0:a=1[ac]", segments.len()));
+    parts.push(format!(
+        "{concat_inputs}concat=n={}:v=0:a=1[ac]",
+        segments.len()
+    ));
 
     match enhance {
         Some(chain) => {
@@ -811,8 +808,7 @@ fn run_prepare_export_audio_inner(
     segments: &[(f64, f64)],
     enhance: Option<&str>,
 ) -> AppResult<bool> {
-    let (filter_complex, map_label) =
-        build_audio_filtergraph(segments, enhance, "[0:a]");
+    let (filter_complex, map_label) = build_audio_filtergraph(segments, enhance, "[0:a]");
 
     let ext = out_path
         .extension()
@@ -954,17 +950,22 @@ fn run_passthrough(screen_path: &Path, out_path: &Path, enhance: Option<&str>) -
 /// stream copy on both tracks (no re-encode).
 pub fn attach_export_audio(video_path: &Path, audio_path: &Path) -> AppResult<()> {
     if !video_path.is_file() {
-        return Err(AppError::Encoder("export audio attach: missing video".into()));
+        return Err(AppError::Encoder(
+            "export audio attach: missing video".into(),
+        ));
     }
     if !audio_path.is_file() {
-        return Err(AppError::Encoder("export audio attach: missing audio".into()));
+        return Err(AppError::Encoder(
+            "export audio attach: missing audio".into(),
+        ));
     }
 
     let ext = video_path
         .extension()
         .and_then(|e| e.to_str())
         .unwrap_or("mp4");
-    let tmp = video_path.with_file_name(format!("capptivo-audiomux-{}.{ext}", uuid::Uuid::new_v4()));
+    let tmp =
+        video_path.with_file_name(format!("capptivo-audiomux-{}.{ext}", uuid::Uuid::new_v4()));
 
     let ffmpeg = ffmpeg_path();
     let mut cmd = proc::command(&ffmpeg);
@@ -1040,15 +1041,15 @@ fn run_mux_export_audio_inner(
     segments: &[(f64, f64)],
     enhance: Option<&str>,
 ) -> AppResult<()> {
-    let (filter_complex, map_label) =
-        build_audio_filtergraph(segments, enhance, "[1:a]");
+    let (filter_complex, map_label) = build_audio_filtergraph(segments, enhance, "[1:a]");
 
     let ext = video_path
         .extension()
         .and_then(|e| e.to_str())
         .unwrap_or("mp4");
     let audio_codec = audio_codec_for_ext(ext);
-    let tmp = video_path.with_file_name(format!("capptivo-audiomux-{}.{ext}", uuid::Uuid::new_v4()));
+    let tmp =
+        video_path.with_file_name(format!("capptivo-audiomux-{}.{ext}", uuid::Uuid::new_v4()));
 
     let ffmpeg = ffmpeg_path();
     let mut cmd = proc::command(&ffmpeg);
@@ -1064,8 +1065,15 @@ fn run_mux_export_audio_inner(
     } else {
         map_label
     };
-    cmd.args(["-map", "0:v:0", "-map", &map])
-        .args(["-c:v", "copy", "-c:a", audio_codec, "-b:a", "192k", "-shortest"]);
+    cmd.args(["-map", "0:v:0", "-map", &map]).args([
+        "-c:v",
+        "copy",
+        "-c:a",
+        audio_codec,
+        "-b:a",
+        "192k",
+        "-shortest",
+    ]);
     if audio_codec == "aac" {
         cmd.args(["-movflags", "+faststart"]);
     }
@@ -1230,23 +1238,24 @@ mod tests {
 
     #[test]
     fn wait_child_times_out_and_kills_the_child() {
-        // Long-lived sleeper: proves the finalize timeout is reachable and that
-        // the kill path runs (the ordering bug in `finish()` made this dead).
-        let mut child = if cfg!(windows) {
-            std::process::Command::new("cmd")
-                .args(["/C", "timeout", "/T", "60", "/NOBREAK"])
-                .stdout(Stdio::null())
-                .stderr(Stdio::null())
-                .spawn()
-                .expect("spawn sleeper")
-        } else {
-            std::process::Command::new("sleep")
-                .arg("60")
-                .stdout(Stdio::null())
-                .stderr(Stdio::null())
-                .spawn()
-                .expect("spawn sleeper")
-        };
+        const CHILD_FLAG: &str = "CAPPTIVO_WAIT_CHILD_TEST_PROCESS";
+        if std::env::var_os(CHILD_FLAG).is_some() {
+            std::thread::sleep(Duration::from_secs(60));
+            return;
+        }
+
+        // A direct child avoids shell helpers that require an interactive console
+        let mut child = crate::proc::command(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "recorder::encoder::tests::wait_child_times_out_and_kills_the_child",
+            ])
+            .env(CHILD_FLAG, "1")
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .expect("spawn sleeper");
 
         let started = Instant::now();
         let err = wait_child(&mut child, Duration::from_millis(200)).expect_err("must time out");
@@ -1361,7 +1370,11 @@ mod tests {
 
     #[test]
     fn mux_helper_rejects_missing_inputs() {
-        if proc::command(proc::exe_name("ffmpeg")).arg("-version").output().is_err() {
+        if proc::command(proc::exe_name("ffmpeg"))
+            .arg("-version")
+            .output()
+            .is_err()
+        {
             return;
         }
         let dir = std::env::temp_dir().join(format!("capptivo-mux-{}", uuid::Uuid::new_v4()));
@@ -1376,7 +1389,11 @@ mod tests {
 
     #[test]
     fn write_frame_rejects_short_buffer() {
-        if proc::command(proc::exe_name("ffmpeg")).arg("-version").output().is_err() {
+        if proc::command(proc::exe_name("ffmpeg"))
+            .arg("-version")
+            .output()
+            .is_err()
+        {
             return;
         }
         let dir = std::env::temp_dir().join(format!("capptivo-short-{}", uuid::Uuid::new_v4()));
@@ -1392,7 +1409,11 @@ mod tests {
 
     #[test]
     fn write_audio_locks_format_after_first_chunk() {
-        if proc::command(proc::exe_name("ffmpeg")).arg("-version").output().is_err() {
+        if proc::command(proc::exe_name("ffmpeg"))
+            .arg("-version")
+            .output()
+            .is_err()
+        {
             return;
         }
         let dir = std::env::temp_dir().join(format!("capptivo-pcm-{}", uuid::Uuid::new_v4()));
@@ -1414,7 +1435,11 @@ mod tests {
     /// rather than shear the image or hand FFmpeg a short frame.
     #[test]
     fn encodes_frames_taller_than_the_encoder() {
-        if proc::command(proc::exe_name("ffmpeg")).arg("-version").output().is_err() {
+        if proc::command(proc::exe_name("ffmpeg"))
+            .arg("-version")
+            .output()
+            .is_err()
+        {
             eprintln!("ffmpeg not found — skipping odd-size encode test");
             return;
         }
@@ -1437,7 +1462,10 @@ mod tests {
             }
             let path = enc.finish().unwrap();
 
-            assert!(fs::metadata(&path).unwrap().len() > 0, "stride {stride}: empty mp4");
+            assert!(
+                fs::metadata(&path).unwrap().len() > 0,
+                "stride {stride}: empty mp4"
+            );
             let _ = fs::remove_dir_all(&dir);
         }
     }
@@ -1463,7 +1491,12 @@ mod tests {
         let frag = dir.join("frag.mp4");
         fs::write(
             &frag,
-            synth_mp4(&[(28, b"ftyp"), (740, b"moov"), (152, b"moof"), (4096, b"mdat")]),
+            synth_mp4(&[
+                (28, b"ftyp"),
+                (740, b"moov"),
+                (152, b"moof"),
+                (4096, b"mdat"),
+            ]),
         )
         .unwrap();
         assert!(is_fragmented_mp4(&frag));
@@ -1472,7 +1505,12 @@ mod tests {
         let prog = dir.join("prog.mp4");
         fs::write(
             &prog,
-            synth_mp4(&[(32, b"ftyp"), (6680, b"moov"), (8, b"free"), (4096, b"mdat")]),
+            synth_mp4(&[
+                (32, b"ftyp"),
+                (6680, b"moov"),
+                (8, b"free"),
+                (4096, b"mdat"),
+            ]),
         )
         .unwrap();
         assert!(!is_fragmented_mp4(&prog));

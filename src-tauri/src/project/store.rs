@@ -2,9 +2,7 @@
 //! + S3. One directory per recording under the app data dir. All writes are
 //! atomic (write `.tmp`, fsync, rename) so a crash never corrupts a project.
 
-use super::model::{
-    CaptureSnapshot, Meta, Project, ProjectFiles, ProjectSummary, SCHEMA_VERSION,
-};
+use super::model::{CaptureSnapshot, Meta, Project, ProjectFiles, ProjectSummary, SCHEMA_VERSION};
 use crate::cursor::CursorTrack;
 use crate::error::{AppError, AppResult};
 use crate::recorder::types::RecorderConfig;
@@ -192,9 +190,8 @@ impl ProjectStore {
 
     pub fn load(&self, id: &str) -> AppResult<Project> {
         let path = self.dir_for(id)?.join(PROJECT_FILE);
-        let bytes = fs::read(&path).map_err(|e| {
-            AppError::Project(format!("cannot read project {id}: {e}"))
-        })?;
+        let bytes = fs::read(&path)
+            .map_err(|e| AppError::Project(format!("cannot read project {id}: {e}")))?;
         let mut value: serde_json::Value = serde_json::from_slice(&bytes)?;
         migrate(&mut value);
         let project: Project = serde_json::from_value(value)?;
@@ -287,7 +284,10 @@ impl ProjectStore {
             let Ok(project) = self.load(&id) else {
                 continue;
             };
-            let duration = self.read_meta(&id).map(|m| m.duration_seconds).unwrap_or(0.0);
+            let duration = self
+                .read_meta(&id)
+                .map(|m| m.duration_seconds)
+                .unwrap_or(0.0);
             let thumb = dir.join(super::thumbnail::THUMBNAIL_FILE);
             summaries.push(ProjectSummary {
                 id: project.id,
@@ -295,7 +295,9 @@ impl ProjectStore {
                 created_at: project.created_at,
                 duration_seconds: duration,
                 // Prefer the on-disk poster (authoritative) over a stale manifest field.
-                thumbnail: thumb.is_file().then(|| super::thumbnail::THUMBNAIL_FILE.to_string()),
+                thumbnail: thumb
+                    .is_file()
+                    .then(|| super::thumbnail::THUMBNAIL_FILE.to_string()),
             });
         }
         // Newest first (ids are date-prefixed, so lexicographic desc works).
@@ -420,8 +422,10 @@ mod tests {
     /// A store rooted in a fresh temp directory, plus one project with a
     /// manifest already on disk. The caller deletes `root` when done.
     fn store_with_project() -> (ProjectStore, String, PathBuf) {
-        let root = std::env::temp_dir()
-            .join(format!("capptivo-store-test-{}", uuid::Uuid::new_v4().simple()));
+        let root = std::env::temp_dir().join(format!(
+            "capptivo-store-test-{}",
+            uuid::Uuid::new_v4().simple()
+        ));
         let store = ProjectStore::new(root.clone());
         let (id, _dir) = store.create().expect("create project dir");
         store
@@ -583,7 +587,9 @@ mod tests {
         assert!(store.load("a\\b").is_err());
         assert!(store.load(".").is_err());
         assert!(store.load("").is_err());
-        assert!(store.save_editor_state("../x", serde_json::json!({})).is_err());
+        assert!(store
+            .save_editor_state("../x", serde_json::json!({}))
+            .is_err());
 
         let _ = fs::remove_dir_all(&root);
     }
@@ -604,8 +610,10 @@ mod tests {
     #[test]
     fn delete_cannot_remove_a_directory_outside_the_store() {
         let (store, _id, root) = store_with_project();
-        let bystander = std::env::temp_dir()
-            .join(format!("capptivo-bystander-{}", uuid::Uuid::new_v4().simple()));
+        let bystander = std::env::temp_dir().join(format!(
+            "capptivo-bystander-{}",
+            uuid::Uuid::new_v4().simple()
+        ));
         fs::create_dir_all(&bystander).expect("create bystander dir");
 
         let result = store.delete(bystander.to_str().expect("utf8 path"));

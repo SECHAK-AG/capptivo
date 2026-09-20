@@ -1,0 +1,111 @@
+{
+  "schemaVersion": 1,
+  "targets": {
+    "aarch64-apple-darwin": {
+      "archives": [
+        {
+          "url": "https://ffmpeg.martin-riedl.de/download/macos/arm64/1787073674_9.0.1/ffmpeg.zip",
+          "size": 28447413,
+          "sha256": "8287a1b2229e05eb41859f073e18e6c52c60a778f2f5e6881070fe51b79407fe",
+          "files": [
+            {
+              "archivePath": "ffmpeg",
+              "sidecar": "capptivo-ffmpeg",
+              "size": 66334032,
+              "sha256": "393e4c395020a1cb7cbd77fbe00599ce69d1c6466fee0dbd59d13f86a81a1611"
+            }
+          ]
+        },
+        {
+          "url": "https://ffmpeg.martin-riedl.de/download/macos/arm64/1787073674_9.0.1/ffprobe.zip",
+          "size": 28370930,
+          "sha256": "102a26b8940a053298d9929bfaae71e4b6ef65ba5f19a99a88c433108560741a",
+          "files": [
+            {
+              "archivePath": "ffprobe",
+              "sidecar": "capptivo-ffprobe",
+              "size": 66159232,
+              "sha256": "7abc49fb2bdf2204f018e76dc6e0a8ae7643313bae09a9fa43e7eb12442271bc"
+            }
+          ]
+        }
+      ]
+    },
+    "x86_64-apple-darwin": {
+      "archives": [
+        {
+          "url": "https://ffmpeg.martin-riedl.de/download/macos/amd64/1787081194_9.0.1/ffmpeg.zip",
+          "size": 33847553,
+          "sha256": "5bdead62ff504ab9b447cc72b212c4fb481e3f7de5877d427a51bee8136dda40",
+          "files": [
+            {
+              "archivePath": "ffmpeg",
+              "sidecar": "capptivo-ffmpeg",
+              "size": 94671040,
+              "sha256": "56f4a0478fff60fa549ab7aa03759d7ab116dadcdf63dba4d466ebfba1280b2f"
+            }
+          ]
+        },
+        {
+          "url": "https://ffmpeg.martin-riedl.de/download/macos/amd64/1787081194_9.0.1/ffprobe.zip",
+          "size": 33750750,
+          "sha256": "34511bbcf1988ad2886023bf5ace4f44cf62e6defeb3d194d6f7619e5b061f7f",
+          "files": [
+            {
+              "archivePath": "ffprobe",
+              "sidecar": "capptivo-ffprobe",
+              "size": 94479280,
+              "sha256": "dd287b051b569382fe32eb73003b04035d416bccfa30148c140e35636cd3a1d8"
+            }
+          ]
+        }
+      ]
+    },
+    "x86_64-pc-windows-msvc": {
+      "archives": [
+        {
+          "url": "https://github.com/BtbN/FFmpeg-Builds/releases/download/autobuild-2026-08-29-13-12/ffmpeg-N-126313-g1ae4048218-win64-gpl.zip",
+          "size": 170696774,
+          "sha256": "fd3520fbdb8aa01da1a41ba41c5e5218a0d1b22c6697c9c11376b59ffa5dfc19",
+          "files": [
+            {
+              "archivePath": "ffmpeg-N-126313-g1ae4048218-win64-gpl/bin/ffmpeg.exe",
+              "sidecar": "capptivo-ffmpeg",
+              "size": 145831936,
+              "sha256": "773ed53b6287fe7b7224818786c42b9b0eb734f8b2692e77df688b8910407eda"
+            },
+            {
+              "archivePath": "ffmpeg-N-126313-g1ae4048218-win64-gpl/bin/ffprobe.exe",
+              "sidecar": "capptivo-ffprobe",
+              "size": 145619968,
+              "sha256": "513d533a883febb1aa94893c00092283f28acd127d4bfa8c35bb3b82343b7324"
+            }
+          ]
+        }
+      ]
+    },
+    "x86_64-unknown-linux-gnu": {
+      "archives": [
+        {
+          "url": "https://github.com/BtbN/FFmpeg-Builds/releases/download/autobuild-2026-08-29-13-12/ffmpeg-N-126313-g1ae4048218-linux64-gpl.tar.xz",
+          "size": 128032364,
+          "sha256": "60434d10a131f4979b47ca7e531c4d1850080187e4936953a8c294e9c4907bb0",
+          "files": [
+            {
+              "archivePath": "ffmpeg-N-126313-g1ae4048218-linux64-gpl/bin/ffmpeg",
+              "sidecar": "capptivo-ffmpeg",
+              "size": 146841744,
+              "sha256": "88b13f4b21e36c28eee32cbca99f86c1088fa66644f013802d3664ab3fe2db56"
+            },
+            {
+              "archivePath": "ffmpeg-N-126313-g1ae4048218-linux64-gpl/bin/ffprobe",
+              "sidecar": "capptivo-ffprobe",
+              "size": 146620432,
+              "sha256": "fefddb7ced9efd9668a6441a29ece611ddfca521d872025b7029d4e186412771"
+            }
+          ]
+        }
+      ]
+    }
+  }
+}

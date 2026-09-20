@@ -103,6 +103,7 @@ export function CameraApp() {
     });
     const initial = deviceFromUrl();
     if (initial) void reopen(initial, { force: true });
+    const video = videoRef.current;
 
     return () => {
       bindCameraCaptureApi(null);

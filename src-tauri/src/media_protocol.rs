@@ -44,24 +44,31 @@ pub fn serve(app_data: &Path, request: &Request<Vec<u8>>) -> Response<Vec<u8>> {
             if file.seek(SeekFrom::Start(start)).is_err() || file.read_exact(&mut buf).is_err() {
                 return error(StatusCode::INTERNAL_SERVER_ERROR, "read failed");
             }
-            cors(Response::builder()
-                .status(StatusCode::PARTIAL_CONTENT)
-                .header(header::CONTENT_TYPE, content_type)
-                .header(header::ACCEPT_RANGES, "bytes")
-                .header(header::CONTENT_LENGTH, len.to_string())
-                .header(header::CONTENT_RANGE, format!("bytes {start}-{end}/{total}")))
-                .body(buf)
-                .unwrap_or_else(|_| error(StatusCode::INTERNAL_SERVER_ERROR, "build failed"))
+            cors(
+                Response::builder()
+                    .status(StatusCode::PARTIAL_CONTENT)
+                    .header(header::CONTENT_TYPE, content_type)
+                    .header(header::ACCEPT_RANGES, "bytes")
+                    .header(header::CONTENT_LENGTH, len.to_string())
+                    .header(
+                        header::CONTENT_RANGE,
+                        format!("bytes {start}-{end}/{total}"),
+                    ),
+            )
+            .body(buf)
+            .unwrap_or_else(|_| error(StatusCode::INTERNAL_SERVER_ERROR, "build failed"))
         }
         // A Range header that's present but unsatisfiable (e.g. `start >= total`,
         // which the ranged blob loader sends once it reaches EOF) must NOT fall
         // through to the whole-file branch — that would re-serve the first window
         // and the client would never terminate. Answer 416 so it detects EOF.
-        None if range_header.is_some() => cors(Response::builder()
-            .status(StatusCode::RANGE_NOT_SATISFIABLE)
-            .header(header::CONTENT_RANGE, format!("bytes */{total}")))
-            .body(Vec::new())
-            .unwrap_or_else(|_| error(StatusCode::INTERNAL_SERVER_ERROR, "build failed")),
+        None if range_header.is_some() => cors(
+            Response::builder()
+                .status(StatusCode::RANGE_NOT_SATISFIABLE)
+                .header(header::CONTENT_RANGE, format!("bytes */{total}")),
+        )
+        .body(Vec::new())
+        .unwrap_or_else(|_| error(StatusCode::INTERNAL_SERVER_ERROR, "build failed")),
         None => {
             // No Range header. Reading a whole multi-GB recording into memory on
             // the protocol thread is a footgun, so cap it: small files are served
@@ -73,13 +80,15 @@ pub fn serve(app_data: &Path, request: &Request<Vec<u8>>) -> Response<Vec<u8>> {
                 if file.read_to_end(&mut buf).is_err() {
                     return error(StatusCode::INTERNAL_SERVER_ERROR, "read failed");
                 }
-                cors(Response::builder()
-                    .status(StatusCode::OK)
-                    .header(header::CONTENT_TYPE, content_type)
-                    .header(header::ACCEPT_RANGES, "bytes")
-                    .header(header::CONTENT_LENGTH, total.to_string()))
-                    .body(buf)
-                    .unwrap_or_else(|_| error(StatusCode::INTERNAL_SERVER_ERROR, "build failed"))
+                cors(
+                    Response::builder()
+                        .status(StatusCode::OK)
+                        .header(header::CONTENT_TYPE, content_type)
+                        .header(header::ACCEPT_RANGES, "bytes")
+                        .header(header::CONTENT_LENGTH, total.to_string()),
+                )
+                .body(buf)
+                .unwrap_or_else(|_| error(StatusCode::INTERNAL_SERVER_ERROR, "build failed"))
             } else {
                 let end = WHOLE_FILE_WINDOW.min(total) - 1;
                 let len = end + 1;
@@ -87,14 +96,16 @@ pub fn serve(app_data: &Path, request: &Request<Vec<u8>>) -> Response<Vec<u8>> {
                 if file.read_exact(&mut buf).is_err() {
                     return error(StatusCode::INTERNAL_SERVER_ERROR, "read failed");
                 }
-                cors(Response::builder()
-                    .status(StatusCode::PARTIAL_CONTENT)
-                    .header(header::CONTENT_TYPE, content_type)
-                    .header(header::ACCEPT_RANGES, "bytes")
-                    .header(header::CONTENT_LENGTH, len.to_string())
-                    .header(header::CONTENT_RANGE, format!("bytes 0-{end}/{total}")))
-                    .body(buf)
-                    .unwrap_or_else(|_| error(StatusCode::INTERNAL_SERVER_ERROR, "build failed"))
+                cors(
+                    Response::builder()
+                        .status(StatusCode::PARTIAL_CONTENT)
+                        .header(header::CONTENT_TYPE, content_type)
+                        .header(header::ACCEPT_RANGES, "bytes")
+                        .header(header::CONTENT_LENGTH, len.to_string())
+                        .header(header::CONTENT_RANGE, format!("bytes 0-{end}/{total}")),
+                )
+                .body(buf)
+                .unwrap_or_else(|_| error(StatusCode::INTERNAL_SERVER_ERROR, "build failed"))
             }
         }
     }
@@ -268,10 +279,7 @@ mod tests {
         std::fs::write(&bg_file, b"bg").unwrap();
         std::fs::write(&proj_file, b"vid").unwrap();
 
-        let got_bg = resolve_path(
-            &root,
-            "/_backgrounds/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.jpg",
-        );
+        let got_bg = resolve_path(&root, "/_backgrounds/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.jpg");
         assert_eq!(got_bg.unwrap(), bg_file.canonicalize().unwrap());
 
         let got_proj = resolve_path(&root, "/2026-01-01-abcdef/screen.mp4");
@@ -317,7 +325,10 @@ mod tests {
             Some((0, WHOLE_FILE_WINDOW - 1))
         );
         // A range already inside the window is returned untouched.
-        assert_eq!(parse_range_str("bytes=1000-2000", total), Some((1000, 2000)));
+        assert_eq!(
+            parse_range_str("bytes=1000-2000", total),
+            Some((1000, 2000))
+        );
         // Suffix ranges get the same bound.
         let (start, end) = parse_range_str("bytes=-999999999999", total).unwrap();
         assert_eq!(end - start + 1, WHOLE_FILE_WINDOW);

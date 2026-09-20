@@ -136,9 +136,7 @@ fn build_stream(tx: Sender<RawAudio>, epoch: Instant) -> Result<cpal::Stream, St
         SampleFormat::I16 => device
             .build_input_stream(
                 &stream_config,
-                move |data: &[i16], _| {
-                    push(data.iter().map(|&s| f32::from(s) / 32768.0).collect())
-                },
+                move |data: &[i16], _| push(data.iter().map(|&s| f32::from(s) / 32768.0).collect()),
                 err_fn,
                 None,
             )
@@ -160,8 +158,6 @@ fn build_stream(tx: Sender<RawAudio>, epoch: Instant) -> Result<cpal::Stream, St
         other => return Err(format!("unsupported sample format {other:?}")),
     };
 
-    stream
-        .play()
-        .map_err(|e| format!("start loopback: {e}"))?;
+    stream.play().map_err(|e| format!("start loopback: {e}"))?;
     Ok(stream)
 }

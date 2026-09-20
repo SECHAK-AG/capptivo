@@ -67,12 +67,12 @@ impl CaptureBackend for WgcBackend {
 
         let mut sources = Vec::new();
 
-        let primary = Monitor::primary().ok().map(|m| m.as_raw_hmonitor() as isize);
+        let primary = Monitor::primary()
+            .ok()
+            .map(|m| m.as_raw_hmonitor() as isize);
         for monitor in Monitor::enumerate().map_err(|e| AppError::Other(e.to_string()))? {
             let id = monitor.as_raw_hmonitor() as isize;
-            let title = monitor
-                .name()
-                .unwrap_or_else(|_| format!("Display {id}"));
+            let title = monitor.name().unwrap_or_else(|_| format!("Display {id}"));
             let width = monitor.width().unwrap_or(0);
             let height = monitor.height().unwrap_or(0);
             let preview = if include_thumbnails {
@@ -98,10 +98,7 @@ impl CaptureBackend for WgcBackend {
             if title.trim().is_empty() {
                 continue;
             }
-            let (w, h) = (
-                window.width().unwrap_or(0),
-                window.height().unwrap_or(0),
-            );
+            let (w, h) = (window.width().unwrap_or(0), window.height().unwrap_or(0));
             if w < MIN_WINDOW_SIDE || h < MIN_WINDOW_SIDE {
                 continue;
             }
@@ -167,13 +164,12 @@ impl CaptureBackend for WgcBackend {
         };
         // MinUpdateInterval is Win11 24H2+ (build ≥ 26100); Custom fails the
         // whole session on older builds. FramePacer still enforces target fps.
-        let min_interval = if GraphicsCaptureApi::is_minimum_update_interval_supported()
-            .unwrap_or(false)
-        {
-            MinimumUpdateIntervalSettings::Custom(Duration::from_secs_f64(1.0 / f64::from(fps)))
-        } else {
-            MinimumUpdateIntervalSettings::Default
-        };
+        let min_interval =
+            if GraphicsCaptureApi::is_minimum_update_interval_supported().unwrap_or(false) {
+                MinimumUpdateIntervalSettings::Custom(Duration::from_secs_f64(1.0 / f64::from(fps)))
+            } else {
+                MinimumUpdateIntervalSettings::Default
+            };
 
         let control = match target {
             Target::Monitor(monitor) => FrameForwarder::start_free_threaded(Settings::new(
@@ -357,9 +353,7 @@ struct ForwarderFlags {
 /// `std::time::Instant` on Windows. Reading it next to an `Instant::now()`
 /// anchors the two time axes. Returns 0 if QPC is unavailable.
 fn qpc_now_100ns() -> i64 {
-    use windows::Win32::System::Performance::{
-        QueryPerformanceCounter, QueryPerformanceFrequency,
-    };
+    use windows::Win32::System::Performance::{QueryPerformanceCounter, QueryPerformanceFrequency};
     let mut counts = 0i64;
     let mut freq = 0i64;
     unsafe {

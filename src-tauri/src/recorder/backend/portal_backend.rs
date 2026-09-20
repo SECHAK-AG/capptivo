@@ -355,11 +355,10 @@ fn run_pipewire(
             if id != spa::param::ParamType::Format.as_raw() {
                 return;
             }
-            let (media_type, media_subtype) =
-                match spa::param::format_utils::parse_format(param) {
-                    Ok(v) => v,
-                    Err(_) => return,
-                };
+            let (media_type, media_subtype) = match spa::param::format_utils::parse_format(param) {
+                Ok(v) => v,
+                Err(_) => return,
+            };
             if media_type != spa::param::format::MediaType::Video
                 || media_subtype != spa::param::format::MediaSubtype::Raw
             {
@@ -544,9 +543,7 @@ fn build_cursor_meta_pod() -> AppResult<Vec<u8>> {
     // compositor's max and the meta is dropped — session still says Metadata.
     // Range: we only need `spa_meta_cursor` (x/y); max leaves room for a bitmap.
     let min = std::mem::size_of::<spa_sys::spa_meta_cursor>() as i32;
-    let max = min
-        + std::mem::size_of::<spa_sys::spa_meta_bitmap>() as i32
-        + 256 * 256 * 4;
+    let max = min + std::mem::size_of::<spa_sys::spa_meta_bitmap>() as i32 + 256 * 256 * 4;
 
     let obj = spa::pod::Object {
         type_: spa::utils::SpaTypes::ObjectParamMeta.as_raw(),
@@ -682,10 +679,8 @@ mod tests {
             .iter()
             .find(|p| p.key == spa_sys::SPA_PARAM_META_size)
             .expect("SPA_PARAM_META_size");
-        let Value::Choice(ChoiceValue::Int(Choice(
-            _,
-            ChoiceEnum::Range { min, max, .. },
-        ))) = &size.value
+        let Value::Choice(ChoiceValue::Int(Choice(_, ChoiceEnum::Range { min, max, .. }))) =
+            &size.value
         else {
             panic!(
                 "exact Int sizes intersect to nothing against the compositor; got {:?}",

@@ -275,8 +275,8 @@ impl RecorderController {
         match result {
             Ok(mut artifacts) => {
                 // Encoded t=0 skips capture warm-up blacks — rebase the wall offset.
-                artifacts.camera_offset_ms = raw_camera_offset
-                    .map(|ms| ms.saturating_sub(artifacts.media_lead_in_ms));
+                artifacts.camera_offset_ms =
+                    raw_camera_offset.map(|ms| ms.saturating_sub(artifacts.media_lead_in_ms));
                 if let Some(ref e) = artifacts.error {
                     let message = e.to_string();
                     self.set_state(RecorderState::Error {
@@ -881,11 +881,7 @@ fn is_capture_warmup_black(bgra: &[u8], width: u32, height: u32, bytes_per_row: 
 const CAPTURE_WARMUP_MAX_SECS: f64 = 0.75;
 
 /// HUD timer: wall clock minus completed pauses minus the open pause (if any).
-fn hud_elapsed_secs(
-    wall: Duration,
-    paused_accum: Duration,
-    current_pause: Duration,
-) -> f64 {
+fn hud_elapsed_secs(wall: Duration, paused_accum: Duration, current_pause: Duration) -> f64 {
     wall.saturating_sub(paused_accum + current_pause)
         .as_secs_f64()
 }
@@ -919,7 +915,10 @@ fn fold_out_pauses(
 }
 
 /// Shift cursor samples onto the video timeline after dropping warm-up frames.
-fn shift_cursor_track(mut track: crate::cursor::CursorTrack, lead_in: f64) -> crate::cursor::CursorTrack {
+fn shift_cursor_track(
+    mut track: crate::cursor::CursorTrack,
+    lead_in: f64,
+) -> crate::cursor::CursorTrack {
     if lead_in <= 1e-6 {
         return track;
     }
@@ -1154,7 +1153,9 @@ impl FramePacer {
     /// The most recently pushed frame's bytes + stride, for best-effort poster
     /// capture. `None` until the first `push`.
     fn last_frame(&self) -> Option<(&[u8], u32)> {
-        self.last.as_ref().map(|(data, bpr)| (data.as_slice(), *bpr))
+        self.last
+            .as_ref()
+            .map(|(data, bpr)| (data.as_slice(), *bpr))
     }
 }
 
@@ -1292,7 +1293,10 @@ mod tests {
         // Nothing encodable is left after the trim: fail at start with a clear
         // message rather than spawning ffmpeg against a 0-wide pipe.
         for (w, h) in [(0, 720), (1280, 0), (1, 720), (1280, 1)] {
-            assert!(encodable_dimensions(w, h).is_err(), "{w}x{h} should be rejected");
+            assert!(
+                encodable_dimensions(w, h).is_err(),
+                "{w}x{h} should be rejected"
+            );
         }
     }
 
@@ -1513,7 +1517,10 @@ mod tests {
                 admitted += 1;
             }
         }
-        assert_eq!(admitted, 10, "the gate must never drop a frame the encoder wants");
+        assert_eq!(
+            admitted, 10,
+            "the gate must never drop a frame the encoder wants"
+        );
     }
 
     #[test]
@@ -1604,7 +1611,10 @@ mod tests {
         // advances past the filled slot, frames flow again.
         let mut next = 0;
         next = capture_slot_gate(1.0, 60, next).expect("first frame admitted");
-        assert!(capture_slot_gate(1.0, 60, next).is_none(), "same slot is surplus");
+        assert!(
+            capture_slot_gate(1.0, 60, next).is_none(),
+            "same slot is surplus"
+        );
         assert!(capture_slot_gate(1.0, 60, next).is_none(), "still surplus");
         assert!(
             capture_slot_gate(1.0 + 1.0 / 60.0, 60, next).is_some(),
@@ -1643,7 +1653,11 @@ mod tests {
         assert_eq!(pool.len(), 0, "the first frame is still held for gap-fill");
 
         pacer.remember(vec![2u8; 16], 4);
-        assert_eq!(pool.len(), 1, "the displaced frame must come back for reuse");
+        assert_eq!(
+            pool.len(),
+            1,
+            "the displaced frame must come back for reuse"
+        );
 
         // And the retained frame is the new one, not the recycled one.
         assert_eq!(pacer.last_frame().map(|(d, _)| d[0]), Some(2));
@@ -1981,8 +1995,7 @@ mod tests {
             }
         });
 
-        let controller =
-            RecorderController::new(Box::new(TestPatternBackend::default()), emit);
+        let controller = RecorderController::new(Box::new(TestPatternBackend::default()), emit);
         let config = RecorderConfig {
             source_id: "display:test".into(),
             crop: None,
