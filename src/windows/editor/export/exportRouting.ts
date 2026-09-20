@@ -31,19 +31,15 @@ export type AnnexBHwMode =
 /**
  * WebCodecs `hardwareAcceleration` probe order for Annex-B export.
  *
- * Windows does not lead with `prefer-hardware`: WebView2's hardware H.264
- * encoder is the one that accepts frames and silently stops emitting chunks.
- * Software H.264 is not the slow choice it sounds like here — compositing runs
- * on the GPU either way, and a 1080p30 software encode outruns the compositor on
- * any machine that can run the editor. `no-preference` still lets the driver
- * offer hardware where it is healthy.
+ * Windows probes `prefer-hardware` first, but only a candidate that emits all
+ * probe output and completes flush is accepted. A broken WebView2 hardware
+ * encoder therefore falls through to `no-preference` and then software without
+ * hanging a real export.
  */
 export function annexBHardwareProbeOrder(
   windows: boolean,
 ): readonly AnnexBHwMode[] {
-  if (windows) {
-    return ["prefer-software", "no-preference"];
-  }
+  if (windows) return ["prefer-hardware", "no-preference", "prefer-software"];
   return ["prefer-hardware", "no-preference", "prefer-software"];
 }
 
@@ -72,22 +68,18 @@ export type Mp4Route = "annexb-ffmpeg" | "rgba-ffmpeg";
  * sometimes. A caller that exhausts this list has a genuine failure to report,
  * not another fallback to invent.
  *
- * Windows never attempts Annex-B. WebView2's H.264 encoder accepts
- * `configure()` and frames and then stops emitting chunks partway into a real
- * export, so the route cost ~9s of stall detection plus a discarded partial
- * compose on every single export while never once succeeding. It is not
- * probed, because probing it is the cost — the caller is expected to skip the
- * probe entirely rather than discard its result.
+ * Windows now *probes* Annex-B instead of skipping it outright. Recordly's
+ * "Breeze" path proves WebCodecs Annex-B → ffmpeg `-c:v copy` works on WebView2
+ * when software encode is preferred; capptivo's old blanket ban forced every
+ * Windows export through ~8 MB/frame RGBA IPC. A failed probe still lands on
+ * rgba-ffmpeg — the probe cost is one short encode, not a whole export.
  */
 export function planMp4Routes(input: {
-  /** Windows (WebView2) — Annex-B is known-dead there; see above. */
-  windows: boolean;
   /** A *verified* Annex-B encoder exists (not merely a declared one). */
   annexBVerified: boolean;
   /** Support/debug override: skip WebCodecs entirely. */
   forceRgba: boolean;
 }): readonly Mp4Route[] {
-  if (input.windows) return ["rgba-ffmpeg"];
   if (input.forceRgba) return ["rgba-ffmpeg"];
   if (input.annexBVerified) return ["annexb-ffmpeg", "rgba-ffmpeg"];
   return ["rgba-ffmpeg"];

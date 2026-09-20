@@ -1,7 +1,7 @@
 //! Application state managed by Tauri and shared across commands.
 
-use crate::export_h264::H264StreamMuxer;
-use crate::export_rawvideo::RawvideoStreamEncoder;
+use crate::export_h264::H264ExportSession;
+use crate::export_rawvideo::RawvideoExportSession;
 use crate::project::ProjectStore;
 use crate::recorder::backend::{CaptureBackend, TestPatternBackend};
 use crate::recorder::types::{RecorderConfig, RecorderEvent};
@@ -22,9 +22,9 @@ pub struct AppState {
     /// Open export file sinks, keyed by handle id (see `commands::export`).
     pub exports: Mutex<HashMap<u64, ExportSink>>,
     /// Annex-B H.264 → ffmpeg MP4 sessions (see `commands::export` h264 stream).
-    pub h264_exports: Mutex<HashMap<u64, H264StreamMuxer>>,
+    pub h264_exports: Mutex<HashMap<u64, Arc<H264ExportSession>>>,
     /// Pixi RGBA → ffmpeg encode sessions (Windows Path B; see rawvideo stream).
-    pub rawvideo_exports: Mutex<HashMap<u64, RawvideoStreamEncoder>>,
+    pub rawvideo_exports: Mutex<HashMap<u64, Arc<RawvideoExportSession>>>,
     pub next_export_id: Mutex<u64>,
     /// Optional face-cam file being written by the camera WebView during capture.
     pub camera_sink: Mutex<Option<ExportSink>>,

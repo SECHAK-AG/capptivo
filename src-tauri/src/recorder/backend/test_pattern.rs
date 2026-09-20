@@ -146,7 +146,11 @@ fn render_frame(n: u64, elapsed: Duration) -> RawFrame {
             // BGRA
             data[i] = if bright { 255 } else { (x * 255 / W) as u8 }; // B
             data[i + 1] = (y * 255 / H) as u8; // G
-            data[i + 2] = if bright { 255 } else { ((x + y) * 255 / (W + H)) as u8 }; // R
+            data[i + 2] = if bright {
+                255
+            } else {
+                ((x + y) * 255 / (W + H)) as u8
+            }; // R
             data[i + 3] = 255; // A
         }
     }

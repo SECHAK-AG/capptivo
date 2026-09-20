@@ -46,9 +46,16 @@ import {
   createExportCompositor,
   createExportCompositorFromMedia,
   planFrameTimes,
-  seekTo,
 } from "./exportCompositor";
-import { openSequentialMedia } from "./sequentialMedia";
+import {
+  createExportFrameIterator,
+  warnSeekPath,
+} from "./exportFrameLoop";
+import {
+  ensureSeekableForSeekPath,
+  openExportSequentialMedia,
+} from "./exportMediaOpen";
+import { exportLog } from "./exportLog";
 import { shouldYieldNow, yieldToMain } from "./exportYield";
 import { AdaptiveEncodeQueue } from "./encodeBackpressure";
 import { ExportSink } from "./exportSink";
@@ -79,8 +86,10 @@ import {
   type ExportSettings,
   type ResolvedExportParams,
 } from "./exportSettings";
+import { isPassthroughEligible } from "./passthrough";
+import { captureExportSnapshot, type ExportSnapshot } from "./exportSnapshot";
 import { resolveStageSize } from "../lib/composition";
-import { faceCamMediaTime, type FaceCamTrack } from "../lib/faceCamSync";
+import { type FaceCamTrack } from "../lib/faceCamSync";
 import {
   GpuContextLostError,
   isGpuContextLostError,
@@ -118,17 +127,18 @@ export async function exportProject(
   const store = useEditorStore.getState();
   const { project, screenUrl, sourceVideoSize } = store;
   if (!project || !screenUrl || !sourceVideoSize) return;
+  const snapshot = captureExportSnapshot(store);
 
   // Carried as one value so no export path can read the face-cam without the
   // offset that puts it on the screen timeline.
   const faceCam: FaceCamTrack = {
-    url: store.cameraUrl,
-    offsetMs: store.cameraOffsetMs,
+    url: snapshot.cameraUrl,
+    offsetMs: snapshot.cameraOffsetMs,
   };
 
   // Same stage resolution the preview composites at — the ratio picker is the
   // single source of output size.
-  const stage = resolveStageSize(store.aspectRatioPresetId, sourceVideoSize);
+  const stage = resolveStageSize(snapshot.aspectRatioPresetId, snapshot.sourceVideoSize);
   const resolved = resolveExportParams(settings, stage.width, stage.height);
   const fileExt = resolved.ext;
   const base =
@@ -137,7 +147,8 @@ export async function exportProject(
 
   store.setExporting(true);
   store.setExportError(null);
-  const signal = beginExportAbort();
+  const abortSession = beginExportAbort();
+  const signal = abortSession.signal;
 
   // Pick the destination up front: the encoder streams straight into this file
   // as frames are produced, so peak memory is one chunk rather than the whole
@@ -153,7 +164,7 @@ export async function exportProject(
     logClientError("export:pickPath", e);
   }
   if (!path || signal.aborted) {
-    endExportAbort();
+    endExportAbort(abortSession.id);
     const s = useEditorStore.getState();
     s.setExporting(false);
     s.setExportStatus(null);
@@ -170,11 +181,52 @@ export async function exportProject(
       needed: estimateExportBytes(resolved, keptDuration),
     });
   } catch (e) {
-    endExportAbort();
+    endExportAbort(abortSession.id);
     store.setExportError(describeError(e));
     logClientError("export:diskSpace", e);
     store.setExporting(false);
     store.setExportStatus(null);
+    return;
+  }
+
+  // "Original" fast path: stream-copy, no render. Eligibility is re-checked
+  // against live state — if the project gained edits after the dialog opened,
+  // it just renders normally instead of silently dropping them.
+  if (
+    settings.passthrough &&
+    resolved.ext === "mp4" && // MP4 format+container; never GIF or WebM
+    isPassthroughEligible({
+      segments: snapshot.segments,
+      duration: snapshot.duration,
+      zoomFragments: snapshot.zoomFragments,
+      blurRegions: snapshot.blurRegions,
+      captions: snapshot.captions,
+      cameraUrl: snapshot.cameraUrl,
+      screenContentCrop: snapshot.screenContentCrop,
+    })
+  ) {
+    store.setExportStatus(translateNow("export.status.saving"));
+    try {
+      await commands.exportPassthrough({
+        projectId: snapshot.project.id,
+        outPath: path,
+        preset: settings.audioEnhance,
+        hasSystemAudio: snapshot.project.capture.capturedSystemAudio,
+      });
+      throwIfAborted(signal);
+      await notifyDone(path);
+    } catch (e) {
+      if (!isExportCancelled(e)) {
+        store.setExportError(describeError(e));
+        logClientError("export:passthrough", e);
+      }
+    } finally {
+      endExportAbort(abortSession.id);
+      const s = useEditorStore.getState();
+      s.setExporting(false);
+      s.setExportProgress(0);
+      s.setExportStatus(null);
+    }
     return;
   }
 
@@ -191,6 +243,7 @@ export async function exportProject(
   // and the post-export FFmpeg attach is skipped.
   let audioPrep: Promise<PreparedExportAudio | null> | null = null;
   let audioAbsPath: string | null = null;
+  let prepared: PreparedExportAudio | null = null;
   let gpuWasLost = false;
   try {
     // Kick audio prepare before ensureSeekable so FFmpeg overlaps that work.
@@ -198,7 +251,7 @@ export async function exportProject(
       const outName = `capptivo-export-audio-${crypto.randomUUID()}.${
         resolved.container === "webm" ? "webm" : "m4a"
       }`;
-      audioPrep = prepareExportAudioTrack(outName, settings.audioEnhance).catch(
+      audioPrep = prepareExportAudioTrack(outName, settings.audioEnhance, snapshot).catch(
         (e) => {
           console.warn(
             "export audio prepare failed; will fall back to post-mux",
@@ -209,32 +262,19 @@ export async function exportProject(
       );
     }
 
-    // Older recordings were written as fragmented MP4, which WebKit's export
-    // seek path (used when WebCodecs can't decode the source codec) can't seek
-    // past its first fragment — freezing the export. Guarantee a seekable
-    // progressive source before rendering; a fast no-op once migrated.
-    console.info(`[export] ensureSeekableRecording(${project.id})…`);
-    const t0 = performance.now();
-    await commands.ensureSeekableRecording(project.id);
-    throwIfAborted(signal);
-    console.info(
-      `[export] ensureSeekableRecording done in ${(performance.now() - t0).toFixed(0)}ms ` +
-        `screenUrl=${screenUrl}`,
-    );
+    // Sequential decode opens on Range reads — no upfront migration. If it
+    // fails, each render path retries after ensureSeekableRecording (see
+    // openExportSequentialMedia) or migrates before the seek fallback.
 
     if (resolved.format === "gif") {
       sink = await ExportSink.open(path);
-      await renderGifToSink(sink, screenUrl, faceCam, resolved, signal);
+      await renderGifToSink(sink, screenUrl, faceCam, resolved, signal, snapshot);
       store.setExportStatus(translateNow("export.status.saving"));
       const saved = await sink.finish();
       sink = null;
       await notifyDone(saved);
       return;
     }
-
-    const prepared = audioPrep ? await audioPrep : null;
-    throwIfAborted(signal);
-    audioAbsPath = prepared?.absPath ?? null;
 
     const attachAudioAndFinish = async (videoPath: string) => {
       store.setExportStatus(translateNow("export.status.saving"));
@@ -247,10 +287,10 @@ export async function exportProject(
           })
           .catch(async (e) => {
             console.warn("export audio attach failed; trying full mux", e);
-            await muxRecordedAudio(videoPath, settings.audioEnhance);
+            await muxRecordedAudio(videoPath, settings.audioEnhance, snapshot);
           });
       } else {
-        await muxRecordedAudio(videoPath, settings.audioEnhance).catch((e) =>
+        await muxRecordedAudio(videoPath, settings.audioEnhance, snapshot).catch((e) =>
           console.warn("export audio mux failed; keeping silent video", e),
         );
       }
@@ -258,13 +298,21 @@ export async function exportProject(
     };
 
     if (resolved.container === "mp4") {
-      await exportMp4(path, screenUrl, faceCam, resolved, signal);
+      // Audio preparation runs concurrently with video rendering. It is not
+      // needed until the video-only MP4 has been finalized.
+      await exportMp4(path, screenUrl, faceCam, resolved, signal, snapshot);
+      prepared = audioPrep ? await audioPrep : null;
+      throwIfAborted(signal);
+      audioAbsPath = prepared?.absPath ?? null;
       await attachAudioAndFinish(path);
       return;
     }
 
     // WebM: mediabunny muxes in-webview, audio included in-container when the
     // prepared track opens.
+    prepared = audioPrep ? await audioPrep : null;
+    throwIfAborted(signal);
+    audioAbsPath = prepared?.absPath ?? null;
     sink = await ExportSink.open(path);
     const audioMuxed = await renderWebmToSink(
       sink,
@@ -273,6 +321,7 @@ export async function exportProject(
       resolved,
       prepared?.mediaUrl ?? null,
       signal,
+      snapshot,
     );
     throwIfAborted(signal);
     store.setExportStatus(translateNow("export.status.saving"));
@@ -301,7 +350,7 @@ export async function exportProject(
       }
     }
   } finally {
-    endExportAbort();
+    endExportAbort(abortSession.id);
     // Prepare may still be in flight if we failed before awaiting it — wait and
     // delete so capptivo-export-audio-* never accumulates in the project dir.
     if (!audioAbsPath && audioPrep) {
@@ -346,17 +395,15 @@ async function exportMp4(
   faceCam: FaceCamTrack,
   resolved: ResolvedExportParams,
   signal: AbortSignal,
+  snapshot: ExportSnapshot,
 ): Promise<void> {
   const forceRgba = import.meta.env.VITE_CAPPTIVO_RAWVIDEO_EXPORT === "1";
-  // Skipped outright, not merely ignored: the probe spins up a real encoder at
-  // full resolution, so paying for it and discarding the answer would keep most
-  // of the cost this skip exists to remove.
-  const skipAnnexB = isWindows || forceRgba;
 
   // Verified, not merely declared: this is a real encode of real frames with a
   // deadline, and it is the difference between failing in a few hundred
-  // milliseconds and freezing an export at 1% forever.
-  const annexBTuning = skipAnnexB
+  // milliseconds and freezing an export at 1% forever. Windows is probed too —
+  // prefer-software Annex-B avoids the RGBA pipe when healthy (Recordly-style).
+  const annexBTuning = forceRgba
     ? null
     : await probeAnnexBConfig(
         resolved.width,
@@ -368,11 +415,10 @@ async function exportMp4(
   throwIfAborted(signal);
 
   const routes = planMp4Routes({
-    windows: isWindows,
     annexBVerified: annexBTuning != null,
     forceRgba,
   });
-  console.info(`[export] mp4 route plan: ${routes.join(" → ")}`);
+  exportLog(`[export] mp4 route plan: ${routes.join(" → ")}`);
 
   // Stated as an invariant rather than asserted away: if the planner ever emits
   // this route without a verified encoder, that surfaces as an ordinary route
@@ -389,6 +435,7 @@ async function exportMp4(
         resolved,
         signal,
         annexBTuning,
+        snapshot,
       );
     }
     return renderMp4ViaFfmpegRawvideo(
@@ -397,13 +444,14 @@ async function exportMp4(
       faceCam,
       resolved,
       signal,
+      snapshot,
     );
   };
 
   const failures: string[] = [];
   for (const route of routes) {
     try {
-      console.info(`[export] path=${route}`);
+      exportLog(`[export] path=${route}`);
       await runRoute(route);
       throwIfAborted(signal);
       return;
@@ -430,9 +478,9 @@ async function exportMp4(
 async function muxRecordedAudio(
   videoPath: string,
   preset: ExportAudioEnhance,
+  snapshot: ExportSnapshot,
 ): Promise<void> {
-  const { project, duration, segments } = useEditorStore.getState();
-  if (!project) return;
+  const { project, duration, segments } = snapshot;
 
   const kept =
     segments.length > 0
@@ -462,9 +510,9 @@ type PreparedExportAudio = { absPath: string; mediaUrl: string };
 async function prepareExportAudioTrack(
   outName: string,
   preset: ExportAudioEnhance,
+  snapshot: ExportSnapshot,
 ): Promise<PreparedExportAudio | null> {
-  const { project, duration, segments } = useEditorStore.getState();
-  if (!project) return null;
+  const { project, duration, segments } = snapshot;
 
   const kept =
     segments.length > 0
@@ -557,6 +605,7 @@ async function renderWebmToSink(
   params: ResolvedExportParams,
   audioMediaUrl: string | null,
   signal: AbortSignal,
+  snapshot: ExportSnapshot,
 ): Promise<boolean> {
   const { width, height, fps, bitrate } = params;
   throwIfAborted(signal);
@@ -573,10 +622,28 @@ async function renderWebmToSink(
   }
 
   throwIfAborted(signal);
-  const sequential = await openSequentialMedia(screenUrl, faceCam, "webcodecs");
-  const session = sequential
-    ? await createExportCompositorFromMedia(sequential.media, width, height)
-    : await createExportCompositor(screenUrl, faceCam, width, height);
+  const projectId = snapshot.projectId;
+
+  const sequential = await openExportSequentialMedia(
+    screenUrl,
+    faceCam,
+    "webcodecs",
+    projectId,
+  );
+  let session;
+  if (sequential) {
+    session = await createExportCompositorFromMedia(
+      sequential.media,
+      width,
+      height,
+      { snapshot },
+    );
+  } else {
+    await ensureSeekableForSeekPath(projectId);
+    session = await createExportCompositor(screenUrl, faceCam, width, height, {
+      snapshot,
+    });
+  }
   const {
     canvas,
     video,
@@ -589,6 +656,7 @@ async function renderWebmToSink(
     uploadStats,
     isGpuLost,
   } = session;
+  let disposeFrames: (() => void) | null = null;
 
   const output = new Output({
     format: new WebMOutputFormat(),
@@ -598,6 +666,7 @@ async function renderWebmToSink(
 
   let audioTrack: Awaited<ReturnType<typeof openExportAudioTrack>> = null;
   let audioMuxed = false;
+  let audioError: unknown = null;
 
   try {
     const source = new CanvasSource(canvas, {
@@ -619,7 +688,13 @@ async function renderWebmToSink(
     }
 
     await output.start();
-    const audioPump = audioTrack ? audioTrack.pump() : Promise.resolve();
+    // Observe the pump immediately so a failed audio track stops video work on
+    // the next frame instead of becoming an unhandled rejection at finalize.
+    const audioPump = audioTrack
+      ? audioTrack.pump().catch((error) => {
+          audioError = error;
+        })
+      : Promise.resolve();
 
     const frameDuration = 1 / fps;
     const frameTimes = planFrameTimes(segments, fps);
@@ -627,54 +702,47 @@ async function renderWebmToSink(
     // rotated samples — see `frameSurface`).
     const reader =
       sequential?.begin(frameTimes, { mode: "video-frame" }) ?? null;
+    const frames = createExportFrameIterator(
+      frameTimes,
+      reader,
+      reader
+        ? null
+        : { video, camera, faceCam },
+      { signal },
+    );
+    disposeFrames = frames.dispose;
     const encodeQueue = new AdaptiveEncodeQueue(width, height, fps);
     const progress = throttledProgress(frameTimes.length);
-    console.info(
-      `[export] webm render loop: path=${reader ? "sequential" : "seek"} ` +
+    exportLog(
+      `[export] webm render loop: path=${frames.mode} ` +
         `compositor=${backend} frames=${frameTimes.length} ` +
         `codec=${tuning.codec} latency=${tuning.latencyMode} ` +
         `hw=${tuning.hardwareAcceleration} ` +
         `audio=${audioMuxed ? "in-container" : "post-mux"} ` +
         `encodeDepthSeed=${encodeQueue.depth}`,
     );
-    let driftLogs = 0;
+    if (frames.mode === "seek") warnSeekPath("webm", frameTimes.length);
+
+    await frames.prime();
+
     let framesDone = 0;
     let timestamp = 0;
     let yields = 0;
     const loopStart = performance.now();
     let lastYieldAt = loopStart;
 
-    for (const t of frameTimes) {
+    for (let i = 0; i < frames.count; i += 1) {
       throwIfAborted(signal);
-      if (reader) {
-        await reader.nextFrame();
-      } else {
-        await seekTo(video, t);
-        if (camera) {
-          const camT = faceCamMediaTime(t, faceCam.offsetMs, camera.duration);
-          if (camT != null) await seekTo(camera, camT).catch(() => undefined);
-        }
-        // Cheap freeze detector: a seek that lands far from the target means the
-        // element stopped honoring seeks (the fragmented-MP4 clamp signature).
-        if (Math.abs(video.currentTime - t) > 0.1 && driftLogs < 10) {
-          driftLogs += 1;
-          console.warn(
-            `[export] webm seek clamp at frame ${framesDone}: wanted ${t.toFixed(3)}s ` +
-              `got ${video.currentTime.toFixed(3)}s`,
-          );
-        }
-      }
+      if (audioError) throw audioError;
+      await frames.advance(i);
+      const t = frames.timeAt(i);
       const composeStart = performance.now();
       throwIfGpuLost(isGpuLost);
       drawAt(t);
       throwIfGpuLost(isGpuLost);
       const frameComposeMs = performance.now() - composeStart;
 
-      // `add()` snapshots the surface into a VideoFrame synchronously, so the
-      // compositor is free to redraw while the encode completes.
       const encoded = source.add(timestamp, frameDuration);
-      // Deadline: `push` only blocks when the queue is at depth, and then only
-      // on a real encode. Eight seconds for one frame means the encoder is gone.
       await withDeadline(
         encodeQueue.push(encoded, frameComposeMs),
         ENCODE_STALL_MS,
@@ -684,10 +752,6 @@ async function renderWebmToSink(
       framesDone += 1;
       progress(framesDone);
 
-      // Hand the main thread back if we have held it too long. The frame clock
-      // is precomputed (`planFrameTimes`), so pausing here cannot change which
-      // source frame lands in which output frame — only whether the window
-      // repaints while it happens.
       const decision = shouldYieldNow(performance.now(), lastYieldAt);
       if (decision.shouldYield) {
         yields += 1;
@@ -698,9 +762,10 @@ async function renderWebmToSink(
     }
     await withDeadline(encodeQueue.drain(), FLUSH_STALL_MS, "webm encode drain");
     await withDeadline(audioPump, FLUSH_STALL_MS, "webm audio pump");
+    if (audioError) throw audioError;
     const wallMs = performance.now() - loopStart;
     const uploads = uploadStats();
-    console.info(
+    exportLog(
       `[export] webm render loop done in ${(wallMs / 1000).toFixed(1)}s ` +
         `(${(framesDone / (wallMs / 1000)).toFixed(1)} fps) — ` +
         `yields=${yields}` +
@@ -709,7 +774,7 @@ async function renderWebmToSink(
           : ""),
     );
     const breakdown = stats();
-    if (breakdown) console.info(`[export] composite breakdown: ${breakdown}`);
+    if (breakdown) exportLog(`[export] composite breakdown: ${breakdown}`);
 
     await withDeadline(output.finalize(), FLUSH_STALL_MS, "webm finalize");
     if (sink.bytesWritten < 256) {
@@ -724,6 +789,7 @@ async function renderWebmToSink(
       await output.cancel().catch(() => undefined);
     throw e;
   } finally {
+    disposeFrames?.();
     audioTrack?.dispose();
     dispose();
   }

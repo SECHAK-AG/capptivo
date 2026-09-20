@@ -88,19 +88,19 @@ pub struct RecorderConfig {
     pub fps: u32,
     #[serde(default = "default_true")]
     pub show_cursor: bool,
-  #[serde(default)]
-  pub capture_system_audio: bool,
-  #[serde(default)]
-  pub capture_microphone: bool,
-  /// WebView / OS mic device id — resolved to a native unique id on macOS.
-  #[serde(default)]
-  pub microphone_device_id: Option<String>,
-  /// Human label used to match the cpal / Pulse input when the id alone is
-  /// ambiguous. Prefer an exact label match, then the device id.
-  #[serde(default)]
-  pub microphone_label: Option<String>,
-  #[serde(default)]
-  pub quality: QualityPreset,
+    #[serde(default)]
+    pub capture_system_audio: bool,
+    #[serde(default)]
+    pub capture_microphone: bool,
+    /// WebView / OS mic device id — resolved to a native unique id on macOS.
+    #[serde(default)]
+    pub microphone_device_id: Option<String>,
+    /// Human label used to match the cpal / Pulse input when the id alone is
+    /// ambiguous. Prefer an exact label match, then the device id.
+    #[serde(default)]
+    pub microphone_label: Option<String>,
+    #[serde(default)]
+    pub quality: QualityPreset,
 }
 
 fn default_fps() -> u32 {
@@ -176,14 +176,25 @@ impl RecorderState {
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub enum RecorderEvent {
-    StateChanged { state: RecorderState },
-    Elapsed { seconds: f64 },
+    StateChanged {
+        state: RecorderState,
+    },
+    Elapsed {
+        seconds: f64,
+    },
     /// Input meter level in dBFS for the popover mic meter (future: real values).
     #[allow(dead_code)]
-    Level { mic_db: f32 },
-    Error { message: String, fatal: bool },
+    Level {
+        mic_db: f32,
+    },
+    Error {
+        message: String,
+        fatal: bool,
+    },
     /// Capture producer vanished (window closed, display unplugged, etc.).
-    Interrupted { frames_encoded: u64 },
+    Interrupted {
+        frames_encoded: u64,
+    },
 }
 
 impl RecorderEvent {

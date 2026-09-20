@@ -21,12 +21,18 @@ as a **separate process** (no linking into Capptivo).
 | Bundled names | `capptivo-ffmpeg`, `capptivo-ffprobe` |
 | Typical license | GPL (static builds include GPL-licensed codecs such as libx264) |
 | Sources used | [BtbN/FFmpeg-Builds](https://github.com/BtbN/FFmpeg-Builds) (Windows/Linux GPL builds); [ffmpeg.martin-riedl.de](https://ffmpeg.martin-riedl.de/) (macOS) |
+| Pinned builds | [BtbN snapshot N-126313-g1ae4048218](https://github.com/BtbN/FFmpeg-Builds/releases/tag/autobuild-2026-08-29-13-12) (Windows/Linux); Martin Riedl FFmpeg 9.0.1 (macOS) |
+| Integrity manifest | `scripts/ffmpeg-sidecars.json` (exact URLs, archive members, sizes, and SHA-256 digests) |
 | Upstream | https://ffmpeg.org/ · https://github.com/FFmpeg/FFmpeg |
 
 Corresponding FFmpeg source is available from the upstream project and from the
 build providers above. If you redistribute Capptivo binaries, you must also
 satisfy FFmpeg’s license terms for the bundled sidecars (including offering
 source for those GPL components).
+
+The build fetcher verifies each archive before extraction and each selected
+binary before cache promotion. It also re-verifies cached sidecars before every
+dev or build invocation, so file presence alone is never treated as provenance.
 
 ---
 

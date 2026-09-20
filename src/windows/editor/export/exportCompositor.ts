@@ -34,6 +34,7 @@ import { isWindows } from "@/lib/platform";
 import { toBlobMediaUrl } from "../lib/mediaBlobUrl";
 import { faceCamFrameAt, type FaceCamTrack } from "../lib/faceCamSync";
 import { useEditorStore } from "../store";
+import type { ExportSnapshot } from "./exportSnapshot";
 
 export type ExportCompositor = {
   /** Output-sized bitmap: what the encoder captures. */
@@ -58,6 +59,8 @@ export type ExportCompositor = {
   ) => "pending" | "done" | "failed";
   /** Which compositor won — decode strategy tunes itself off this. */
   backend: FrameCompositor["backend"];
+  /** WebGL or WebGPU — drives upload diagnostics in the export log. */
+  gpu: FrameCompositor["gpu"];
   video: HTMLVideoElement;
   camera: HTMLVideoElement | null;
   segments: TrimSegment[];
@@ -101,6 +104,8 @@ export type CompositorOptions = {
    * stay on the GPU.
    */
   cpuReadback?: boolean;
+  /** Immutable render inputs captured when the export job started. */
+  snapshot?: ExportSnapshot;
 };
 
 /**
@@ -225,6 +230,7 @@ export async function createExportCompositorFromMedia(
     // Fixed output size: MSAA + per-upload mipmap regen are pure cost.
     antialias: false,
     mipmaps: false,
+    // WKWebView: WebGL is stable; WebGPU can black the stage mid-export.
     gpuPreference: ["webgl", "webgpu"] as const,
     profile: true,
   } as const;
@@ -290,6 +296,7 @@ export async function createExportCompositorFromMedia(
    * than mutating them (`framePaintInputsChanged` in `PreviewStage.tsx` relies
    * on exactly that), so holding them is enough to pin the values.
    */
+  const renderState = options.snapshot ?? useEditorStore.getState();
   const {
     sourceAspect,
     backgroundImage,
@@ -306,7 +313,7 @@ export async function createExportCompositorFromMedia(
     backgroundType,
     sourceVideoSize,
     segments: storeSegments,
-  } = useEditorStore.getState();
+  } = renderState;
 
   const segments: TrimSegment[] =
     storeSegments.length > 0
@@ -405,6 +412,7 @@ export async function createExportCompositorFromMedia(
     tryFinishReadPixels: (ticket, target, force) =>
       frame.tryFinishReadPixels(ticket, target, force),
     backend: frame.backend,
+    gpu: frame.gpu,
     stats: () => frame.stats(),
     uploadStats: () => frame.uploadStats(),
     video,
@@ -448,29 +456,7 @@ export function planFrameTimes(segments: TrimSegment[], fps: number): number[] {
   return times;
 }
 
-export function seekTo(video: HTMLVideoElement, time: number): Promise<void> {
-  return new Promise((resolve, reject) => {
-    if (Math.abs(video.currentTime - time) < 0.001) {
-      resolve();
-      return;
-    }
-    const onSeeked = () => {
-      cleanup();
-      resolve();
-    };
-    const onErr = () => {
-      cleanup();
-      reject(new Error("seek failed"));
-    };
-    const cleanup = () => {
-      video.removeEventListener("seeked", onSeeked);
-      video.removeEventListener("error", onErr);
-    };
-    video.addEventListener("seeked", onSeeked, { once: true });
-    video.addEventListener("error", onErr, { once: true });
-    video.currentTime = time;
-  });
-}
+export { seekTo } from "./exportSeek";
 
 export function once(
   target: HTMLMediaElement,
