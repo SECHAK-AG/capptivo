@@ -11,10 +11,10 @@
 //! `source_id` string and receives the resolved output size back over a
 //! rendezvous channel before returning the [`CaptureHandle`].
 
-use super::sck_window;
-use super::system_audio::SystemAudioTap;
 use super::picker_sources;
+use super::sck_window;
 use super::source_preview;
+use super::system_audio::SystemAudioTap;
 use super::{CaptureBackend, CaptureHandle, RawFrame, CAPTURE_CHANNEL_CAP};
 use crate::error::{AppError, AppResult};
 use crate::recorder::hw_encoder;
@@ -579,18 +579,33 @@ mod tests {
 
     #[test]
     fn captures_inside_the_edge_keep_their_size() {
-        assert!(same(preset_inside_hardware_edge(3840, 2160), Resolution::Captured));
-        assert!(same(preset_inside_hardware_edge(4096, 2304), Resolution::Captured));
-        assert!(same(preset_inside_hardware_edge(0, 9000), Resolution::Captured));
+        assert!(same(
+            preset_inside_hardware_edge(3840, 2160),
+            Resolution::Captured
+        ));
+        assert!(same(
+            preset_inside_hardware_edge(4096, 2304),
+            Resolution::Captured
+        ));
+        assert!(same(
+            preset_inside_hardware_edge(0, 9000),
+            Resolution::Captured
+        ));
     }
 
     #[test]
     fn a_5k_display_lands_on_the_2160p_preset() {
         // 2560×1440 pt at 2× — scap resolves _2160p to [3840, 2160] here.
-        assert!(same(preset_inside_hardware_edge(5120, 2880), Resolution::_2160p));
+        assert!(same(
+            preset_inside_hardware_edge(5120, 2880),
+            Resolution::_2160p
+        ));
         assert_eq!(scap_output_size(5120, 2880, 3840), (3840, 2160));
         // An area of that display, 2560×1410 pt.
-        assert!(same(preset_inside_hardware_edge(5120, 2820), Resolution::_2160p));
+        assert!(same(
+            preset_inside_hardware_edge(5120, 2820),
+            Resolution::_2160p
+        ));
         assert_eq!(scap_output_size(5120, 2820, 3840), (3840, 2114));
     }
 
@@ -598,7 +613,10 @@ mod tests {
     fn a_portrait_5k_display_needs_a_smaller_preset() {
         // _2160p resolves to [3840, 6826] and the per-axis min keeps the
         // captured 5120 px height — only _1080p gets both axes under the edge.
-        assert!(same(preset_inside_hardware_edge(2880, 5120), Resolution::_1080p));
+        assert!(same(
+            preset_inside_hardware_edge(2880, 5120),
+            Resolution::_1080p
+        ));
         assert_eq!(scap_output_size(2880, 5120, 1920), (1920, 3412));
     }
 

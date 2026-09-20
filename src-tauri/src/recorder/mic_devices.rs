@@ -64,7 +64,11 @@ fn listing_microphones_does_not_segfault() {
     // during input_devices(). Must stay on cpal ≥ 0.17.
     let list = list_microphones_impl();
     for mic in &list {
-        assert!(!mic.device_id.is_empty(), "empty device_id for {}", mic.label);
+        assert!(
+            !mic.device_id.is_empty(),
+            "empty device_id for {}",
+            mic.label
+        );
         assert!(!mic.label.is_empty(), "empty label");
     }
 }

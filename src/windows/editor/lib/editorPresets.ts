@@ -197,7 +197,8 @@ function normalizeExportSettings(raw: unknown): ExportSettings {
       ? d.audioEnhance
       : DEFAULT_EXPORT_SETTINGS.audioEnhance;
   const gifSpeed = clampGifSpeed(d.gifSpeed);
-  return { format, container, encoding, fps, audioEnhance, gifSpeed };
+  const passthrough = d.passthrough === true;
+  return { format, container, encoding, fps, audioEnhance, passthrough, gifSpeed };
 }
 
 function normalizeFaceCam(raw: unknown): FaceCamParams {
