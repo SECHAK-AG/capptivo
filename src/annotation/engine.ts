@@ -945,7 +945,7 @@ export class AnnotationEngine {
           const safeInitialDx = Math.max(1, Math.abs(initialDx));
           const safeInitialDy = Math.max(1, Math.abs(initialDy));
 
-          let scale = 1;
+          let scale: number;
           if (handle === "n" || handle === "s") {
             scale = Math.abs(currentDy) / safeInitialDy;
           } else if (handle === "e" || handle === "w") {

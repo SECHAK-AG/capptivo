@@ -87,6 +87,8 @@ export const fr: Record<TranslationKey, string> = {
   "export.error.gpuContextLost": "Export interrompu : le pilote graphique s’est réinitialisé pendant le rendu. Réessayez l’export.",
   "editor.previewGpuLost": "Aperçu arrêté : le pilote graphique s’est réinitialisé. Rouvrez l’éditeur s’il ne revient pas.",
   "editor.gpuReloaded": "L’éditeur a été rechargé après une réinitialisation graphique. Vous pouvez exporter à nouveau.",
+  "editor.framesDropped":
+    "Cet enregistrement a perdu {seconds} s d’images à cause de la charge système — ces moments apparaissent figés. Fermez les applications lourdes pendant l’enregistrement pour l’éviter.",
   "export.dialog.title": "Exporter",
   "export.dialog.description":
     "Choisissez le format, l'encodage, la fréquence d'images et le type de fichier.",
@@ -104,7 +106,10 @@ export const fr: Record<TranslationKey, string> = {
   "export.enhanceVoice.on": "Activé",
   "export.enhanceVoice.hint":
     "Réduit le bruit, compresse et nivelle la narration pour une voix plus claire.",
-  "encoding.fast": "Rapide",
+  "export.passthrough": "Original (le plus rapide)",
+  "export.passthrough.hint":
+    "Copie l’enregistrement tel quel — sans style, curseur ni calques. Les coupes et la caméra nécessitent un export complet.",
+  "encoding.fast":"Rapide",
   "encoding.balanced": "Équilibré",
   "encoding.quality": "Qualité",
 

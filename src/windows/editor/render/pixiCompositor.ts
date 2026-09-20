@@ -638,6 +638,7 @@ export async function createPixiFrameCompositor(
     byteLength: number;
   };
   const packSlots = new Map<number, PackSlot>();
+  const reusablePbos: WebGLBuffer[] = [];
   let nextTicket = 1;
 
   function releaseSlot(gl: WebGL2RenderingContext, ticket: number): void {
@@ -645,7 +646,16 @@ export async function createPixiFrameCompositor(
     if (!slot) return;
     packSlots.delete(ticket);
     gl.deleteSync(slot.sync);
-    gl.deleteBuffer(slot.pbo);
+    // A resize can happen while an export is being torn down. Never reuse a
+    // pack buffer with the wrong allocation; that would make the next
+    // readback fail or, worse, truncate pixels on an implementation that does
+    // not validate the pack-buffer range eagerly.
+    const currentByteLength = outputWidth * outputHeight * 4;
+    if (slot.byteLength === currentByteLength) {
+      reusablePbos.push(slot.pbo);
+    } else {
+      gl.deleteBuffer(slot.pbo);
+    }
   }
 
   function beginReadPixels(): number | null {
@@ -653,14 +663,19 @@ export async function createPixiFrameCompositor(
     if (!gl) return null;
 
     const byteLength = outputWidth * outputHeight * 4;
-    const pbo = gl.createBuffer();
+    const reused = reusablePbos.pop();
+    const pbo = reused ?? gl.createBuffer();
     if (!pbo) return null;
 
     const previousFbo = gl.getParameter(
       gl.FRAMEBUFFER_BINDING,
     ) as WebGLFramebuffer | null;
     gl.bindBuffer(gl.PIXEL_PACK_BUFFER, pbo);
-    gl.bufferData(gl.PIXEL_PACK_BUFFER, byteLength, gl.STREAM_READ);
+    if (!reused) {
+      // Newly-created PBOs need storage. Reused buffers retain their allocation
+      // and can be written directly by readPixels.
+      gl.bufferData(gl.PIXEL_PACK_BUFFER, byteLength, gl.STREAM_READ);
+    }
     gl.bindFramebuffer(gl.FRAMEBUFFER, null);
     // With a pack buffer bound, the last argument is a byte *offset* into it,
     // not a CPU array — this returns without waiting for the transfer.
@@ -737,10 +752,15 @@ export async function createPixiFrameCompositor(
     const gl = glContext();
     if (!gl) {
       packSlots.clear();
+      reusablePbos.length = 0;
       return;
     }
     for (const ticket of [...packSlots.keys()]) releaseSlot(gl, ticket);
+    for (const pbo of reusablePbos) gl.deleteBuffer(pbo);
+    reusablePbos.length = 0;
   }
+
+  const gpu: "webgl" | "webgpu" = renderer.type === 2 ? "webgpu" : "webgl";
 
   return {
     get canvas() {
@@ -753,6 +773,7 @@ export async function createPixiFrameCompositor(
     beginReadPixels,
     tryFinishReadPixels,
     backend: "pixi",
+    gpu,
     resize,
     compose,
     stats: () => profiler.report(),
