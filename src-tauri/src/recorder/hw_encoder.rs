@@ -6,8 +6,8 @@
 //!
 //! The startup probe runs at 256×144, which says nothing about frames a
 //! hardware encoder caps below the capture size. Callers that know their frame
-//! size go through [`pick_for`], which re-probes the selected encoder at the
-//! exact output size.
+//! size go through [`pick_for`], which re-probes hardware candidates at the
+//! exact size before opening the real pipeline.
 
 use crate::proc;
 use std::collections::HashMap;
@@ -275,8 +275,13 @@ pub fn scaled_capture_notice(native: (u32, u32), actual: (u32, u32)) -> Option<S
 /// What to tell the user when the hardware encoder refused the frame size and
 /// the take runs on `fallback` instead (see [`pick_for`]).
 pub fn software_fallback_notice(width: u32, height: u32, refused: &str, fallback: &str) -> String {
+    let size = if width.max(height) > HW_ENCODER_EDGE {
+        format!("oversize {width}×{height}")
+    } else {
+        format!("{width}×{height}")
+    };
     format!(
-        "{width}×{height} is more than the {refused} hardware encoder accepts; recording with the {fallback} software encoder instead, which costs CPU and may drop frames."
+        "The {refused} hardware encoder rejected {size}. Recording with the {fallback} software encoder instead costs CPU and may drop frames"
     )
 }
 
@@ -286,6 +291,10 @@ pub fn software_fallback_notice(width: u32, height: u32, refused: &str, fallback
 /// than once per frame or once per export.
 pub fn pick_for(ffmpeg: &Path, width: u32, height: u32) -> EncoderChoice {
     let chosen = *pick(ffmpeg);
+    // A startup software pick still bypasses the size probe.
+    if chosen.name == SOFTWARE_FALLBACK.name {
+        return chosen;
+    }
     static PROFILE_CACHE: OnceLock<Mutex<HashMap<(u32, u32), EncoderChoice>>> = OnceLock::new();
     let cache = PROFILE_CACHE.get_or_init(|| Mutex::new(HashMap::new()));
     if let Some(cached) = cache.lock().unwrap().get(&(width, height)) {
@@ -682,6 +691,19 @@ mod tests {
             "the oversize fallback needs the headroom preset, got {:?}",
             demoted.tuning_args
         );
+    }
+
+    #[test]
+    fn size_fallback_notice_names_the_rejected_geometry_and_encoders() {
+        let notice = software_fallback_notice(64, 62, "h264_amf", "libx264");
+        assert!(notice.contains("h264_amf"), "{notice}");
+        assert!(notice.contains("64×62"), "{notice}");
+        assert!(notice.contains("libx264"), "{notice}");
+        assert!(notice.contains("rejected"), "{notice}");
+        assert!(!notice.contains("oversize"), "{notice}");
+
+        let oversize = software_fallback_notice(5120, 2880, "h264_videotoolbox", "libx264");
+        assert!(oversize.contains("oversize 5120×2880"), "{oversize}");
     }
 
     #[test]
