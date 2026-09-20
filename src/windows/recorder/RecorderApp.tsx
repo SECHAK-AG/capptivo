@@ -30,6 +30,7 @@ import { useRecorderStore } from "./store";
 import { Countdown } from "./Countdown";
 import { useBarDrag } from "./menuSurface";
 import { barTransform, type BarOffset } from "./barOffset";
+import { recorderHudLayout, recorderLiveNotice } from "./recorderErrorPresentation";
 import { RecorderToolbar } from "./RecorderToolbar";
 
 /** Keep in sync with `duration-300` on `BarPane`. */
@@ -103,6 +104,7 @@ export function RecorderApp() {
   // What the window shows. `starting` covers the pipeline bring-up window so the
   // HUD is on screen the instant the countdown ends.
   const showHud = live || starting;
+  const inactiveError = showHud ? null : lastError;
 
   // Esc dismisses the crop guide and leaves area mode (require re-pick).
   useEffect(() => {
@@ -160,11 +162,11 @@ export function RecorderApp() {
     setMountSetup(true);
     setHudOn(false);
     setHudEnter(false);
-    if (lastError) void commands.setRecorderLayout("alert");
+    if (inactiveError) void commands.setRecorderLayout("alert");
     else void commands.setRecorderLayout("setup");
     const id = window.setTimeout(() => setMountHud(false), BAR_CROSSFADE_MS);
     return () => window.clearTimeout(id);
-  }, [showHud, counting, lastError, resetBarOffset]);
+  }, [showHud, counting, inactiveError, resetBarOffset]);
 
   useEffect(() => {
     const inkLive = status === "recording" || status === "paused";
@@ -337,11 +339,14 @@ function BarPane({
 function RecordingHud({ starting }: { starting: boolean }) {
   const { t } = useI18n();
   const status = useRecorderStore((s) => s.state.status);
+  const live =
+    status === "recording" || status === "paused" || status === "finalizing";
   const elapsed = useRecorderStore((s) => s.elapsed);
   const micEnabled = useRecorderStore((s) => s.micEnabled);
   const micDeviceId = useRecorderStore((s) => s.micDeviceId);
   const micSessionMuted = useRecorderStore((s) => s.micSessionMuted);
   const annotationVisible = useRecorderStore((s) => s.annotationVisible);
+  const lastError = useRecorderStore((s) => s.lastError);
   const setAnnotationVisible = useRecorderStore((s) => s.setAnnotationVisible);
   const toggleMicMute = useRecorderStore((s) => s.toggleMicMute);
   const stop = useRecorderStore((s) => s.stopRecording);
@@ -361,20 +366,78 @@ function RecordingHud({ starting }: { starting: boolean }) {
     : micSessionMuted
       ? t("recorder.hud.mic.unmute")
       : t("recorder.hud.mic.mute");
+  const notice = recorderLiveNotice(lastError);
+  const hudLayout = recorderHudLayout(notice, collapsed, live);
 
   useEffect(() => {
-    void commands.setRecorderLayout(collapsed ? "hud-mini" : "hud");
-  }, [collapsed]);
+    if (!hudLayout) return;
+    void commands.setRecorderLayout(hudLayout);
+  }, [hudLayout]);
 
   if (collapsed) {
     return (
-      <div className="inline-flex h-10 w-fit items-center gap-0.5 rounded-2xl border border-border bg-card p-1">
+      <div
+        className={cn(
+          "inline-flex flex-col items-center gap-1",
+          notice ? "w-[448px]" : "w-fit",
+        )}
+      >
+        {notice ? <RecorderLiveNotice message={notice.message} /> : null}
+        <div className="inline-flex h-10 w-fit items-center gap-0.5 rounded-2xl border border-border bg-card p-1">
+          <div
+            className="flex h-8 cursor-grab items-center gap-1.5 rounded-xl pl-1 pr-2.5 active:cursor-grabbing"
+            title={t("recorder.drag")}
+            onPointerDown={startHudWindowDrag}
+          >
+            <span className="flex w-6 shrink-0 items-center justify-center text-muted-foreground">
+              <GripVertical className="pointer-events-none size-4" />
+            </span>
+            <span
+              className={cn(
+                "size-2 shrink-0 rounded-full",
+                paused ? "bg-muted-foreground" : "animate-pulse bg-primary",
+              )}
+            />
+            <span
+              className={cn(
+                "text-[11px] font-semibold tracking-wider",
+                paused ? "text-muted-foreground" : "text-primary",
+              )}
+            >
+              {paused ? t("recorder.hud.paused") : "REC"}
+            </span>
+            <span className="min-w-11 text-sm font-semibold tabular-nums text-foreground">
+              {formatElapsed(elapsed)}
+            </span>
+          </div>
+          <HudIconBtn
+            className="size-8"
+            title={t("recorder.hud.expand")}
+            aria-label={t("recorder.hud.expand")}
+            onClick={() => setCollapsed(false)}
+          >
+            <Maximize2 className="size-3.5" />
+          </HudIconBtn>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div
+      className={cn(
+        "inline-flex max-w-full flex-col items-center gap-1",
+        notice ? "w-[448px]" : "w-fit",
+      )}
+    >
+      {notice ? <RecorderLiveNotice message={notice.message} /> : null}
+      <div className="inline-flex h-12 w-fit max-w-full items-center gap-0.5 rounded-2xl border border-border bg-card p-1.5">
         <div
-          className="flex h-8 cursor-grab items-center gap-1.5 rounded-xl pl-1 pr-2.5 active:cursor-grabbing"
+          className="flex h-9 cursor-grab items-center gap-1.5 rounded-xl pl-0.5 pr-2 active:cursor-grabbing"
           title={t("recorder.drag")}
           onPointerDown={startHudWindowDrag}
         >
-          <span className="flex w-6 shrink-0 items-center justify-center text-muted-foreground">
+          <span className="flex w-7 shrink-0 items-center justify-center text-muted-foreground">
             <GripVertical className="pointer-events-none size-4" />
           </span>
           <span
@@ -389,144 +452,117 @@ function RecordingHud({ starting }: { starting: boolean }) {
               paused ? "text-muted-foreground" : "text-primary",
             )}
           >
-            {paused ? t("recorder.hud.paused") : "REC"}
+            {finalizing
+              ? t("recorder.hud.finalizing")
+              : paused
+                ? t("recorder.hud.paused")
+                : "REC"}
           </span>
           <span className="min-w-11 text-sm font-semibold tabular-nums text-foreground">
             {formatElapsed(elapsed)}
           </span>
         </div>
-        <HudIconBtn
-          className="size-8"
-          title={t("recorder.hud.expand")}
-          aria-label={t("recorder.hud.expand")}
-          onClick={() => setCollapsed(false)}
-        >
-          <Maximize2 className="size-3.5" />
-        </HudIconBtn>
-      </div>
-    );
-  }
 
-  return (
-    <div className="inline-flex h-12 w-fit max-w-full items-center gap-0.5 rounded-2xl border border-border bg-card p-1.5">
-      <div
-        className="flex h-9 cursor-grab items-center gap-1.5 rounded-xl pl-0.5 pr-2 active:cursor-grabbing"
-        title={t("recorder.drag")}
-        onPointerDown={startHudWindowDrag}
-      >
-        <span className="flex w-7 shrink-0 items-center justify-center text-muted-foreground">
-          <GripVertical className="pointer-events-none size-4" />
-        </span>
-        <span
-          className={cn(
-            "size-2 shrink-0 rounded-full",
-            paused ? "bg-muted-foreground" : "animate-pulse bg-primary",
-          )}
-        />
-        <span
-          className={cn(
-            "text-[11px] font-semibold tracking-wider",
-            paused ? "text-muted-foreground" : "text-primary",
-          )}
-        >
-          {finalizing
-            ? t("recorder.hud.finalizing")
-            : paused
-              ? t("recorder.hud.paused")
-              : "REC"}
-        </span>
-        <span className="min-w-11 text-sm font-semibold tabular-nums text-foreground">
-          {formatElapsed(elapsed)}
-        </span>
-      </div>
+        <div className="mx-0.5 h-5 w-px shrink-0 bg-border" />
 
-      <div className="mx-0.5 h-5 w-px shrink-0 bg-border" />
+        {micArmed ? (
+          <HudIconBtn
+            disabled={busy}
+            title={micLabel}
+            aria-label={micLabel}
+            aria-pressed={micSessionMuted}
+            onClick={() => toggleMicMute()}
+            className={micSessionMuted ? "text-muted-foreground" : undefined}
+          >
+            {micSessionMuted ? (
+              <MicOff className="size-4" />
+            ) : (
+              <Mic className="size-4" />
+            )}
+          </HudIconBtn>
+        ) : (
+          <HudIconBtn
+            disabled
+            title={micLabel}
+            aria-label={micLabel}
+            className="text-muted-foreground/50"
+          >
+            <MicOff className="size-4" />
+          </HudIconBtn>
+        )}
 
-      {micArmed ? (
         <HudIconBtn
           disabled={busy}
-          title={micLabel}
-          aria-label={micLabel}
-          aria-pressed={micSessionMuted}
-          onClick={() => toggleMicMute()}
-          className={micSessionMuted ? "text-muted-foreground" : undefined}
+          title={paused ? t("recorder.hud.resume") : t("recorder.hud.pause")}
+          aria-label={paused ? t("recorder.hud.resume") : t("recorder.hud.pause")}
+          onClick={() => void togglePause()}
+          className={paused ? "text-primary" : undefined}
         >
-          {micSessionMuted ? (
-            <MicOff className="size-4" />
+          {paused ? (
+            <Play className="size-4 fill-current" />
           ) : (
-            <Mic className="size-4" />
+            <Pause className="size-4" />
           )}
         </HudIconBtn>
-      ) : (
+
         <HudIconBtn
-          disabled
-          title={micLabel}
-          aria-label={micLabel}
-          className="text-muted-foreground/50"
+          disabled={busy}
+          title={t("recorder.hud.stop")}
+          aria-label={t("recorder.hud.stop")}
+          onClick={() => void stop()}
+          className="text-primary hover:bg-primary/15 hover:text-primary"
         >
-          <MicOff className="size-4" />
+          <Square className="size-3.5 fill-current" />
         </HudIconBtn>
-      )}
 
-      <HudIconBtn
-        disabled={busy}
-        title={paused ? t("recorder.hud.resume") : t("recorder.hud.pause")}
-        aria-label={paused ? t("recorder.hud.resume") : t("recorder.hud.pause")}
-        onClick={() => void togglePause()}
-        className={paused ? "text-primary" : undefined}
-      >
-        {paused ? (
-          <Play className="size-4 fill-current" />
-        ) : (
-          <Pause className="size-4" />
-        )}
-      </HudIconBtn>
+        <HudIconBtn
+          disabled={busy}
+          title={annotateLabel}
+          aria-label={annotateLabel}
+          aria-pressed={annotationVisible}
+          onClick={() => setAnnotationVisible(!annotationVisible)}
+          className={
+            annotationVisible
+              ? "bg-primary/15 text-primary hover:bg-primary/20"
+              : undefined
+          }
+        >
+          <Pencil className="size-4" />
+        </HudIconBtn>
 
-      <HudIconBtn
-        disabled={busy}
-        title={t("recorder.hud.stop")}
-        aria-label={t("recorder.hud.stop")}
-        onClick={() => void stop()}
-        className="text-primary hover:bg-primary/15 hover:text-primary"
-      >
-        <Square className="size-3.5 fill-current" />
-      </HudIconBtn>
+        <div className="mx-0.5 h-5 w-px shrink-0 bg-border" />
 
-      <HudIconBtn
-        disabled={busy}
-        title={annotateLabel}
-        aria-label={annotateLabel}
-        aria-pressed={annotationVisible}
-        onClick={() => setAnnotationVisible(!annotationVisible)}
-        className={
-          annotationVisible
-            ? "bg-primary/15 text-primary hover:bg-primary/20"
-            : undefined
-        }
-      >
-        <Pencil className="size-4" />
-      </HudIconBtn>
+        <HudIconBtn
+          disabled={busy}
+          title={t("recorder.hud.collapse")}
+          aria-label={t("recorder.hud.collapse")}
+          onClick={() => setCollapsed(true)}
+        >
+          <Minus className="size-4" />
+        </HudIconBtn>
 
-      <div className="mx-0.5 h-5 w-px shrink-0 bg-border" />
-
-      <HudIconBtn
-        disabled={busy}
-        title={t("recorder.hud.collapse")}
-        aria-label={t("recorder.hud.collapse")}
-        onClick={() => setCollapsed(true)}
-      >
-        <Minus className="size-4" />
-      </HudIconBtn>
-
-      <HudIconBtn
-        disabled={busy}
-        title={t("recorder.hud.hide")}
-        aria-label={t("recorder.hud.hide")}
-        onClick={() => void commands.hideRecorder()}
-      >
-        <X className="size-4" />
-      </HudIconBtn>
+        <HudIconBtn
+          disabled={busy}
+          title={t("recorder.hud.hide")}
+          aria-label={t("recorder.hud.hide")}
+          onClick={() => void commands.hideRecorder()}
+        >
+          <X className="size-4" />
+        </HudIconBtn>
+      </div>
     </div>
+  );
+}
+
+function RecorderLiveNotice({ message }: { message: string }) {
+  return (
+    <p
+      role="status"
+      tabIndex={0}
+      className="min-w-0 w-full max-h-[74px] overflow-y-auto break-words rounded-xl border border-amber-500/40 bg-amber-500/10 px-2 py-1 text-[11px] font-medium leading-4 text-amber-700 dark:text-amber-400"
+    >
+      {message}
+    </p>
   );
 }
 

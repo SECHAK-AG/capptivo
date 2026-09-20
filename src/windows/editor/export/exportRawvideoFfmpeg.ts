@@ -6,14 +6,21 @@
  */
 
 import { commands } from "../../../ipc/bindings";
-import { faceCamMediaTime, type FaceCamTrack } from "../lib/faceCamSync";
+import { type FaceCamTrack } from "../lib/faceCamSync";
 import {
   createExportCompositor,
   createExportCompositorFromMedia,
   planFrameTimes,
-  seekTo,
 } from "./exportCompositor";
-import { openSequentialMedia } from "./sequentialMedia";
+import {
+  createExportFrameIterator,
+  warnSeekPath,
+} from "./exportFrameLoop";
+import {
+  ensureSeekableForSeekPath,
+  openExportSequentialMedia,
+} from "./exportMediaOpen";
+import { exportLog } from "./exportLog";
 import { shouldYieldNow, yieldToMain } from "./exportYield";
 import { throwIfAborted } from "./exportCancel";
 import { FLUSH_STALL_MS, ASYNC_READBACK_FALLBACK_MS, StallWatchdog, withDeadline } from "./exportStall";
@@ -27,6 +34,8 @@ import {
 import type { ResolvedExportParams } from "./exportSettings";
 import { GpuContextLostError } from "../render/gpuLifecycle";
 import { describeError } from "../../recorder/store";
+import { useEditorStore } from "../store";
+import type { ExportSnapshot } from "./exportSnapshot";
 
 function throwIfGpuLost(isLost: () => boolean): void {
   if (isLost()) throw new GpuContextLostError();
@@ -42,6 +51,7 @@ export async function renderMp4ViaFfmpegRawvideo(
   faceCam: FaceCamTrack,
   params: ResolvedExportParams,
   signal: AbortSignal,
+  snapshot: ExportSnapshot,
 ): Promise<void> {
   const { width, height, fps, bitrate } = params;
   throwIfAborted(signal);
@@ -71,10 +81,34 @@ export async function renderMp4ViaFfmpegRawvideo(
   // No `cpuReadback`: frames are pulled straight off the GPU into pooled
   // buffers, so the compositor never allocates the software 2D canvas that
   // `getImageData` would need.
-  const sequential = await openSequentialMedia(screenUrl, faceCam, "rawvideo");
-  const session = sequential
-    ? await createExportCompositorFromMedia(sequential.media, width, height)
-    : await createExportCompositor(screenUrl, faceCam, width, height);
+  let sequential;
+  let session;
+  try {
+    const projectId = snapshot.projectId;
+
+    sequential = await openExportSequentialMedia(
+      screenUrl,
+      faceCam,
+      "rawvideo",
+      projectId,
+    );
+    if (sequential) {
+      session = await createExportCompositorFromMedia(
+        sequential.media,
+        width,
+        height,
+        { snapshot },
+      );
+    } else {
+      await ensureSeekableForSeekPath(projectId);
+      session = await createExportCompositor(screenUrl, faceCam, width, height, {
+        snapshot,
+      });
+    }
+  } catch (error) {
+    await abortMux(describeError(error));
+    throw error;
+  }
   const {
     readPixelsInto,
     beginReadPixels,
@@ -89,6 +123,7 @@ export async function renderMp4ViaFfmpegRawvideo(
     uploadStats,
     isGpuLost,
   } = session;
+  let disposeFrames: (() => void) | null = null;
 
   const frameBytes = width * height * 4;
   const pool = new FramePool(frameBytes, FRAME_POOL_SIZE);
@@ -140,57 +175,34 @@ export async function renderMp4ViaFfmpegRawvideo(
     const frameTimes = planFrameTimes(segments, fps);
     const reader =
       sequential?.begin(frameTimes, { mode: "video-frame" }) ?? null;
+    const frames = createExportFrameIterator(
+      frameTimes,
+      reader,
+      reader ? null : { video, camera, faceCam },
+      { signal },
+    );
+    disposeFrames = frames.dispose;
     const progress = throttledProgress(frameTimes.length);
 
-    console.info(
-      `[export] ffmpeg-rawvideo: path=${reader ? "sequential" : "seek"} ` +
+    exportLog(
+      `[export] ffmpeg-rawvideo: path=${frames.mode} ` +
         `compositor=${backend} frames=${frameTimes.length} ` +
         `${width}x${height}@${fps} pool=${FRAME_POOL_SIZE}×${(frameBytes / 1e6).toFixed(1)}MB`,
     );
-    if (!reader) {
-      // Loud, because this is the difference between minutes and an hour. The
-      // reason was already logged by openSequentialMedia; this says what it
-      // costs, next to the frame count it will be paid on.
-      console.warn(
-        `[export] ffmpeg-rawvideo is seeking per frame for all ` +
-          `${frameTimes.length} frames — expect an export far slower than realtime`,
-      );
+    if (frames.mode === "seek") {
+      warnSeekPath("ffmpeg-rawvideo", frameTimes.length);
     }
 
-    let lastYieldAt = performance.now();
-    let driftLogs = 0;
-    let yields = 0;
-    let yieldMs = 0;
+    await frames.prime();
+
     let readbackMs = 0;
-    // The three phases that can each plausibly dominate. Each bucket closes
-    // before any await that is not part of its own phase — otherwise waiting on
-    // one phase silently inflates another, and the numbers point at the wrong
-    // thing.
     let decodeMs = 0;
     let compositeMs = 0;
-    const loopStart = performance.now();
 
-    /**
-     * Frames whose pixels the GPU is still copying out. Composing frame N while
-     * frame N-1 drains is the whole point: a synchronous read has to flush the
-     * command queue and wait, which idles the GPU for the entire copy.
-     */
     const inFlight = new InFlightReadbacks(ASYNC_READBACK_RING_SIZE);
-    /**
-     * Latched, not re-tested per frame: whether the renderer can do fenced reads
-     * is a property of the GL context, so a single `null` means every later call
-     * would also return `null`. Also latched off when a fence never signals
-     * (WebView2) so the rest of the export falls back to sync readback.
-     */
     let asyncReadback = true;
-    /** Once set, in-flight tickets are force-finished (`gl.finish`) instead of polled. */
     let forceCollect = false;
 
-    /**
-     * Complete the oldest outstanding readback and hand it to ffmpeg. Blocks
-     * only on that one frame's fence — by the time we ask, the ring depth has
-     * usually given it long enough to have already signalled.
-     */
     const collectOldest = async (): Promise<void> => {
       const head = inFlight.peek();
       if (!head) return;
@@ -215,9 +227,6 @@ export async function renderMp4ViaFfmpegRawvideo(
           pool.release(head.buffer);
           throw new Error("rawvideo readback failed mid-export");
         }
-        // Pending. Never spin on the fence with a blocking wait — that is the
-        // stall this path exists to remove. If the fence never signals
-        // (WebView2 without a submitted pack), force-finish and latch sync.
         if (
           !forceCollect &&
           performance.now() - waitStart >= ASYNC_READBACK_FALLBACK_MS
@@ -238,31 +247,21 @@ export async function renderMp4ViaFfmpegRawvideo(
       }
     };
 
-    for (const t of frameTimes) {
+    let lastYieldAt = performance.now();
+    let yields = 0;
+    let yieldMs = 0;
+    const loopStart = performance.now();
+
+    for (let i = 0; i < frames.count; i += 1) {
       throwIfAborted(signal);
       if (writeError) throw writeError;
       throwIfGpuLost(isGpuLost);
 
       const decodeStart = performance.now();
-      if (reader) {
-        await reader.nextFrame();
-      } else {
-        await seekTo(video, t);
-        if (camera) {
-          const camT = faceCamMediaTime(t, faceCam.offsetMs, camera.duration);
-          if (camT != null) await seekTo(camera, camT).catch(() => undefined);
-        }
-        if (Math.abs(video.currentTime - t) > 0.1 && driftLogs < 10) {
-          driftLogs += 1;
-          console.warn(
-            `[export] ffmpeg-rawvideo seek clamp: wanted ${t.toFixed(3)}s ` +
-              `got ${video.currentTime.toFixed(3)}s`,
-          );
-        }
-      }
-
+      await frames.advance(i);
       decodeMs += performance.now() - decodeStart;
 
+      const t = frames.timeAt(i);
       throwIfGpuLost(isGpuLost);
       const composeStart = performance.now();
       drawAt(t);
@@ -327,7 +326,6 @@ export async function renderMp4ViaFfmpegRawvideo(
     // on the GPU when the last frame is drawn, and dropping it would truncate
     // the video by the ring depth.
     while (inFlight.size > 0) await collectOldest();
-
     await withDeadline(writeChain, FLUSH_STALL_MS, "rawvideo frame writes");
     if (writeError) throw writeError;
     if (framesEncoded === 0) {
@@ -340,7 +338,7 @@ export async function renderMp4ViaFfmpegRawvideo(
     const phase = (name: string, ms: number) =>
       `${name} ${(ms / Math.max(1, framesEncoded)).toFixed(2)}ms/frame ` +
       `(${((ms / Math.max(1, wallMs)) * 100).toFixed(1)}%)`;
-    console.info(
+    exportLog(
       `[export] ffmpeg-rawvideo done in ${(wallMs / 1000).toFixed(1)}s ` +
         `(${(framesEncoded / (wallMs / 1000)).toFixed(1)} fps) — ` +
         `${phase(reader ? "decode(linear)" : "decode(seek)", decodeMs)}, ` +
@@ -352,7 +350,7 @@ export async function renderMp4ViaFfmpegRawvideo(
           : ""),
     );
     const breakdown = stats();
-    if (breakdown) console.info(`[export] composite breakdown: ${breakdown}`);
+    if (breakdown) exportLog(`[export] composite breakdown: ${breakdown}`);
 
     await commands.finishExportRawvideoStream(handle);
     settled = true;
@@ -362,6 +360,7 @@ export async function renderMp4ViaFfmpegRawvideo(
     await abortMux(reason);
     throw e instanceof Error ? e : new Error(reason);
   } finally {
+    disposeFrames?.();
     dispose();
     if (!settled) {
       await abortMux("export failed");

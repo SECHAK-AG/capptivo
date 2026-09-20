@@ -1,5 +1,5 @@
 /**
- * Asserts every cursor asset's declared hotspot lands on its artwork.
+ * Checks declared cursor hotspot inventory and coordinates.
  * Run: `node scripts/check-cursor-hotspots.mjs`
  *
  * The bug class this guards: hotspots are hand-typed normalized constants in
@@ -11,9 +11,10 @@
  * click), and multiplied by the zoom scale, because the camera magnifies
  * anything anchored to the recording.
  *
- * So: derive the content box from the artwork and assert the declared hotspot
- * sits on it. A hotspot off the glyph is always a bug; an arrow hotspot away
- * from the tip is always a bug.
+ * Vector SVGs expose enough path geometry to derive a content box and assert
+ * the declared hotspot sits on it. Embedded raster SVGs are checked only for
+ * normalized coordinates: This script does not decode their pixels or claim
+ * to validate their artwork bounds.
  *
  * Lives in scripts/ rather than as a src selfcheck because it reads files —
  * every selfcheck under src/ is pure, and the repo carries no @types/node.
@@ -35,6 +36,13 @@ const overlaySrc = join(
   "engine",
   "cursorOverlay.ts",
 );
+const zoomMotionSrc = join(
+  dirname(fileURLToPath(import.meta.url)),
+  "..",
+  "src",
+  "engine",
+  "zoomMotion.ts",
+);
 
 function assert(cond, msg) {
   if (!cond) {
@@ -48,8 +56,8 @@ function assert(cond, msg) {
 /**
  * Content box of an SVG's path geometry, normalized to the viewBox. Only on-path
  * anchor points are read — curve control points bulge outside the hull and would
- * loosen the box. Enough to locate the glyph within its canvas, which is all
- * this check needs.
+ * loosen the box. Embedded rasters return null because their pixels are not
+ * decoded here.
  */
 function contentBox(file) {
   const svg = readFileSync(join(cursorsDir, file), "utf8");
@@ -86,7 +94,10 @@ function contentBox(file) {
     }
     flush();
   }
-  if (points.length === 0) throw new Error(`${file}: no path geometry parsed`);
+  if (points.length === 0) {
+    if (/<image\b/.test(svg)) return null;
+    throw new Error("no path geometry parsed");
+  }
 
   return {
     minX: Math.min(...points.map((p) => p[0])) / vbW,
@@ -96,55 +107,185 @@ function contentBox(file) {
   };
 }
 
-/** Read the anchor tables out of cursorOverlay.ts so they cannot drift apart. */
-function declaredHotspots() {
-  const src = readFileSync(overlaySrc, "utf8");
+function expectedCursorShapes() {
+  const src = readFileSync(zoomMotionSrc, "utf8");
+  const ids = src.match(/CURSOR_SHAPE_IDS\s*=\s*\[([\s\S]*?)\]\s*as const/);
+  if (!ids) {
+    throw new Error("could not find CURSOR_SHAPE_IDS in zoomMotion.ts");
+  }
+  const shapes = [];
+  for (const line of ids[1].split(/\r?\n/)) {
+    const entry = line.match(/^\s*"([\w-]+)",?\s*$/);
+    if (entry) {
+      shapes.push(entry[1]);
+      continue;
+    }
+    if (line.trim() && !line.trimStart().startsWith("//")) {
+      throw new Error(`unrecognized CURSOR_SHAPE_IDS entry: ${line.trim()}`);
+    }
+  }
+  if (shapes.length === 0 || new Set(shapes).size !== shapes.length) {
+    throw new Error("CURSOR_SHAPE_IDS is empty or contains duplicates");
+  }
+  return shapes;
+}
 
+/** Parse the anchor tables out of cursorOverlay.ts so they cannot drift apart. */
+function parseDeclaredHotspots(src, expectedShapes) {
   // shape id → filename (shared across theme packs).
   const filesIdx = src.indexOf("const CURSOR_SHAPE_FILES");
   if (filesIdx < 0)
     throw new Error("could not find CURSOR_SHAPE_FILES in cursorOverlay.ts");
-  const filesBody = src.slice(filesIdx, src.indexOf("};", filesIdx));
-  const shapeFiles = {};
-  for (const e of filesBody.matchAll(/"?([\w-]+)"?:\s*"([\w.-]+\.svg)"/g)) {
-    shapeFiles[e[1]] = e[2];
+  const filesEnd = src.indexOf("};", filesIdx);
+  if (filesEnd < 0) {
+    throw new Error("could not find the end of CURSOR_SHAPE_FILES");
   }
-  if (Object.keys(shapeFiles).length < 10) {
-    throw new Error("CURSOR_SHAPE_FILES parse came up short — parser drift?");
+  const filesStart = src.indexOf("= {", filesIdx);
+  if (filesStart < 0 || filesStart > filesEnd) {
+    throw new Error("could not find the start of CURSOR_SHAPE_FILES");
+  }
+  const filesBody = src.slice(filesStart + 3, filesEnd);
+  const shapeFiles = {};
+  for (const line of filesBody.split(/\r?\n/)) {
+    const entry = line.match(/^\s+"?([\w-]+)"?:\s*"([\w.-]+\.svg)",?\s*$/);
+    if (!entry) {
+      if (line.trim() && !line.trimStart().startsWith("//")) {
+        throw new Error(`unrecognized CURSOR_SHAPE_FILES entry: ${line.trim()}`);
+      }
+      continue;
+    }
+    if (Object.hasOwn(shapeFiles, entry[1])) {
+      throw new Error(`CURSOR_SHAPE_FILES.${entry[1]} is declared more than once`);
+    }
+    shapeFiles[entry[1]] = entry[2];
+  }
+  for (const shape of expectedShapes) {
+    if (!Object.hasOwn(shapeFiles, shape)) {
+      throw new Error(`CURSOR_SHAPE_FILES.${shape} was not parsed`);
+    }
+  }
+  for (const shape of Object.keys(shapeFiles)) {
+    if (!expectedShapes.includes(shape)) {
+      throw new Error(`CURSOR_SHAPE_FILES.${shape} is not a known cursor shape`);
+    }
+  }
+
+  const cursorTheme = src.match(/type CursorTheme\s*=([\s\S]*?);/);
+  if (!cursorTheme) {
+    throw new Error("could not find CursorTheme in cursorOverlay.ts");
+  }
+  const expectedThemes = [
+    ...cursorTheme[1].matchAll(/"([\w-]+)"/g),
+  ].map((match) => match[1]);
+  if (expectedThemes.length === 0) {
+    throw new Error("CursorTheme parse came up empty — parser drift?");
+  }
+  if (new Set(expectedThemes).size !== expectedThemes.length) {
+    throw new Error("CursorTheme contains a duplicate theme");
   }
 
   // theme → shape → hotspot, flattened to `theme/file` → hotspot.
   const hotspotsIdx = src.indexOf("const THEME_HOTSPOTS");
   if (hotspotsIdx < 0)
     throw new Error("could not find THEME_HOTSPOTS in cursorOverlay.ts");
-  const hotspotsBody = src.slice(hotspotsIdx, src.indexOf("\n};", hotspotsIdx));
+  const hotspotsEnd = src.indexOf("\n};", hotspotsIdx);
+  if (hotspotsEnd < 0) {
+    throw new Error("could not find the end of THEME_HOTSPOTS");
+  }
+  const hotspotsStart = src.indexOf("= {", hotspotsIdx);
+  if (hotspotsStart < 0 || hotspotsStart > hotspotsEnd) {
+    throw new Error("could not find the start of THEME_HOTSPOTS");
+  }
+  const hotspotsBody = src.slice(hotspotsStart + 3, hotspotsEnd);
   const hotspots = {};
+  const themeEntries = {};
   let theme = null;
-  for (const line of hotspotsBody.split("\n")) {
-    const themeMatch = line.match(/^  (\w+): \{$/);
+  for (const line of hotspotsBody.split(/\r?\n/)) {
+    const themeMatch = line.match(/^  "?([\w-]+)"?: \{$/);
     if (themeMatch) {
       theme = themeMatch[1];
+      if (!expectedThemes.includes(theme)) {
+        throw new Error(`unexpected hotspot theme: ${theme}`);
+      }
+      if (Object.hasOwn(themeEntries, theme)) {
+        throw new Error(`${theme} hotspot theme is declared more than once`);
+      }
+      themeEntries[theme] = {};
       continue;
     }
     const entry = line.match(
-      /"?([\w-]+)"?:\s*\{\s*x:\s*([\d.]+),\s*y:\s*([\d.]+)\s*\}/,
+      /^    "?([\w-]+)"?:\s*\{\s*x:\s*([\d.]+),\s*y:\s*([\d.]+)\s*\},?\s*$/,
     );
-    if (theme && entry && shapeFiles[entry[1]]) {
-      hotspots[`${theme}/${shapeFiles[entry[1]]}`] = {
+    if (!entry) {
+      const trimmed = line.trim();
+      if (trimmed && trimmed !== "}," && !trimmed.startsWith("//")) {
+        throw new Error(`unrecognized hotspot entry: ${trimmed}`);
+      }
+      continue;
+    }
+    if (theme) {
+      if (!Object.hasOwn(shapeFiles, entry[1])) {
+        throw new Error(`${theme}.${entry[1]} is not a known cursor shape`);
+      }
+      if (Object.hasOwn(themeEntries[theme], entry[1])) {
+        throw new Error(`${theme}.${entry[1]} is declared more than once`);
+      }
+      const hotspot = {
         x: Number(entry[2]),
         y: Number(entry[3]),
       };
+      themeEntries[theme][entry[1]] = hotspot;
+      hotspots[`${theme}/${shapeFiles[entry[1]]}`] = hotspot;
     }
   }
 
-  const figma = src.match(
-    /FIGMA_ARROW = \{ url: "\/cursors\/([\w.-]+)", x: ([\d.]+), y: ([\d.]+) \}/,
-  );
-  if (!figma)
+  for (const expectedTheme of expectedThemes) {
+    if (!Object.hasOwn(themeEntries, expectedTheme)) {
+      throw new Error(`${expectedTheme} hotspot theme was not parsed`);
+    }
+    for (const shape of expectedShapes) {
+      if (!Object.hasOwn(themeEntries[expectedTheme], shape)) {
+        throw new Error(`${expectedTheme}.${shape} hotspot was not parsed`);
+      }
+    }
+  }
+
+  const figmaMatches = [
+    ...src.matchAll(
+      /FIGMA_ARROW = \{ url: "\/cursors\/([\w.-]+)", x: ([\d.]+), y: ([\d.]+) \}/g,
+    ),
+  ];
+  if (figmaMatches.length !== 1)
     throw new Error("could not find FIGMA_ARROW in cursorOverlay.ts");
+  const figma = figmaMatches[0];
   hotspots[figma[1]] = { x: Number(figma[2]), y: Number(figma[3]) };
 
+  const expectedCount = expectedThemes.length * expectedShapes.length + 1;
+  if (Object.keys(hotspots).length !== expectedCount) {
+    throw new Error(
+      `parsed ${Object.keys(hotspots).length} hotspots, expected ${expectedCount}`,
+    );
+  }
+
   return hotspots;
+}
+
+/** Read the real source and prove the parser gives LF and CRLF identical results. */
+function declaredHotspots() {
+  const src = readFileSync(overlaySrc, "utf8");
+  const expectedShapes = expectedCursorShapes();
+  const lf = src.replace(/\r\n/g, "\n");
+  const fromLf = parseDeclaredHotspots(lf, expectedShapes);
+  const fromCrlf = parseDeclaredHotspots(
+    lf.replace(/\n/g, "\r\n"),
+    expectedShapes,
+  );
+
+  if (JSON.stringify(fromLf) !== JSON.stringify(fromCrlf)) {
+    throw new Error("cursor hotspot parsing differs between LF and CRLF");
+  }
+
+  return parseDeclaredHotspots(src, expectedShapes);
 }
 
 // Curves bow outside the on-path hull, and a hotspot legitimately sits a hair
@@ -155,19 +296,28 @@ const ARROWS = new Set(["tahoe/arrow.svg", "minimal.svg", "macos/arrow.svg"]);
 
 const hotspots = declaredHotspots();
 const names = Object.keys(hotspots);
-assert(
-  names.length >= 25,
-  `parsed only ${names.length} hotspots — parser drift?`,
-);
 
 for (const [file, hotspot] of Object.entries(hotspots)) {
+  const normalized = assert(
+    Number.isFinite(hotspot.x) &&
+      Number.isFinite(hotspot.y) &&
+      hotspot.x >= 0 &&
+      hotspot.x <= 1 &&
+      hotspot.y >= 0 &&
+      hotspot.y <= 1,
+    `${file}: hotspot (${hotspot.x}, ${hotspot.y}) is outside the normalized viewBox`,
+  );
+  if (!normalized) continue;
+
   let box;
   try {
     box = contentBox(file);
   } catch (err) {
-    // The macos pack is traced rasters with no plain path data — skip rather
-    // than fail, but say so, so a silent gap never looks like a pass.
-    console.warn(`… ${file}: ${err.message} (skipped)`);
+    assert(false, `${file}: ${err.message}`);
+    continue;
+  }
+  if (box === null) {
+    console.warn(`… ${file}: embedded raster has no path geometry (bounds only)`);
     continue;
   }
 

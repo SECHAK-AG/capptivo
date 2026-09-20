@@ -3,7 +3,9 @@
 
 use crate::error::{AppError, AppResult};
 use crate::permissions::PermissionStatus;
-use crate::recorder::types::{CaptureAreaSelection, CaptureDevice, CaptureSource, RecorderConfig, RecorderState};
+use crate::recorder::types::{
+    CaptureAreaSelection, CaptureDevice, CaptureSource, RecorderConfig, RecorderState,
+};
 use crate::state::{AppState, CurrentProject, ExportSink};
 use crate::windows;
 use std::io::Write;
@@ -36,10 +38,7 @@ pub fn list_microphones() -> AppResult<Vec<crate::recorder::types::MicrophoneDev
 /// Open the selected mic early (discard samples) so Record skips BT open latency.
 /// Soft-fail at the UI: a warm miss still cold-opens on Record.
 #[tauri::command(async)]
-pub fn warm_microphone(
-    device_id: Option<String>,
-    label: Option<String>,
-) -> AppResult<()> {
+pub fn warm_microphone(device_id: Option<String>, label: Option<String>) -> AppResult<()> {
     crate::recorder::warm_microphone(device_id.as_deref(), label.as_deref())
 }
 
@@ -110,7 +109,8 @@ pub fn recorder_state(state: State<AppState>) -> RecorderState {
 pub fn prepare_window_capture(source_id: String) -> AppResult<()> {
     #[cfg(all(target_os = "macos", feature = "scap-capture"))]
     {
-        if let Some(window_id) = crate::recorder::backend::picker_sources::parse_window_id(&source_id)
+        if let Some(window_id) =
+            crate::recorder::backend::picker_sources::parse_window_id(&source_id)
         {
             return crate::recorder::backend::prepare_for_capture(window_id);
         }
@@ -310,6 +310,7 @@ pub async fn stop_recording(app: AppHandle, state: State<'_, AppState>) -> AppRe
         Ok(Err(e)) => (None, Some(e)),
         Err(e) => (None, Some(e)),
     };
+    let window_action = recorder_stop_window_action(&state.recorder.state());
 
     // `RecorderController::stop` has already joined the encode thread — holding
     // the session open protects nothing. Retire it on every path so a failed
@@ -318,8 +319,24 @@ pub async fn stop_recording(app: AppHandle, state: State<'_, AppState>) -> AppRe
     let _ = state.camera_sink.lock().take();
     let config = current.config;
 
-    let _ = windows::restore_recorder_setup_layout(&app);
-    let _ = windows::hide_recorder(app.clone());
+    match window_action {
+        RecorderStopWindowAction::Hide => {
+            let _ = windows::restore_recorder_setup_layout(&app);
+            let _ = windows::hide_recorder(app.clone());
+        }
+        // Fatal errors are delivered to the recorder webview. Put that window in
+        // its full-work-area alert layout before the command returns instead of
+        // hiding the only renderer that can display the error
+        RecorderStopWindowAction::RevealAlert => {
+            // A tray click or hotkey can hide the HUD while recording. Reveal
+            // first: show_recorder_popover resets an inactive hidden window to
+            // setup, so the alert layout must follow it
+            let _ = windows::show_recorder_popover(&app);
+            let _ = windows::set_recorder_layout(app.clone(), "alert".into());
+            crate::recorder::cool_microphone();
+            let _ = app.emit("recorder://dismissed", ());
+        }
+    }
     let _ = windows::hide_annotation_overlay(app.clone());
     let _ = windows::dismiss_camera_preview(app.clone());
     crate::area_picker::hide_area_frame_guide(&app);
@@ -419,18 +436,12 @@ pub fn complete_area_pick(
 }
 
 #[tauri::command]
-pub fn cancel_area_pick(
-    app: AppHandle,
-    pick_state: State<'_, crate::area_picker::AreaPickState>,
-) {
+pub fn cancel_area_pick(app: AppHandle, pick_state: State<'_, crate::area_picker::AreaPickState>) {
     crate::area_picker::cancel_area_pick(&app, &pick_state);
 }
 
 #[tauri::command]
-pub fn show_area_frame_guide(
-    app: AppHandle,
-    selection: CaptureAreaSelection,
-) -> AppResult<()> {
+pub fn show_area_frame_guide(app: AppHandle, selection: CaptureAreaSelection) -> AppResult<()> {
     crate::area_picker::show_area_frame_guide(&app, &selection)
 }
 
@@ -447,9 +458,50 @@ fn take_is_usable(frames_encoded: u64, screen_bytes: Option<u64>) -> bool {
     frames_encoded > 0 && screen_bytes.is_some_and(|b| b >= MIN_SCREEN_BYTES)
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum RecorderStopWindowAction {
+    Hide,
+    RevealAlert,
+}
+
+/// The recorder owns fatal delivery, so it must stay visible until the UI handles it
+fn recorder_stop_window_action(state: &RecorderState) -> RecorderStopWindowAction {
+    if matches!(state, RecorderState::Error { fatal: true, .. }) {
+        RecorderStopWindowAction::RevealAlert
+    } else {
+        RecorderStopWindowAction::Hide
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use super::take_is_usable;
+    use super::{recorder_stop_window_action, take_is_usable, RecorderStopWindowAction};
+    use crate::recorder::types::RecorderState;
+
+    #[test]
+    fn fatal_stop_keeps_recorder_visible_for_its_alert() {
+        assert_eq!(
+            recorder_stop_window_action(&RecorderState::Error {
+                message: "encoder failed".into(),
+                fatal: true,
+            }),
+            RecorderStopWindowAction::RevealAlert
+        );
+        assert_eq!(
+            recorder_stop_window_action(&RecorderState::Error {
+                message: "notice".into(),
+                fatal: false,
+            }),
+            RecorderStopWindowAction::Hide
+        );
+        // A second stop races the first after it changed this state to
+        // `Finalizing`; that losing `NotRecording` path must retain the normal
+        // hide behavior rather than presenting a fatal alert
+        assert_eq!(
+            recorder_stop_window_action(&RecorderState::Finalizing),
+            RecorderStopWindowAction::Hide
+        );
+    }
 
     #[test]
     fn take_is_usable_rejects_zero_frames() {

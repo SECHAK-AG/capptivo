@@ -32,10 +32,8 @@ pub fn generate(
 
     let whisper = resolve_whisper_executable()?;
     let ffmpeg = ffmpeg_path();
-    let temp_base = std::env::temp_dir().join(format!(
-        "capptivo-captions-{}",
-        uuid::Uuid::new_v4()
-    ));
+    let temp_base =
+        std::env::temp_dir().join(format!("capptivo-captions-{}", uuid::Uuid::new_v4()));
     let wav = temp_base.with_extension("wav");
     let lang = language
         .map(str::trim)
@@ -141,10 +139,7 @@ fn extract_wav(ffmpeg: &Path, video: &Path, wav: &Path) -> AppResult<()> {
     Ok(())
 }
 
-fn run_whisper<'a>(
-    whisper: &Path,
-    args: impl IntoIterator<Item = &'a str>,
-) -> AppResult<()> {
+fn run_whisper<'a>(whisper: &Path, args: impl IntoIterator<Item = &'a str>) -> AppResult<()> {
     // whisper.cpp caps itself at 4 threads by default, so it needs no --threads
     // argument here — only the priority demotion.
     let status = proc::background_command(whisper)

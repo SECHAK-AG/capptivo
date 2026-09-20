@@ -8,8 +8,10 @@
 use crate::cursor::CaptureRect;
 use crate::error::{AppError, AppResult};
 use core_graphics::display::CGDisplay;
-use screencapturekit_sys::shareable_content::{UnsafeSCShareableContent, UnsafeSCDisplay, UnsafeSCWindow};
 use objc_id::ShareId;
+use screencapturekit_sys::shareable_content::{
+    UnsafeSCDisplay, UnsafeSCShareableContent, UnsafeSCWindow,
+};
 
 /// `kCGDockWindowLevel` — layers at/above this are Dock, menubar, etc.
 const DOCK_WINDOW_LAYER: u32 = 20;
@@ -110,11 +112,7 @@ pub fn display_for_window_frame(
             && b.origin.y <= frame.y + frame.height * 0.5
             && b.origin.y + b.size.height >= frame.y + frame.height * 0.5;
         if overlap > 0.0 || contains_mid {
-            let score = if contains_mid {
-                overlap + 1.0
-            } else {
-                overlap
-            };
+            let score = if contains_mid { overlap + 1.0 } else { overlap };
             let prev = best.map(|(_, o)| o).unwrap_or(0.0);
             if score > prev {
                 best = Some((d.get_display_id(), score));
@@ -417,6 +415,9 @@ mod tests {
         let a = rect_overlap(0.0, 0.0, 100.0, 100.0, 50.0, 50.0, 100.0, 100.0);
         let b = rect_overlap(0.0, 0.0, 100.0, 100.0, 200.0, 200.0, 10.0, 10.0);
         assert!(a > b);
-        assert_eq!(rect_overlap(0.0, 0.0, 10.0, 10.0, 100.0, 100.0, 10.0, 10.0), 0.0);
+        assert_eq!(
+            rect_overlap(0.0, 0.0, 10.0, 10.0, 100.0, 100.0, 10.0, 10.0),
+            0.0
+        );
     }
 }

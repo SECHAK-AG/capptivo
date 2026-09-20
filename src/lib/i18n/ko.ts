@@ -83,6 +83,8 @@ export const ko: Record<TranslationKey, string> = {
   "export.cancel": "취소",
   "export.error.gpuContextLost": "내보내기가 중지되었습니다. 렌더링 중 그래픽 드라이버가 재설정되었습니다. 다시 내보내세요.",
   "editor.previewGpuLost": "미리보기가 중지되었습니다. 그래픽 드라이버가 재설정되었습니다. 복구되지 않으면 편집기를 다시 여세요.",
+  "editor.framesDropped":
+    "이 녹화는 시스템 부하로 {seconds}초 분량의 프레임이 누락되었습니다. 해당 구간은 화면이 멈춘 것처럼 재생됩니다. 녹화 중에는 무거운 앱을 닫아 주세요.",
   "editor.gpuReloaded": "그래픽 재설정 후 편집기가 다시 로드되었습니다. 다시 내보낼 수 있습니다.",
   "export.dialog.title": "내보내기",
   "export.dialog.description": "형식, 인코딩, 프레임 레이트, 파일 유형을 선택하세요.",
@@ -100,7 +102,10 @@ export const ko: Record<TranslationKey, string> = {
   "export.enhanceVoice.on": "켬",
   "export.enhanceVoice.hint":
     "노이즈 제거, 압축, 레벨 조정으로 나레이션을 또렷하게 합니다.",
-  "encoding.fast": "빠름",
+  "export.passthrough": "원본 (가장 빠름)",
+  "export.passthrough.hint":
+    "녹화를 그대로 복사합니다 — 스타일, 커서, 오버레이는 적용되지 않습니다. 자르기나 카메라가 있으면 전체보내기가 필요합니다.",
+  "encoding.fast":"빠름",
   "encoding.balanced": "균형",
   "encoding.quality": "품질",
 

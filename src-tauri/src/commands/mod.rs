@@ -84,6 +84,7 @@ macro_rules! command_handlers {
             // export
             $crate::commands::export::ensure_seekable_recording,
             $crate::commands::export::select_export_destination,
+            $crate::commands::export::export_passthrough,
             $crate::commands::export::begin_export,
             $crate::commands::export::write_export_chunk,
             $crate::commands::export::finish_export,

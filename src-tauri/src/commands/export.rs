@@ -560,6 +560,51 @@ fn take_ready_stream<T>(
 /// thread* — the one pumping the run loop and repainting every window — and
 /// `File::create` on a slow or network volume is not something that thread
 /// should be waiting on.
+/// Stream-copy the recording to a Rust-owned destination — the "Original" fast path.
+/// The renderer supplies only the opaque destination capability, never a path.
+#[tauri::command]
+pub async fn export_passthrough(
+    state: State<'_, AppState>,
+    project_id: String,
+    destination: String,
+    preset: String,
+    has_system_audio: bool,
+) -> AppResult<()> {
+    let screen = state.store.project_dir(&project_id)?.join("screen.mp4");
+    let final_path = claim_available_destination(&state.export_destinations, &destination)?;
+    let temp_path = export_temp_path(&final_path);
+    if temp_path.exists() {
+        let _ = std::fs::remove_file(&temp_path);
+    }
+    let preset = AudioEnhancePreset::parse(&preset);
+    let dest_for_result = destination.clone();
+    let temp_for_cleanup = temp_path.clone();
+    let result = tauri::async_runtime::spawn_blocking(move || {
+        crate::recorder::encoder::passthrough_export(
+            &screen,
+            &temp_path,
+            preset,
+            has_system_audio,
+        )?;
+        promote_temp_to_final(&temp_path, &final_path)?;
+        Ok::<(), AppError>(())
+    })
+    .await
+    .map_err(|e| AppError::Other(format!("passthrough export task failed: {e}")))?;
+
+    match result {
+        Ok(()) => {
+            mark_destination_ready(&state.export_destinations, &dest_for_result)?;
+            Ok(())
+        }
+        Err(error) => {
+            let _ = release_destination(&state.export_destinations, &dest_for_result);
+            let _ = std::fs::remove_file(&temp_for_cleanup);
+            Err(error)
+        }
+    }
+}
+
 #[tauri::command(async)]
 pub fn begin_export(state: State<AppState>, destination: String) -> AppResult<String> {
     let final_path = claim_available_destination(&state.export_destinations, &destination)?;

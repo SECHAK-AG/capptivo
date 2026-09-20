@@ -172,6 +172,13 @@ export const commands = {
       "select_export_destination",
       args,
     ),
+  /** Stream-copy the recording untouched — the "Original" export fast path. */
+  exportPassthrough: (args: {
+    projectId: string;
+    destination: string;
+    preset: "off" | "podcast";
+    hasSystemAudio: boolean;
+  }) => invoke<void>("export_passthrough", args),
   beginExport: (destination: string) =>
     invoke<string>("begin_export", { destination }),
   // Chunk is the whole invoke arg; handle/position ride in headers for out-of-order muxers.

@@ -68,6 +68,8 @@ export type SequentialReadOptions = {
 export type SequentialReader = {
   /** Advance every track to the next planned timestamp. */
   nextFrame: () => Promise<void>;
+  /** Cancel queued decoder work before the media/input is disposed. */
+  dispose?: () => void;
 };
 
 export type SequentialMedia = {
@@ -81,7 +83,7 @@ export type SequentialMedia = {
 };
 
 /** Decodes kept ahead of the current export frame (mediabunny path). */
-const PREFETCH_DEPTH = 2;
+const PREFETCH_DEPTH = 8;
 
 /**
  * Report the downgrade to both the console and the rolling disk log, then hand
@@ -178,16 +180,24 @@ export async function openSequentialMedia(
         };
         for (let i = 0; i < PREFETCH_DEPTH; i += 1) enqueue();
 
-        return async () => {
-          const result = await pending.shift()!;
-          enqueue();
-          if (!result.done && result.value) track.surface.push(result.value);
+        return {
+          advance: async () => {
+            const result = await pending.shift()!;
+            enqueue();
+            if (!result.done && result.value) track.surface.push(result.value);
+          },
+          dispose: () => {
+            void iterator.return();
+          },
         };
       });
 
       return {
         nextFrame: async () => {
-          await Promise.all(readers.map((advance) => advance()));
+          await Promise.all(readers.map((reader) => reader.advance()));
+        },
+        dispose: () => {
+          for (const reader of readers) reader.dispose();
         },
       };
     },

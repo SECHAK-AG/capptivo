@@ -6,8 +6,8 @@
 //!
 //! The startup probe runs at 256×144, which says nothing about frames a
 //! hardware encoder caps below the capture size. Callers that know their frame
-//! size go through [`pick_for`], which re-probes the pick at the exact size
-//! once it exceeds what the startup probe covers.
+//! size go through [`pick_for`], which re-probes the selected encoder at the
+//! exact output size.
 
 use crate::proc;
 use std::collections::HashMap;
@@ -274,29 +274,20 @@ pub fn scaled_capture_notice(native: (u32, u32), actual: (u32, u32)) -> Option<S
 
 /// What to tell the user when the hardware encoder refused the frame size and
 /// the take runs on `fallback` instead (see [`pick_for`]).
-pub fn software_fallback_notice(
-    width: u32,
-    height: u32,
-    refused: &str,
-    fallback: &str,
-) -> String {
+pub fn software_fallback_notice(width: u32, height: u32, refused: &str, fallback: &str) -> String {
     format!(
         "{width}×{height} is more than the {refused} hardware encoder accepts; recording with the {fallback} software encoder instead, which costs CPU and may drop frames."
     )
 }
 
-/// The encoder for frames of `width`×`height`: the cached [`pick`] for any
-/// size inside [`HW_ENCODER_EDGE`], otherwise that pick re-probed at the exact
-/// size and demoted to the software fallback if it refuses. Oversize answers
-/// are cached per size, so the probe (~0.1 s) runs once per size, not once per
-/// recording.
+/// The encoder for frames of `width`×`height`: the startup choice is re-probed
+/// at the exact output size and demoted to the software fallback if it refuses.
+/// Answers are cached per size, so the probe runs once per output profile rather
+/// than once per frame or once per export.
 pub fn pick_for(ffmpeg: &Path, width: u32, height: u32) -> EncoderChoice {
     let chosen = *pick(ffmpeg);
-    if width.max(height) <= HW_ENCODER_EDGE {
-        return chosen;
-    }
-    static OVERSIZE: OnceLock<Mutex<HashMap<(u32, u32), EncoderChoice>>> = OnceLock::new();
-    let cache = OVERSIZE.get_or_init(|| Mutex::new(HashMap::new()));
+    static PROFILE_CACHE: OnceLock<Mutex<HashMap<(u32, u32), EncoderChoice>>> = OnceLock::new();
+    let cache = PROFILE_CACHE.get_or_init(|| Mutex::new(HashMap::new()));
     if let Some(cached) = cache.lock().unwrap().get(&(width, height)) {
         return *cached;
     }
@@ -307,7 +298,7 @@ pub fn pick_for(ffmpeg: &Path, width: u32, height: u32) -> EncoderChoice {
     choice
 }
 
-/// The oversize decision behind [`pick_for`], without the cache. Split out for
+/// The exact-profile decision behind [`pick_for`], without the cache. Split out for
 /// the same reason as [`select`]: a test must not depend on who warmed the
 /// `OnceLock`.
 fn select_for(ffmpeg: &Path, chosen: EncoderChoice, width: u32, height: u32) -> EncoderChoice {
@@ -315,23 +306,70 @@ fn select_for(ffmpeg: &Path, chosen: EncoderChoice, width: u32, height: u32) -> 
         // Nothing to demote to; libx264 handles Level 6 sizes on its own.
         return chosen;
     }
-    match probe_at(ffmpeg, &chosen, width, height) {
-        Ok(()) => chosen,
-        Err(failure) => {
-            // WARN, not INFO: this is the one place a hardware machine silently
-            // goes software, and "why is this 5K recording eating my CPU" must
-            // be answerable from the log.
-            tracing::warn!(
-                encoder = chosen.name,
-                width,
-                height,
-                fallback = OVERSIZE_SOFTWARE_FALLBACK.name,
-                reason = %failure,
-                "hardware encoder rejected the frame size; using the software encoder for it"
-            );
-            OVERSIZE_SOFTWARE_FALLBACK
+    let mut order = Vec::with_capacity(candidates().len());
+    order.push(chosen);
+    order.extend(
+        candidates()
+            .iter()
+            .copied()
+            .filter(|candidate| {
+                candidate.name != chosen.name && candidate.name != SOFTWARE_FALLBACK.name
+            }),
+    );
+
+    for choice in order {
+        match probe_at(ffmpeg, &choice, width, height) {
+            Ok(()) => {
+                tracing::info!(
+                    encoder = choice.name,
+                    width,
+                    height,
+                    "selected exact-profile H.264 encoder"
+                );
+                return choice;
+            }
+            Err(failure) if !choice.tuning_args.is_empty() => {
+                let untuned = EncoderChoice {
+                    tuning_args: &[],
+                    ..choice
+                };
+                if probe_at(ffmpeg, &untuned, width, height).is_ok() {
+                    tracing::warn!(
+                        encoder = choice.name,
+                        width,
+                        height,
+                        reason = %failure,
+                        "H.264 encoder tuning rejected at exact profile; using it untuned"
+                    );
+                    return untuned;
+                }
+                tracing::info!(
+                    encoder = choice.name,
+                    width,
+                    height,
+                    reason = %failure,
+                    "exact-profile H.264 candidate unavailable"
+                );
+            }
+            Err(failure) => {
+                tracing::info!(
+                    encoder = choice.name,
+                    width,
+                    height,
+                    reason = %failure,
+                    "exact-profile H.264 candidate unavailable"
+                );
+            }
         }
     }
+
+    tracing::warn!(
+        width,
+        height,
+        fallback = OVERSIZE_SOFTWARE_FALLBACK.name,
+        "all exact-profile H.264 hardware candidates failed; using software encoder"
+    );
+    OVERSIZE_SOFTWARE_FALLBACK
 }
 
 /// The probe loop behind [`pick`], without the cache. Split out so the fallback
@@ -651,7 +689,10 @@ mod tests {
         // Same encoder, same pixel format, same plumbing — only the speed knob
         // moves, so everything the recorder assumes about libx264 still holds.
         assert_eq!(OVERSIZE_SOFTWARE_FALLBACK.name, SOFTWARE_FALLBACK.name);
-        assert_eq!(OVERSIZE_SOFTWARE_FALLBACK.pix_fmt, SOFTWARE_FALLBACK.pix_fmt);
+        assert_eq!(
+            OVERSIZE_SOFTWARE_FALLBACK.pix_fmt,
+            SOFTWARE_FALLBACK.pix_fmt
+        );
         assert_eq!(
             OVERSIZE_SOFTWARE_FALLBACK.pre_input_args,
             SOFTWARE_FALLBACK.pre_input_args
@@ -664,8 +705,11 @@ mod tests {
 
     #[test]
     fn probe_reports_a_spawn_failure_when_ffmpeg_is_missing() {
-        let err = probe(Path::new("/nonexistent/ffmpeg-for-test"), &SOFTWARE_FALLBACK)
-            .expect_err("a missing ffmpeg must not probe successfully");
+        let err = probe(
+            Path::new("/nonexistent/ffmpeg-for-test"),
+            &SOFTWARE_FALLBACK,
+        )
+        .expect_err("a missing ffmpeg must not probe successfully");
         assert!(
             matches!(err, ProbeFailure::FfmpegUnavailable(_)),
             "a missing binary is an install problem, not an encoder rejection: {err:?}"

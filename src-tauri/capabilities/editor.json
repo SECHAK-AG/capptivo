@@ -32,6 +32,7 @@
     "allow-delete-custom-background",
     "allow-ensure-seekable-recording",
     "allow-select-export-destination",
+    "allow-export-passthrough",
     "allow-begin-export",
     "allow-write-export-chunk",
     "allow-finish-export",

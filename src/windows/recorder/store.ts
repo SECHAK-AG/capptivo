@@ -23,6 +23,11 @@ import type {
 import { SCREEN_CAPTURE_FPS } from "./captureFps";
 import { probeCameraPermission } from "./cameraAccess";
 import { flushCameraCaptureWithTimeout } from "./flushCamera";
+import {
+  nextRecorderError,
+  recorderErrorAfterLiveEnd,
+  type RecorderErrorNotice,
+} from "./recorderErrorPresentation";
 import { logClientError, logClientInfo } from "@/lib/errorLogging";
 
 export type CaptureMode = CaptureSourceKind | "area" | "device";
@@ -43,7 +48,7 @@ interface RecorderStore {
   // --- projected from Rust ---
   state: RecorderState;
   elapsed: number;
-  lastError: string | null;
+  lastError: RecorderErrorNotice | null;
 
   // --- local UI ---
   permissions: PermissionStatus | null;
@@ -209,9 +214,19 @@ function resetAreaCapture(
   }
 }
 
+function isRecorderLive(state: RecorderState) {
+  return (
+    state.status === "recording" ||
+    state.status === "paused" ||
+    state.status === "finalizing"
+  );
+}
+
 export const useRecorderStore = create<RecorderStore>((set, get) => {
-  const reportError = (message: string) => {
-    set({ lastError: message });
+  const reportError = (message: string, fatal = false) => {
+    set((current) => ({
+      lastError: nextRecorderError(current.lastError, { message, fatal }),
+    }));
     logClientError("recorder", message);
   };
 
@@ -246,22 +261,23 @@ export const useRecorderStore = create<RecorderStore>((set, get) => {
       subscribed = true;
       await onStateChanged((state) => {
         set((prev) => {
-          const nextLive =
-            state.status === "recording" ||
-            state.status === "paused" ||
-            state.status === "finalizing";
-          const prevLive =
-            prev.state.status === "recording" ||
-            prev.state.status === "paused" ||
-            prev.state.status === "finalizing";
+          const nextLive = isRecorderLive(state);
+          const prevLive = isRecorderLive(prev.state);
           // New take — zero the HUD; `Elapsed` only ticks while the encode loop runs.
           const elapsed = nextLive && !prevLive ? 0 : prev.elapsed;
-          return { state, elapsed };
+          return {
+            state,
+            elapsed,
+            lastError:
+              prevLive && !nextLive
+                ? recorderErrorAfterLiveEnd(prev.lastError)
+                : prev.lastError,
+          };
         });
       });
       await onElapsed((seconds) => set({ elapsed: seconds }));
       await onError((message, fatal) => {
-        reportError(message);
+        reportError(message, fatal);
         if (!fatal) return;
         const { state } = get();
         if (state.status !== "recording" && state.status !== "paused") return;
@@ -506,7 +522,7 @@ export const useRecorderStore = create<RecorderStore>((set, get) => {
       }
     }
     try {
-      set({ lastError: null });
+      if (!get().lastError?.fatal) set({ lastError: null });
       const selection = await commands.pickCaptureArea();
       set({
         captureMode: "area",
@@ -799,7 +815,10 @@ export const useRecorderStore = create<RecorderStore>((set, get) => {
       void commands.hideCameraPreview().catch(() => undefined);
       set({ annotationVisible: false, micSessionMuted: false });
     } catch (e) {
-      reportError(describeError(e));
+      // Fatal event delivery starts the same stop operation. Its command rejection
+      // repeats the message, so retain the event's severity instead of downgrading
+      // it to an auto-dismissed local error.
+      reportError(describeError(e), get().lastError?.fatal ?? false);
       set({ annotationVisible: false, micSessionMuted: false });
     } finally {
       stopping = false;

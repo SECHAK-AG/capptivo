@@ -275,8 +275,8 @@ impl RecorderController {
         match result {
             Ok(mut artifacts) => {
                 // Encoded t=0 skips capture warm-up blacks — rebase the wall offset.
-                artifacts.camera_offset_ms = raw_camera_offset
-                    .map(|ms| ms.saturating_sub(artifacts.media_lead_in_ms));
+                artifacts.camera_offset_ms =
+                    raw_camera_offset.map(|ms| ms.saturating_sub(artifacts.media_lead_in_ms));
                 if let Some(ref e) = artifacts.error {
                     let message = e.to_string();
                     self.set_state(RecorderState::Error {
@@ -384,6 +384,15 @@ fn spawn_encode_loop(
             // timestamps). Without this, `Elapsed` kept advancing on Pause.
             let mut hud_pause_mark: Option<Instant> = None;
             let mut hud_paused_accum = Duration::ZERO;
+            // Wall-clock active seconds (elapsed minus paused). The pacer fills
+            // timestamp gaps in full, so every timeline position derived from a
+            // capture timestamp is bounded by this before use — a glitched
+            // backend clock must not be able to mint timeline that never ran.
+            let wall_active_secs = |paused: Duration, mark: Option<Instant>| {
+                t0.elapsed()
+                    .saturating_sub(paused + mark.map(|m| m.elapsed()).unwrap_or(Duration::ZERO))
+                    .as_secs_f64()
+            };
             let mut encode_error: Option<AppError> = None;
             let mut interrupted = false;
             // Last capture timestamp seen, and when it landed. Lets the loop
@@ -471,7 +480,10 @@ fn spawn_encode_loop(
                             }
 
                             if let Some(epoch) = media_epoch {
-                                let timeline_ts = (active_ts - epoch).max(0.0);
+                                let timeline_ts = clamp_timeline_ts(
+                                    active_ts - epoch,
+                                    wall_active_secs(hud_paused_accum, hud_pause_mark),
+                                );
                                 match pacer.push(
                                     &mut encoder,
                                     frame.data,
@@ -568,8 +580,10 @@ fn spawn_encode_loop(
                                 }
 
                                 if let Some(epoch) = media_epoch {
-                                    let timeline_ts =
-                                        (est_ts - paused_accum - epoch).max(0.0);
+                                    let timeline_ts = clamp_timeline_ts(
+                                        est_ts - paused_accum - epoch,
+                                        wall_active_secs(hud_paused_accum, hud_pause_mark),
+                                    );
                                     match pacer.fill_to(&mut encoder, timeline_ts) {
                                         Ok(n) => frames_encoded += n,
                                         Err(e) => {
@@ -675,7 +689,10 @@ fn spawn_encode_loop(
                                 Ordering::Relaxed,
                             );
                         }
-                        let timeline_ts = (active_ts - media_epoch.unwrap()).max(0.0);
+                        let timeline_ts = clamp_timeline_ts(
+                            active_ts - media_epoch.unwrap(),
+                            wall_active_secs(hud_paused_accum, hud_pause_mark),
+                        );
                         match pacer.push(&mut encoder, frame.data, bytes_per_row, timeline_ts)
                         {
                             Ok(n) => frames_encoded += n,
@@ -864,11 +881,7 @@ fn is_capture_warmup_black(bgra: &[u8], width: u32, height: u32, bytes_per_row: 
 const CAPTURE_WARMUP_MAX_SECS: f64 = 0.75;
 
 /// HUD timer: wall clock minus completed pauses minus the open pause (if any).
-fn hud_elapsed_secs(
-    wall: Duration,
-    paused_accum: Duration,
-    current_pause: Duration,
-) -> f64 {
+fn hud_elapsed_secs(wall: Duration, paused_accum: Duration, current_pause: Duration) -> f64 {
     wall.saturating_sub(paused_accum + current_pause)
         .as_secs_f64()
 }
@@ -902,7 +915,10 @@ fn fold_out_pauses(
 }
 
 /// Shift cursor samples onto the video timeline after dropping warm-up frames.
-fn shift_cursor_track(mut track: crate::cursor::CursorTrack, lead_in: f64) -> crate::cursor::CursorTrack {
+fn shift_cursor_track(
+    mut track: crate::cursor::CursorTrack,
+    lead_in: f64,
+) -> crate::cursor::CursorTrack {
     if lead_in <= 1e-6 {
         return track;
     }
@@ -928,9 +944,20 @@ struct FramePlan {
 /// `fps` timeline given the next unfilled slot. FFmpeg treats the raw pipe as
 /// constant-rate, so to keep the encoded duration matching wall-clock (and thus
 /// the separately-muxed audio), we repeat the previous frame across gaps rather
-/// than letting drops silently speed the video up. `max_fill` caps repeats so a
-/// single glitched timestamp can't emit thousands of frames.
-fn plan_frame(ts_secs: f64, fps: u32, next_index: u64, max_fill: u64) -> FramePlan {
+/// than letting drops silently speed the video up.
+///
+/// The gap is filled in full — capping the repeats while still jumping
+/// `next_index` to the target was how a long encoder stall silently deleted
+/// the middle of a take (a 20 s hole at 30 fps wrote 150 freeze frames and
+/// skipped the other 450 slots; the encoded file came back 15 s short with
+/// the missing span cut from the *middle*, not the end).
+///
+/// ponytail: filling costs gap×fps repeat frames through the pipe (~8 MB each
+/// at 1080p), so a multi-minute stall means minutes of catch-up writes. The
+/// upgrade path is timestamped non-CFR muxing (what Cap does) instead of
+/// repeat-fill. Glitched *timestamps* are bounded by the caller —
+/// [`clamp_timeline_ts`] — not by this function.
+fn plan_frame(ts_secs: f64, fps: u32, next_index: u64) -> FramePlan {
     let target = (ts_secs * fps as f64).round().max(0.0) as u64;
     if target < next_index {
         // Two captures fell in the same slot → drop this one (but keep it as the
@@ -942,10 +969,26 @@ fn plan_frame(ts_secs: f64, fps: u32, next_index: u64, max_fill: u64) -> FramePl
         };
     }
     FramePlan {
-        repeats: (target - next_index).min(max_fill),
+        repeats: target - next_index,
         write_current: true,
         next_index: target + 1,
     }
+}
+
+/// Slack on the wall-clock bound in [`clamp_timeline_ts`]. Capture timestamps
+/// and `Instant` are different clock domains and the pause bookkeeping updates
+/// on the HUD's 250 ms cadence, so an honest frame can land slightly past the
+/// naive bound.
+const TIMELINE_WALL_SLACK_SECS: f64 = 1.0;
+
+/// Bound a frame's timeline position by the time that has actually elapsed.
+/// [`plan_frame`] fills timestamp gaps with repeat frames in full, so a single
+/// wild capture timestamp (backend clock glitch) would otherwise emit hundreds
+/// of thousands of frames and bury the rest of the take behind them. Wall-clock
+/// active time (elapsed minus paused) is the hard upper bound any honest
+/// timestamp can have.
+fn clamp_timeline_ts(ts_secs: f64, wall_active_secs: f64) -> f64 {
+    (ts_secs.min(wall_active_secs + TIMELINE_WALL_SLACK_SECS)).max(0.0)
 }
 
 /// How many repeat frames bring the timeline up to `ts_secs` with no new
@@ -1043,7 +1086,7 @@ impl FramePacer {
         bytes_per_row: u32,
         ts_secs: f64,
     ) -> AppResult<u64> {
-        let plan = plan_frame(ts_secs, self.fps, self.next_index, self.max_fill);
+        let plan = plan_frame(ts_secs, self.fps, self.next_index);
         let mut written = 0u64;
 
         if plan.repeats > 0 {
@@ -1071,11 +1114,12 @@ impl FramePacer {
     /// the content changes, so a static screen delivers nothing at all, and a
     /// timeline driven only by arrivals simply stops until something moves.
     ///
-    /// Unlike [`Self::push`], this advances `next_index` by exactly the number
-    /// of frames it wrote rather than jumping to the target slot. `max_fill`
-    /// therefore rate-limits a single call instead of discarding the remainder —
-    /// the caller ticks again in ~100 ms and carries on filling, so the written
-    /// frame count and the timeline length can never drift apart.
+    /// `max_fill` rate-limits a single call: this advances `next_index` by
+    /// exactly the number of frames it wrote and the caller ticks again in
+    /// ~100 ms and carries on filling, so the written frame count and the
+    /// timeline length can never drift apart. ([`Self::push`] instead fills a
+    /// whole gap in one call — it has a real frame to anchor at the target
+    /// slot, and its `ts_secs` is wall-clock-bounded by the caller.)
     fn fill_to(&mut self, encoder: &mut Encoder, ts_secs: f64) -> AppResult<u64> {
         let repeats = fill_repeats(ts_secs, self.fps, self.next_index, self.max_fill);
         if repeats == 0 {
@@ -1109,7 +1153,9 @@ impl FramePacer {
     /// The most recently pushed frame's bytes + stride, for best-effort poster
     /// capture. `None` until the first `push`.
     fn last_frame(&self) -> Option<(&[u8], u32)> {
-        self.last.as_ref().map(|(data, bpr)| (data.as_slice(), *bpr))
+        self.last
+            .as_ref()
+            .map(|(data, bpr)| (data.as_slice(), *bpr))
     }
 }
 
@@ -1228,7 +1274,7 @@ mod tests {
 
     #[test]
     fn pacing_writes_first_frame_without_repeats() {
-        let p = plan_frame(0.0, 30, 0, 150);
+        let p = plan_frame(0.0, 30, 0);
         assert_eq!((p.repeats, p.write_current, p.next_index), (0, true, 1));
     }
 
@@ -1247,7 +1293,10 @@ mod tests {
         // Nothing encodable is left after the trim: fail at start with a clear
         // message rather than spawning ffmpeg against a 0-wide pipe.
         for (w, h) in [(0, 720), (1280, 0), (1, 720), (1280, 1)] {
-            assert!(encodable_dimensions(w, h).is_err(), "{w}x{h} should be rejected");
+            assert!(
+                encodable_dimensions(w, h).is_err(),
+                "{w}x{h} should be rejected"
+            );
         }
     }
 
@@ -1335,7 +1384,7 @@ mod tests {
     #[test]
     fn pacing_fills_dropped_frame_gaps_with_repeats() {
         // Next frame arrives ~3 slots in (2 frames were dropped at 30fps).
-        let p = plan_frame(0.1, 30, 1, 150);
+        let p = plan_frame(0.1, 30, 1);
         assert_eq!((p.repeats, p.write_current, p.next_index), (2, true, 4));
     }
 
@@ -1357,23 +1406,22 @@ mod tests {
     }
 
     #[test]
-    fn filling_defers_a_clamped_gap_instead_of_discarding_it() {
-        // The load-bearing difference from `plan_frame`. Both clamp to
-        // `max_fill`, but `plan_frame` then jumps `next_index` to the target and
-        // the clamped remainder is gone for good — which is how a long stall
-        // silently shortened a take. `fill_repeats` reports only what it will
-        // write, so the caller advances by that much and the next tick picks up
-        // exactly where this one stopped.
+    fn a_stalled_encoder_no_longer_shortens_the_take() {
+        // The wormhole regression test. A 20 s hole (encoder backlog → capture
+        // queue overflow → 20 s of frames dropped at the producer) used to
+        // write 5 s of freeze frames and then *jump* `next_index` to the
+        // target slot, deleting the other 15 s from the middle of the take.
+        // Now the gap is filled in full: the picture freezes for the whole
+        // stall, and the saved duration still matches the clock.
         let fps = 30;
+        let p = plan_frame(20.0, fps, 0);
+        assert_eq!(p.repeats, 600, "the whole gap is filled, none of it skipped");
+        assert_eq!(p.next_index, 601);
+
+        // The heartbeat path (`fill_repeats`) still rate-limits a single tick
+        // and reports only what it wrote, so its clamp defers work to the next
+        // tick instead of discarding it.
         let max_fill = fps as u64 * 5;
-
-        // A 20 s hole with a 5 s clamp: plan_frame writes 150 and calls it done.
-        let p = plan_frame(20.0, fps, 0, max_fill);
-        assert_eq!(p.repeats, 150);
-        assert_eq!(p.next_index, 601, "plan_frame jumps the whole gap");
-
-        // Filling the same hole one tick at a time loses nothing: keep calling
-        // and the timeline arrives at the target slot with a frame per slot.
         let mut next = 0u64;
         let mut written = 0u64;
         for _ in 0..1000 {
@@ -1404,7 +1452,7 @@ mod tests {
         // One second of real frames, then the screen goes still.
         let mut t = 0.0f64;
         while t < 1.0 {
-            let p = plan_frame(t, fps, next, max_fill);
+            let p = plan_frame(t, fps, next);
             frames += p.repeats;
             if p.write_current {
                 frames += 1;
@@ -1431,9 +1479,9 @@ mod tests {
     #[test]
     fn pacing_decimates_when_capture_outpaces_fps() {
         // 60fps capture into a 30fps timeline: every other frame is a duplicate slot.
-        let a = plan_frame(1.0 / 60.0, 30, 1, 150); // → slot 1, advances
+        let a = plan_frame(1.0 / 60.0, 30, 1); // → slot 1, advances
         assert!(a.write_current && a.next_index == 2);
-        let b = plan_frame(2.0 / 60.0, 30, 2, 150); // → maps back to slot 1, drop
+        let b = plan_frame(2.0 / 60.0, 30, 2); // → maps back to slot 1, drop
         assert!(!b.write_current && b.repeats == 0 && b.next_index == 2);
     }
 
@@ -1469,7 +1517,10 @@ mod tests {
                 admitted += 1;
             }
         }
-        assert_eq!(admitted, 10, "the gate must never drop a frame the encoder wants");
+        assert_eq!(
+            admitted, 10,
+            "the gate must never drop a frame the encoder wants"
+        );
     }
 
     #[test]
@@ -1510,7 +1561,7 @@ mod tests {
         for i in 0..500 {
             let ts = f64::from(i) / 165.0; // 165 Hz, an ordinary gaming monitor
             let gate = capture_slot_gate(ts, 60, gate_next);
-            let plan = plan_frame(ts, 60, pacer_next, 300);
+            let plan = plan_frame(ts, 60, pacer_next);
             assert_eq!(
                 gate.is_some(),
                 plan.write_current,
@@ -1541,7 +1592,7 @@ mod tests {
 
         for (i, ts) in feed.into_iter().enumerate() {
             let gate = capture_slot_gate(ts, 60, gate_next);
-            let plan = plan_frame(ts, 60, pacer_next, 300);
+            let plan = plan_frame(ts, 60, pacer_next);
             assert_eq!(
                 gate.is_some(),
                 plan.write_current,
@@ -1560,7 +1611,10 @@ mod tests {
         // advances past the filled slot, frames flow again.
         let mut next = 0;
         next = capture_slot_gate(1.0, 60, next).expect("first frame admitted");
-        assert!(capture_slot_gate(1.0, 60, next).is_none(), "same slot is surplus");
+        assert!(
+            capture_slot_gate(1.0, 60, next).is_none(),
+            "same slot is surplus"
+        );
         assert!(capture_slot_gate(1.0, 60, next).is_none(), "still surplus");
         assert!(
             capture_slot_gate(1.0 + 1.0 / 60.0, 60, next).is_some(),
@@ -1575,10 +1629,19 @@ mod tests {
     }
 
     #[test]
-    fn pacing_caps_repeats_against_glitched_timestamps() {
-        let p = plan_frame(10_000.0, 30, 0, 150);
-        assert_eq!(p.repeats, 150);
-        assert!(p.write_current);
+    fn glitched_timestamps_are_bounded_by_the_wall_clock() {
+        // The guard that replaced `plan_frame`'s old repeat clamp: a wild
+        // backend timestamp is bounded by elapsed active time (+1 s slack)
+        // before the pacer ever sees it, so a glitch can mint at most ~1 s of
+        // timeline that never ran — instead of hundreds of thousands of
+        // repeat frames burying the take.
+        assert_eq!(clamp_timeline_ts(10_000.0, 42.0), 43.0);
+        assert_eq!(
+            clamp_timeline_ts(3.2, 42.0),
+            3.2,
+            "honest timestamps pass through"
+        );
+        assert_eq!(clamp_timeline_ts(-5.0, 42.0), 0.0);
     }
 
     #[test]
@@ -1590,7 +1653,11 @@ mod tests {
         assert_eq!(pool.len(), 0, "the first frame is still held for gap-fill");
 
         pacer.remember(vec![2u8; 16], 4);
-        assert_eq!(pool.len(), 1, "the displaced frame must come back for reuse");
+        assert_eq!(
+            pool.len(),
+            1,
+            "the displaced frame must come back for reuse"
+        );
 
         // And the retained frame is the new one, not the recycled one.
         assert_eq!(pacer.last_frame().map(|(d, _)| d[0]), Some(2));
@@ -1928,8 +1995,7 @@ mod tests {
             }
         });
 
-        let controller =
-            RecorderController::new(Box::new(TestPatternBackend::default()), emit);
+        let controller = RecorderController::new(Box::new(TestPatternBackend::default()), emit);
         let config = RecorderConfig {
             source_id: "display:test".into(),
             crop: None,
