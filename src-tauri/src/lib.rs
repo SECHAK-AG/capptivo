@@ -5,18 +5,18 @@
 //! lives in the domain modules, none of which import `tauri` except `commands`,
 //! `state`, `tray`, `windows`, and this file (§14).
 
-pub mod captions;
-mod capabilities;
-mod commands;
-mod proc;
-mod export_h264;
-mod export_rawvideo;
-mod webview_gpu;
 #[cfg(any(
     all(target_os = "macos", feature = "scap-capture"),
     all(target_os = "windows", feature = "wgc-capture")
 ))]
 mod area_picker;
+mod capabilities;
+pub mod captions;
+mod commands;
+mod export_h264;
+mod export_rawvideo;
+mod proc;
+mod webview_gpu;
 #[cfg(not(any(
     all(target_os = "macos", feature = "scap-capture"),
     all(target_os = "windows", feature = "wgc-capture")
@@ -73,11 +73,6 @@ mod windows;
 use state::AppState;
 use tauri::Manager;
 
-// ponytail: file logging disabled for release — re-enable with the block in `init_tracing`.
-// use std::sync::OnceLock;
-// use tracing_appender::non_blocking::WorkerGuard;
-// static LOG_GUARD: OnceLock<WorkerGuard> = OnceLock::new();
-
 /// Global start/stop-and-show hotkey for the recorder popover.
 const RECORDER_HOTKEY: &str = "Alt+Shift+R";
 
@@ -109,6 +104,11 @@ pub fn run() {
         })
         .setup(|app| {
             let handle = app.handle().clone();
+            // The single-instance plugin has acquired the application lock
+            // Diagnostics stay disabled if the canonical app-data path is unavailable
+            if let Ok(app_data) = handle.path().app_data_dir() {
+                error_log::init(&app_data);
+            }
             app.manage(AppState::build(&handle));
             app.manage(area_picker::AreaPickState::new());
             tray::build(&handle)?;
@@ -165,14 +165,16 @@ pub fn run() {
 fn register_global_hotkey(app: &tauri::AppHandle) {
     use tauri_plugin_global_shortcut::GlobalShortcutExt;
 
-    let result = app.global_shortcut().on_shortcut(RECORDER_HOTKEY, |app, _shortcut, event| {
-        // Fire once, on key-down.
-        if event.state() == tauri_plugin_global_shortcut::ShortcutState::Pressed {
-            if let Err(e) = windows::toggle_recorder_popover(app) {
-                tracing::warn!(%e, "hotkey: failed to toggle recorder popover");
+    let result = app
+        .global_shortcut()
+        .on_shortcut(RECORDER_HOTKEY, |app, _shortcut, event| {
+            // Fire once, on key-down.
+            if event.state() == tauri_plugin_global_shortcut::ShortcutState::Pressed {
+                if let Err(e) = windows::toggle_recorder_popover(app) {
+                    tracing::warn!(%e, "hotkey: failed to toggle recorder popover");
+                }
             }
-        }
-    });
+        });
     if let Err(e) = result {
         tracing::warn!(%e, hotkey = RECORDER_HOTKEY, "failed to register global hotkey");
     }
@@ -183,33 +185,12 @@ fn init_tracing() {
     use tracing_subscriber::prelude::*;
     use tracing_subscriber::EnvFilter;
 
-    // ponytail: persistent file logs + errors.log off for release builds.
-    // Uncomment the block below (and LOG_GUARD above) to re-enable friend-install diagnostics.
-    //
-    // use tracing_subscriber::filter::LevelFilter;
-    // crate::error_log::init();
-    // let dir = crate::error_log::logs_dir();
-    // let _ = std::fs::create_dir_all(&dir);
-    // let file_appender = tracing_appender::rolling::daily(&dir, "capptivo");
-    // let (non_blocking, guard) = tracing_appender::non_blocking(file_appender);
-    // let _ = LOG_GUARD.set(guard);
-    // let rolling_filter = EnvFilter::new(&env);
-
     let env = std::env::var("RUST_LOG").unwrap_or_else(|_| "info,desktop_lib=debug".into());
     let console_filter = EnvFilter::new(&env);
 
-    // Console only (`tauri dev` / stderr). No on-disk `capptivo.*` / `errors.log`.
+    // Console keeps detail; ErrorFileLayer persists allowlisted codes only (no event text).
     let _ = tracing_subscriber::registry()
         .with(fmt::layer().with_target(false).with_filter(console_filter))
-        // .with(
-        //     fmt::layer()
-        //         .with_ansi(false)
-        //         .with_target(true)
-        //         .with_writer(non_blocking)
-        //         .with_filter(rolling_filter),
-        // )
-        // .with(crate::error_log::ErrorFileLayer.with_filter(LevelFilter::WARN))
+        .with(crate::error_log::ErrorFileLayer)
         .try_init();
-
-    // tracing::info!(dir = %dir.display(), "file logging enabled");
 }

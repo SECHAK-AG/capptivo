@@ -2,6 +2,7 @@
 
 import {
   adaptEncodeDepth,
+  canvasVideoFrameEncodeDepthCeiling,
   clampEncodeDepth,
   encodeDepthCeiling,
   ENCODE_DEPTH_MAX,
@@ -53,8 +54,18 @@ assert(
     emaCompositeMs: 40,
     emaEncodeWaitMs: 0,
     frameBudgetMs: budget,
-  }) === 7,
-  "heavy composite → shrink",
+    maxDepth: 23,
+  }) === 8,
+  "heavy composite → hold steady (no shrink, no deepen)",
+);
+
+assert(
+  canvasVideoFrameEncodeDepthCeiling(30) === 8,
+  "canvas VideoFrame ceiling caps at 8",
+);
+assert(
+  canvasVideoFrameEncodeDepthCeiling(60) === 8,
+  "canvas ceiling still 8 at 60fps",
 );
 
 assert(

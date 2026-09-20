@@ -21,7 +21,6 @@ export function createFullSegment(duration: number): TrimSegment[] {
 export function normalizeSegments(
   segments: TrimSegment[],
   duration: number,
-  // eslint-disable-next-line @typescript-eslint/no-unused-vars
   minLength: number,
 ): TrimSegment[] {
   const safeDuration = Math.max(0, duration);

@@ -12,7 +12,8 @@ function assert(cond: unknown, msg: string): asserts cond {
   if (!cond) throw new Error(msg);
 }
 
-const signal = beginExportAbort();
+const first = beginExportAbort();
+const signal = first.signal;
 assert(!signal.aborted, "fresh signal is not aborted");
 throwIfAborted(signal); // must not throw
 
@@ -26,7 +27,13 @@ try {
   assert(e instanceof ExportCancelledError, "instanceof ExportCancelledError");
 }
 
-endExportAbort();
+const second = beginExportAbort();
+assert(signal.aborted, "starting a new export aborts the old signal");
+endExportAbort(first.id);
+assert(!second.signal.aborted, "old export cannot clear the new active session");
+cancelActiveExport();
+assert(second.signal.aborted, "active export remains cancellable");
+endExportAbort(second.id);
 cancelActiveExport(); // no-op after end
 
 console.log("exportCancel.selfcheck: ok");

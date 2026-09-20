@@ -141,8 +141,7 @@ pub fn window_thumbnail(window: &Window) -> Option<SourcePreview> {
             let prev = SelectObject(mem_dc, bitmap.into());
             // PW_RENDERFULLCONTENT captures DirectComposition surfaces
             // (browsers, electron apps) that plain BitBlt misses.
-            let ok =
-                PrintWindow(hwnd, mem_dc, PRINT_WINDOW_FLAGS(PW_RENDERFULLCONTENT)).as_bool();
+            let ok = PrintWindow(hwnd, mem_dc, PRINT_WINDOW_FLAGS(PW_RENDERFULLCONTENT)).as_bool();
             let preview = if ok {
                 read_bitmap_bgra(mem_dc, bitmap, w, h)
                     .and_then(|raw| encode_bgra(&raw, w as u32, h as u32, (w as usize) * 4))

@@ -18,9 +18,17 @@ import {
 } from "./exportCompositor";
 import { yieldToMain } from "./exportYield";
 import { throwIfAborted } from "./exportCancel";
-import { openSequentialMedia } from "./sequentialMedia";
+import {
+  createExportFrameIterator,
+  warnSeekPath,
+} from "./exportFrameLoop";
+import {
+  ensureSeekableForSeekPath,
+  openExportSequentialMedia,
+} from "./exportMediaOpen";
 import type { FaceCamTrack } from "../lib/faceCamSync";
 import type { ExportSink } from "./exportSink";
+import type { ExportSnapshot } from "./exportSnapshot";
 import { createDitherPalettizer } from "./gifDither";
 import {
   createGifQuantizePool,
@@ -45,17 +53,38 @@ export async function renderGifToSink(
   faceCam: FaceCamTrack,
   params: ResolvedExportParams,
   signal: AbortSignal,
+  snapshot: ExportSnapshot,
 ): Promise<void> {
   throwIfAborted(signal);
   const { width, height, fps, gifColors, gifDither, gifSpeed } = params;
   // GIF is the one consumer of getImageData — the only path that wants a
   // CPU-resident canvas (see CompositorOptions.cpuReadback).
-  const sequential = await openSequentialMedia(screenUrl, faceCam, "gif");
-  const session = sequential
-    ? await createExportCompositorFromMedia(sequential.media, width, height, { cpuReadback: true })
-    : await createExportCompositor(screenUrl, faceCam, width, height, { cpuReadback: true });
+  const projectId = snapshot.projectId;
+
+  const sequential = await openExportSequentialMedia(
+    screenUrl,
+    faceCam,
+    "gif",
+    projectId,
+  );
+  let session;
+  if (sequential) {
+    session = await createExportCompositorFromMedia(
+      sequential.media,
+      width,
+      height,
+      { cpuReadback: true, snapshot },
+    );
+  } else {
+    await ensureSeekableForSeekPath(projectId);
+    session = await createExportCompositor(screenUrl, faceCam, width, height, {
+      cpuReadback: true,
+      snapshot,
+    });
+  }
   const { ctx, video, camera, segments, drawAt, dispose, stats, isGpuLost } =
     session;
+  let disposeFrames: (() => void) | null = null;
   if (!ctx) {
     dispose();
     throw new Error("GIF export requires a readable canvas context");
@@ -79,8 +108,12 @@ export async function renderGifToSink(
     // element-based fallback needs the priming seek. Use the same mid-slot
     // time as the encode loop — exact t=0 often paints blank in WebKit.
     if (!sequential) {
-      await seekTo(video, firstT);
-      if (camera) await seekTo(camera, firstT).catch(() => undefined);
+      await seekTo(video, firstT, { signal });
+      if (camera) {
+        await seekTo(camera, firstT, { signal }).catch((error) => {
+          if (signal.aborted) throw error;
+        });
+      }
     }
     throwIfGpuLost(isGpuLost);
     drawAt(firstT);
@@ -129,6 +162,16 @@ export async function renderGifToSink(
 
     const reader =
       sequential?.begin(frameTimes, { mode: "video-frame" }) ?? null;
+    const frames = createExportFrameIterator(
+      frameTimes,
+      reader,
+      reader ? null : { video, camera, faceCam },
+      { signal },
+    );
+    disposeFrames = frames.dispose;
+    if (frames.mode === "seek") warnSeekPath("gif", frameTimes.length);
+
+    await frames.prime();
 
     const queue = pool ? new OrderedPromiseQueue<QuantizedFrame>(pool.depth) : null;
 
@@ -140,14 +183,10 @@ export async function renderGifToSink(
     let getImageDataMs = 0;
     const loopStart = performance.now();
 
-    for (const t of frameTimes) {
+    for (let i = 0; i < frames.count; i += 1) {
       throwIfAborted(signal);
-      if (reader) {
-        await reader.nextFrame();
-      } else {
-        await seekTo(video, t);
-        if (camera) await seekTo(camera, t).catch(() => undefined);
-      }
+      await frames.advance(i);
+      const t = frames.timeAt(i);
       drawAt(t);
       throwIfGpuLost(isGpuLost);
 
@@ -171,7 +210,6 @@ export async function renderGifToSink(
         }
       }
     }
-
     if (queue) {
       for await (const frame of queue.drain()) {
         throwIfAborted(signal);
@@ -198,6 +236,7 @@ export async function renderGifToSink(
     const tail = gif.stream.bytesView();
     if (tail.length > 0) await sink.append(tail.slice());
   } finally {
+    disposeFrames?.();
     pool?.dispose();
     dispose();
   }

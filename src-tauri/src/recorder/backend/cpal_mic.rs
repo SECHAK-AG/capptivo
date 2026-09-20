@@ -75,16 +75,7 @@ impl CpalMic {
         let (ready_tx, ready_rx) = crossbeam_channel::bounded::<Result<(), String>>(1);
         let join = std::thread::Builder::new()
             .name("cpal-mic".into())
-            .spawn(move || {
-                run_mic(
-                    tx,
-                    stop_flag,
-                    epoch_for_thread,
-                    ready_tx,
-                    device_id,
-                    label,
-                )
-            })
+            .spawn(move || run_mic(tx, stop_flag, epoch_for_thread, ready_tx, device_id, label))
             .map_err(|e| AppError::Other(format!("failed to spawn mic thread: {e}")))?;
 
         match ready_rx.recv_timeout(std::time::Duration::from_secs(5)) {
@@ -129,7 +120,9 @@ impl WarmKey {
 }
 
 fn normalize_id(id: Option<&str>) -> Option<String> {
-    id.map(str::trim).filter(|s| !s.is_empty()).map(str::to_owned)
+    id.map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(str::to_owned)
 }
 
 struct WarmSlot {
@@ -398,10 +391,7 @@ fn pick_input_device(
 }
 
 fn device_label(device: &cpal::Device) -> Option<String> {
-    device
-        .description()
-        .ok()
-        .map(|d| d.name().to_string())
+    device.description().ok().map(|d| d.name().to_string())
 }
 
 #[cfg(test)]
@@ -424,10 +414,7 @@ mod tests {
 
     #[test]
     fn warm_key_normalizes_empty() {
-        assert_eq!(
-            WarmKey::from_parts(Some("  ")),
-            WarmKey::from_parts(None)
-        );
+        assert_eq!(WarmKey::from_parts(Some("  ")), WarmKey::from_parts(None));
         assert_eq!(
             WarmKey::from_parts(Some("CoreAudio:1")),
             WarmKey::from_parts(Some("CoreAudio:1"))

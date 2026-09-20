@@ -17,10 +17,10 @@ export class ExportSink {
   private offset = 0;
   private written = 0;
 
-  private constructor(private readonly handle: number) {}
+  private constructor(private readonly handle: string) {}
 
-  static async open(path: string): Promise<ExportSink> {
-    return new ExportSink(await commands.beginExport(path));
+  static async open(destination: string): Promise<ExportSink> {
+    return new ExportSink(await commands.beginExport(destination));
   }
 
   /** High-water mark of bytes written — the resulting file size. */
@@ -51,8 +51,8 @@ export class ExportSink {
     });
   }
 
-  /** Flush, close, and return the final file path. */
-  finish(): Promise<string> {
+  /** Flush, close, and mark the selected destination ready. */
+  finish(): Promise<void> {
     return commands.finishExport(this.handle);
   }
 

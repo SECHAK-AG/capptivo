@@ -11,17 +11,17 @@ use crate::recorder::hw_encoder;
 use std::io::{BufRead, BufWriter, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Child, ChildStderr, ChildStdin, Stdio};
-use std::sync::{Arc, Mutex};
+use std::sync::{atomic::{AtomicU8, Ordering}, Arc, Mutex};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
 const FFMPEG_FINISH_TIMEOUT: Duration = Duration::from_secs(300);
 const FFMPEG_STDERR_CAP: usize = 64 * 1024;
-const EXPORT_PARTIAL_SUFFIX: &str = ".capptivo-export.partial";
+const EXPORT_PARTIAL_SUFFIX: &str = ".capptivo-export";
 
 /// Live ffmpeg session: raw RGBA in, encoded MP4 out (temp → final on finish).
 pub struct RawvideoStreamEncoder {
-    child: Child,
+    child: Arc<Mutex<Child>>,
     stdin: Option<BufWriter<ChildStdin>>,
     stderr_text: Arc<Mutex<String>>,
     stderr_reader: Option<JoinHandle<()>>,
@@ -131,7 +131,7 @@ impl RawvideoStreamEncoder {
         );
 
         Ok(Self {
-            child,
+            child: Arc::new(Mutex::new(child)),
             stdin: Some(BufWriter::with_capacity(frame_bytes, raw_stdin)),
             stderr_text,
             stderr_reader,
@@ -160,10 +160,13 @@ impl RawvideoStreamEncoder {
             .ok_or_else(|| AppError::Encoder("ffmpeg stdin already closed".into()))?;
         if let Err(e) = stdin.write_all(chunk) {
             let stderr = self.stderr_snapshot();
-            let child_status = match self.child.try_wait() {
-                Ok(Some(status)) => format!("exited {status}"),
-                Ok(None) => "still running".into(),
-                Err(err) => format!("status error: {err}"),
+            let child_status = match self.child.lock() {
+                Ok(mut child) => match child.try_wait() {
+                    Ok(Some(status)) => format!("exited {status}"),
+                    Ok(None) => "still running".into(),
+                    Err(err) => format!("status error: {err}"),
+                },
+                Err(_) => "child lock poisoned".into(),
             };
             return Err(AppError::Encoder(format!(
                 "ffmpeg rawvideo write failed: {e} ({child_status}){stderr_suffix}",
@@ -183,7 +186,13 @@ impl RawvideoStreamEncoder {
             let _ = stdin.flush();
             drop(stdin);
         }
-        let status = wait_child(&mut self.child, FFMPEG_FINISH_TIMEOUT)?;
+        let status = {
+            let mut child = self
+                .child
+                .lock()
+                .map_err(|_| AppError::Encoder("ffmpeg child lock poisoned".into()))?;
+            wait_child(&mut child, FFMPEG_FINISH_TIMEOUT)?
+        };
         if let Some(handle) = self.stderr_reader.take() {
             let _ = handle.join();
         }
@@ -207,8 +216,7 @@ impl RawvideoStreamEncoder {
 
     pub fn abort(mut self) {
         self.stdin.take();
-        let _ = self.child.kill();
-        let _ = self.child.wait();
+        self.kill_child();
         if let Some(handle) = self.stderr_reader.take() {
             let _ = handle.join();
         }
@@ -222,6 +230,22 @@ impl RawvideoStreamEncoder {
             .unwrap_or_else(|e| e.into_inner())
             .clone()
     }
+
+    pub fn kill_handle(&self) -> KillHandle {
+        let child = Arc::clone(&self.child);
+        Arc::new(move || {
+            if let Ok(mut child) = child.lock() {
+                let _ = child.kill();
+            }
+        })
+    }
+
+    fn kill_child(&self) {
+        if let Ok(mut child) = self.child.lock() {
+            let _ = child.kill();
+            let _ = child.wait();
+        }
+    }
 }
 
 impl Drop for RawvideoStreamEncoder {
@@ -230,17 +254,118 @@ impl Drop for RawvideoStreamEncoder {
             return;
         }
         self.stdin.take();
-        if matches!(self.child.try_wait(), Ok(None)) {
-            let _ = self.child.kill();
-            let _ = self.child.wait();
+        if let Ok(mut child) = self.child.lock() {
+            if matches!(child.try_wait(), Ok(None)) {
+                let _ = child.kill();
+                let _ = child.wait();
+            }
         }
         let _ = std::fs::remove_file(&self.temp_path);
     }
 }
 
+pub type KillHandle = Arc<dyn Fn() + Send + Sync>;
+
+const SESSION_RUNNING: u8 = 0;
+const SESSION_FINISHING: u8 = 1;
+const SESSION_FINISHED: u8 = 2;
+const SESSION_ABORTING: u8 = 3;
+const SESSION_ABORTED: u8 = 4;
+
+/// Thread-safe ownership wrapper for a raw-video encoder. Keeping the session
+/// in the command map while a pipe write blocks lets cancellation kill the
+/// child without a remove/reinsert race.
+pub struct RawvideoExportSession {
+    encoder: Mutex<Option<RawvideoStreamEncoder>>,
+    kill: KillHandle,
+    state: AtomicU8,
+}
+
+impl RawvideoExportSession {
+    pub fn new(encoder: RawvideoStreamEncoder) -> Self {
+        let kill = encoder.kill_handle();
+        Self {
+            encoder: Mutex::new(Some(encoder)),
+            kill,
+            state: AtomicU8::new(SESSION_RUNNING),
+        }
+    }
+
+    pub fn write_frame(&self, frame: &[u8]) -> AppResult<()> {
+        let state = self.state.load(Ordering::Acquire);
+        if state != SESSION_RUNNING && state != SESSION_FINISHING {
+            return Err(AppError::Other("rawvideo export is no longer running".into()));
+        }
+        let mut encoder = self
+            .encoder
+            .lock()
+            .map_err(|_| AppError::Other("rawvideo export lock poisoned".into()))?;
+        let result = encoder
+            .as_mut()
+            .ok_or_else(|| AppError::Other("rawvideo export session is closed".into()))?
+            .write_frame(frame);
+        let state = self.state.load(Ordering::Acquire);
+        if state == SESSION_ABORTING || state == SESSION_ABORTED {
+            if let Some(encoder) = encoder.take() {
+                encoder.abort();
+            }
+            return Err(AppError::Other("rawvideo export cancelled".into()));
+        }
+        result
+    }
+
+    pub fn finish(&self) -> AppResult<PathBuf> {
+        self.state
+            .compare_exchange(
+                SESSION_RUNNING,
+                SESSION_FINISHING,
+                Ordering::AcqRel,
+                Ordering::Acquire,
+            )
+            .map_err(|_| AppError::Other("rawvideo export already finalized".into()))?;
+        let encoder = self
+            .encoder
+            .lock()
+            .map_err(|_| AppError::Other("rawvideo export lock poisoned".into()))?
+            .take()
+            .ok_or_else(|| AppError::Other("rawvideo export session is closed".into()))?;
+        let result = encoder.finish();
+        self.state.store(
+            if result.is_ok() { SESSION_FINISHED } else { SESSION_ABORTED },
+            Ordering::Release,
+        );
+        result
+    }
+
+    pub fn abort(&self) {
+        if self
+            .state
+            .compare_exchange(
+                SESSION_RUNNING,
+                SESSION_ABORTING,
+                Ordering::AcqRel,
+                Ordering::Acquire,
+            )
+            .is_err()
+        {
+            return;
+        }
+        (self.kill)();
+        if let Ok(mut encoder) = self.encoder.lock() {
+            if let Some(encoder) = encoder.take() {
+                encoder.abort();
+            }
+        }
+        self.state.store(SESSION_ABORTED, Ordering::Release);
+    }
+}
+
 fn export_temp_path(final_path: &Path) -> PathBuf {
     let mut os = final_path.as_os_str().to_os_string();
-    os.push(EXPORT_PARTIAL_SUFFIX);
+    os.push(format!(
+        "{EXPORT_PARTIAL_SUFFIX}-{}.partial",
+        uuid::Uuid::new_v4()
+    ));
     PathBuf::from(os)
 }
 
@@ -312,9 +437,9 @@ mod tests {
     fn temp_path_is_sidecar_beside_final() {
         let p = PathBuf::from("/tmp/out.mp4");
         let t = export_temp_path(&p);
-        assert!(t
-            .to_string_lossy()
-            .ends_with(&format!("out.mp4{EXPORT_PARTIAL_SUFFIX}")));
+        let text = t.to_string_lossy();
+        assert!(text.starts_with("/tmp/out.mp4.capptivo-export-"));
+        assert!(text.ends_with(".partial"));
     }
 
     #[test]
