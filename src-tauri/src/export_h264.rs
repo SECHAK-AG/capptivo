@@ -10,7 +10,7 @@ use crate::recorder::encoder::ffmpeg_path;
 use std::io::{BufRead, BufWriter, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Child, ChildStderr, ChildStdin, Stdio};
-use std::sync::{Arc, Mutex};
+use std::sync::{atomic::{AtomicU8, Ordering}, Arc, Mutex};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
@@ -19,7 +19,7 @@ const FFMPEG_STDERR_CAP: usize = 64 * 1024;
 
 /// Live ffmpeg session writing a partial MP4 beside the user destination.
 pub struct H264StreamMuxer {
-    child: Child,
+    child: Arc<Mutex<Child>>,
     stdin: Option<BufWriter<ChildStdin>>,
     stderr_text: Arc<Mutex<String>>,
     stderr_reader: Option<JoinHandle<()>>,
@@ -100,7 +100,7 @@ impl H264StreamMuxer {
             .ok();
 
         Ok(Self {
-            child,
+            child: Arc::new(Mutex::new(child)),
             stdin: Some(BufWriter::with_capacity(256 * 1024, raw_stdin)),
             stderr_text,
             stderr_reader,
@@ -121,10 +121,13 @@ impl H264StreamMuxer {
             .ok_or_else(|| AppError::Encoder("ffmpeg stdin already closed".into()))?;
         if let Err(e) = stdin.write_all(chunk).and_then(|_| stdin.flush()) {
             let stderr = self.stderr_snapshot();
-            let child_status = match self.child.try_wait() {
-                Ok(Some(status)) => format!("exited {status}"),
-                Ok(None) => "still running".into(),
-                Err(err) => format!("status error: {err}"),
+            let child_status = match self.child.lock() {
+                Ok(mut child) => match child.try_wait() {
+                    Ok(Some(status)) => format!("exited {status}"),
+                    Ok(None) => "still running".into(),
+                    Err(err) => format!("status error: {err}"),
+                },
+                Err(_) => "child lock poisoned".into(),
             };
             return Err(AppError::Encoder(format!(
                 "ffmpeg h264 write failed: {e} ({child_status}){stderr_suffix}",
@@ -145,7 +148,13 @@ impl H264StreamMuxer {
             let _ = stdin.flush();
             drop(stdin);
         }
-        let status = wait_child(&mut self.child, FFMPEG_FINISH_TIMEOUT)?;
+        let status = {
+            let mut child = self
+                .child
+                .lock()
+                .map_err(|_| AppError::Encoder("ffmpeg child lock poisoned".into()))?;
+            wait_child(&mut child, FFMPEG_FINISH_TIMEOUT)?
+        };
         if let Some(handle) = self.stderr_reader.take() {
             let _ = handle.join();
         }
@@ -169,8 +178,7 @@ impl H264StreamMuxer {
 
     pub fn abort(mut self) {
         self.stdin.take();
-        let _ = self.child.kill();
-        let _ = self.child.wait();
+        self.kill_child();
         if let Some(handle) = self.stderr_reader.take() {
             let _ = handle.join();
         }
@@ -184,6 +192,22 @@ impl H264StreamMuxer {
             .unwrap_or_else(|e| e.into_inner())
             .clone()
     }
+
+    pub fn kill_handle(&self) -> KillHandle {
+        let child = Arc::clone(&self.child);
+        Arc::new(move || {
+            if let Ok(mut child) = child.lock() {
+                let _ = child.kill();
+            }
+        })
+    }
+
+    fn kill_child(&self) {
+        if let Ok(mut child) = self.child.lock() {
+            let _ = child.kill();
+            let _ = child.wait();
+        }
+    }
 }
 
 impl Drop for H264StreamMuxer {
@@ -192,19 +216,120 @@ impl Drop for H264StreamMuxer {
             return;
         }
         self.stdin.take();
-        if matches!(self.child.try_wait(), Ok(None)) {
-            let _ = self.child.kill();
-            let _ = self.child.wait();
+        if let Ok(mut child) = self.child.lock() {
+            if matches!(child.try_wait(), Ok(None)) {
+                let _ = child.kill();
+                let _ = child.wait();
+            }
         }
         let _ = std::fs::remove_file(&self.temp_path);
     }
 }
 
-const EXPORT_PARTIAL_SUFFIX: &str = ".capptivo-export.partial";
+pub type KillHandle = Arc<dyn Fn() + Send + Sync>;
+
+const SESSION_RUNNING: u8 = 0;
+const SESSION_FINISHING: u8 = 1;
+const SESSION_FINISHED: u8 = 2;
+const SESSION_ABORTING: u8 = 3;
+const SESSION_ABORTED: u8 = 4;
+
+/// Thread-safe ownership wrapper for a stream muxer. The muxer stays discoverable
+/// while a blocking pipe write is in progress, so abort can kill its child
+/// without racing a remove/reinsert operation in the Tauri command map.
+pub struct H264ExportSession {
+    muxer: Mutex<Option<H264StreamMuxer>>,
+    kill: KillHandle,
+    state: AtomicU8,
+}
+
+impl H264ExportSession {
+    pub fn new(muxer: H264StreamMuxer) -> Self {
+        let kill = muxer.kill_handle();
+        Self {
+            muxer: Mutex::new(Some(muxer)),
+            kill,
+            state: AtomicU8::new(SESSION_RUNNING),
+        }
+    }
+
+    pub fn write_chunk(&self, chunk: &[u8]) -> AppResult<()> {
+        let state = self.state.load(Ordering::Acquire);
+        if state != SESSION_RUNNING && state != SESSION_FINISHING {
+            return Err(AppError::Other("h264 export is no longer running".into()));
+        }
+        let mut muxer = self
+            .muxer
+            .lock()
+            .map_err(|_| AppError::Other("h264 export lock poisoned".into()))?;
+        let result = muxer
+            .as_mut()
+            .ok_or_else(|| AppError::Other("h264 export session is closed".into()))?
+            .write_chunk(chunk);
+        let state = self.state.load(Ordering::Acquire);
+        if state == SESSION_ABORTING || state == SESSION_ABORTED {
+            if let Some(muxer) = muxer.take() {
+                muxer.abort();
+            }
+            return Err(AppError::Other("h264 export cancelled".into()));
+        }
+        result
+    }
+
+    pub fn finish(&self) -> AppResult<PathBuf> {
+        self.state
+            .compare_exchange(
+                SESSION_RUNNING,
+                SESSION_FINISHING,
+                Ordering::AcqRel,
+                Ordering::Acquire,
+            )
+            .map_err(|_| AppError::Other("h264 export already finalized".into()))?;
+        let muxer = self
+            .muxer
+            .lock()
+            .map_err(|_| AppError::Other("h264 export lock poisoned".into()))?
+            .take()
+            .ok_or_else(|| AppError::Other("h264 export session is closed".into()))?;
+        let result = muxer.finish();
+        self.state.store(
+            if result.is_ok() { SESSION_FINISHED } else { SESSION_ABORTED },
+            Ordering::Release,
+        );
+        result
+    }
+
+    pub fn abort(&self) {
+        if self
+            .state
+            .compare_exchange(
+                SESSION_RUNNING,
+                SESSION_ABORTING,
+                Ordering::AcqRel,
+                Ordering::Acquire,
+            )
+            .is_err()
+        {
+            return;
+        }
+        (self.kill)();
+        if let Ok(mut muxer) = self.muxer.lock() {
+            if let Some(muxer) = muxer.take() {
+                muxer.abort();
+            }
+        }
+        self.state.store(SESSION_ABORTED, Ordering::Release);
+    }
+}
+
+const EXPORT_PARTIAL_SUFFIX: &str = ".capptivo-export";
 
 fn export_temp_path(final_path: &Path) -> PathBuf {
     let mut os = final_path.as_os_str().to_os_string();
-    os.push(EXPORT_PARTIAL_SUFFIX);
+    os.push(format!(
+        "{EXPORT_PARTIAL_SUFFIX}-{}.partial",
+        uuid::Uuid::new_v4()
+    ));
     PathBuf::from(os)
 }
 
@@ -276,8 +401,8 @@ mod tests {
     fn temp_path_is_sidecar_beside_final() {
         let p = PathBuf::from("/tmp/out.mp4");
         let t = export_temp_path(&p);
-        assert!(t
-            .to_string_lossy()
-            .ends_with(&format!("out.mp4{EXPORT_PARTIAL_SUFFIX}")));
+        let text = t.to_string_lossy();
+        assert!(text.starts_with("/tmp/out.mp4.capptivo-export-"));
+        assert!(text.ends_with(".partial"));
     }
 }

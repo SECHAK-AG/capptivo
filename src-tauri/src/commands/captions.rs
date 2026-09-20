@@ -1,4 +1,7 @@
-use crate::captions::{self, types::{WhisperModelStatus, WhisperTranscriptArtifacts}};
+use crate::captions::{
+    self,
+    types::{WhisperModelStatus, WhisperTranscriptArtifacts},
+};
 use crate::error::AppResult;
 use crate::state::AppState;
 use tauri::{AppHandle, State};

@@ -38,7 +38,7 @@ import {
   type ZoomFragment,
 } from "@/engine";
 import { translateNow } from "@/lib/i18n";
-import { showError } from "@/lib/toast";
+import { showError, showWarning } from "@/lib/toast";
 import { commands } from "../../ipc/bindings";
 import type { Project } from "../../ipc/types";
 import { describeError } from "../recorder/store";
@@ -317,7 +317,7 @@ export function parseFaceCam(raw: unknown): FaceCamParams {
   };
 }
 
-interface EditorStore {
+export interface EditorStore {
   projectId: string | null;
   project: Project | null;
   /** Original recording — what the exporter reads. */
@@ -890,6 +890,22 @@ export const useEditorStore = create<EditorStore>((set, get) => ({
           scheduleAutoSuggestZooms(get);
         }
       });
+      // Warn when the take lost frames to encoder backlog: those moments play
+      // as freezes, and without this the user just thinks footage is missing.
+      // Below ~1s of drops the loss is invisible — don't cry wolf.
+      void fetch(mediaUrl(projectId, "meta.json"))
+        .then((res) => (res.ok ? res.json() : null))
+        .then((meta: { framesDropped?: number; fps?: number } | null) => {
+          if (!meta || get().projectId !== projectId) return;
+          const fps = meta.fps && meta.fps > 0 ? meta.fps : 30;
+          const lostSeconds = (meta.framesDropped ?? 0) / fps;
+          if (lostSeconds >= 1) {
+            showWarning(
+              translateNow("editor.framesDropped", { seconds: Math.round(lostSeconds) }),
+            );
+          }
+        })
+        .catch(() => {});
       void commands.ensureProxy(projectId).then((info) => {
         if (get().projectId !== projectId) return;
         const patch: Partial<EditorStore> = {};

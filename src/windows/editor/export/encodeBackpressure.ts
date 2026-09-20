@@ -74,7 +74,7 @@ export type AdaptEncodeDepthInput = {
  * One-step depth adjustment. Pure — unit-testable without a real encoder.
  *
  * - Encode wait high → shrink (encoder-bound; deeper only burns memory).
- * - Composite heavy → shrink (producer-bound; deep pipe buys nothing).
+ * - Composite heavy → hold (producer-bound; deepening floods GPU with canvas frames).
  * - Composite light and encode wait ~0 → deepen (hide encode latency).
  */
 export function adaptEncodeDepth(input: AdaptEncodeDepthInput): number {
@@ -92,12 +92,21 @@ export function adaptEncodeDepth(input: AdaptEncodeDepthInput): number {
     return Math.max(ENCODE_DEPTH_MIN, depth - 1);
   }
   if (emaCompositeMs > budget * 0.85) {
-    return Math.max(ENCODE_DEPTH_MIN, depth - 1);
+    return depth;
   }
   if (emaCompositeMs < budget * 0.4 && emaEncodeWaitMs < 1) {
     return Math.min(max, depth + 1);
   }
   return Math.min(max, depth);
+}
+
+/**
+ * Shallow ceiling for loops that enqueue full canvas {@link VideoFrame}s.
+ * Recordly's deep queues hold compressed H.264; here each slot is ~8 MB at 1080p
+ * and depth>8 contended with screenUpload (25 ms → 47 ms at depth=27 in logs).
+ */
+export function canvasVideoFrameEncodeDepthCeiling(fps: number): number {
+  return clampEncodeDepth(Math.min(8, encodeDepthCeiling(fps)), encodeDepthCeiling(fps));
 }
 
 function ema(prev: number, sample: number, framesBefore: number): number {

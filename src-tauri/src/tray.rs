@@ -70,7 +70,9 @@ enum TrayKind {
 
 fn tray_kind(state: &RecorderState) -> TrayKind {
     match state {
-        RecorderState::Recording | RecorderState::Countdown { .. } => TrayKind::Live { paused: false },
+        RecorderState::Recording | RecorderState::Countdown { .. } => {
+            TrayKind::Live { paused: false }
+        }
         RecorderState::Paused => TrayKind::Live { paused: true },
         RecorderState::Finalizing => TrayKind::Finalizing,
         RecorderState::Idle | RecorderState::Error { .. } => TrayKind::Idle,
@@ -83,15 +85,19 @@ fn idle_menu(app: &AppHandle) -> tauri::Result<Menu<tauri::Wry>> {
     // discoverable fallback on Windows for users who expect click = menu.
     let open_recorder =
         MenuItem::with_id(app, "open_recorder", "Open Recorder", true, None::<&str>)?;
-    let annotate =
-        MenuItem::with_id(app, "annotate", "Annotate Screen…", true, None::<&str>)?;
+    let annotate = MenuItem::with_id(app, "annotate", "Annotate Screen…", true, None::<&str>)?;
     let open_library = MenuItem::with_id(app, "open_library", "Recordings…", true, None::<&str>)?;
     let settings = MenuItem::with_id(app, "settings", "Settings…", true, None::<&str>)?;
     // ponytail: "Open Logs…" disabled with file logging for release — uncomment with init_tracing.
     // let open_logs =
     //     MenuItem::with_id(app, "open_logs", "Open Logs…", true, None::<&str>)?;
-    let check_updates =
-        MenuItem::with_id(app, "check_updates", "Check for Updates…", true, None::<&str>)?;
+    let check_updates = MenuItem::with_id(
+        app,
+        "check_updates",
+        "Check for Updates…",
+        true,
+        None::<&str>,
+    )?;
     let separator = PredefinedMenuItem::separator(app)?;
     let quit = MenuItem::with_id(app, "quit", "Quit Capptivo", true, None::<&str>)?;
     Menu::with_items(
@@ -119,8 +125,7 @@ fn live_menu(app: &AppHandle, paused: bool) -> tauri::Result<Menu<tauri::Wry>> {
     };
     let stop = MenuItem::with_id(app, "stop", "Stop", true, None::<&str>)?;
     let sep1 = PredefinedMenuItem::separator(app)?;
-    let annotate =
-        MenuItem::with_id(app, "annotate", "Open Annotation", true, None::<&str>)?;
+    let annotate = MenuItem::with_id(app, "annotate", "Open Annotation", true, None::<&str>)?;
     let open_recorder =
         MenuItem::with_id(app, "open_recorder", "Show Recorder", true, None::<&str>)?;
     let open_library = MenuItem::with_id(app, "open_library", "Recordings…", true, None::<&str>)?;
@@ -225,8 +230,7 @@ fn on_menu_event(app: &AppHandle, event: tauri::menu::MenuEvent) {
                 let Some(state) = app.try_state::<AppState>() else {
                     return;
                 };
-                if let Err(e) =
-                    crate::commands::recording::stop_recording(app.clone(), state).await
+                if let Err(e) = crate::commands::recording::stop_recording(app.clone(), state).await
                 {
                     tracing::warn!(%e, "tray stop failed");
                 }

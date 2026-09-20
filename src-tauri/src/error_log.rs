@@ -63,7 +63,10 @@ pub fn logs_dir() -> PathBuf {
 }
 
 pub fn log_path() -> PathBuf {
-    LOG_PATH.get().cloned().unwrap_or_else(default_error_log_path)
+    LOG_PATH
+        .get()
+        .cloned()
+        .unwrap_or_else(default_error_log_path)
 }
 
 /// Append one error line. Never panics; failures are silent.
@@ -273,7 +276,11 @@ where
         if level < Level::WARN {
             return;
         }
-        let level_label = if level == Level::ERROR { "ERROR" } else { "WARN" };
+        let level_label = if level == Level::ERROR {
+            "ERROR"
+        } else {
+            "WARN"
+        };
         let mut visitor = ErrorVisitor::default();
         event.record(&mut visitor);
         let target = event.metadata().target();
@@ -306,7 +313,9 @@ impl Visit for ErrorVisitor {
     fn record_debug(&mut self, field: &Field, value: &dyn std::fmt::Debug) {
         if field.name() == "message" {
             self.message = format!("{value:?}");
-            if self.message.starts_with('"') && self.message.ends_with('"') && self.message.len() >= 2
+            if self.message.starts_with('"')
+                && self.message.ends_with('"')
+                && self.message.len() >= 2
             {
                 self.message = self.message[1..self.message.len() - 1].to_string();
             }

@@ -107,8 +107,8 @@ fn activate_window(pid: i32, app_name: &str, bundle_id: Option<&str>, title: &st
 }
 
 fn activate_app(pid: i32) {
+    use objc::runtime::{Object, BOOL};
     use objc::{class, msg_send, sel, sel_impl};
-    use objc::runtime::{BOOL, Object};
 
     unsafe {
         let app: *mut Object = msg_send![
@@ -258,10 +258,13 @@ fn sanitize_app_name(name: &str) -> Option<&str> {
         return None;
     }
     let ok = trimmed.chars().all(|c| {
-        c.is_ascii_alphanumeric()
-            || matches!(c, ' ' | '.' | '&' | '(' | ')' | '+' | '\'' | '-')
+        c.is_ascii_alphanumeric() || matches!(c, ' ' | '.' | '&' | '(' | ')' | '+' | '\'' | '-')
     });
-    if ok { Some(trimmed) } else { None }
+    if ok {
+        Some(trimmed)
+    } else {
+        None
+    }
 }
 
 fn sanitize_bundle_id(bundle: &str) -> Option<&str> {
@@ -272,7 +275,11 @@ fn sanitize_bundle_id(bundle: &str) -> Option<&str> {
     let ok = trimmed
         .chars()
         .all(|c| c.is_ascii_alphanumeric() || c == '.' || c == '-');
-    if ok { Some(trimmed) } else { None }
+    if ok {
+        Some(trimmed)
+    } else {
+        None
+    }
 }
 
 #[cfg(test)]

@@ -81,6 +81,8 @@ export const zh: Record<TranslationKey, string> = {
   "export.error.gpuContextLost": "导出已停止：渲染过程中图形驱动重置。请重新导出。",
   "editor.previewGpuLost": "预览已停止：图形驱动已重置。若未恢复，请重新打开编辑器。",
   "editor.gpuReloaded": "图形重置后编辑器已重新加载。可以再次导出。",
+  "editor.framesDropped":
+    "此录制因系统负载过高丢失了 {seconds} 秒的画面，这些时刻将显示为静止画面。录制时请关闭占用资源较多的应用以避免此问题。",
   "export.dialog.title": "导出",
   "export.dialog.description": "选择格式、编码、帧率和文件类型。",
   "export.format": "格式",
@@ -96,7 +98,10 @@ export const zh: Record<TranslationKey, string> = {
   "export.enhanceVoice.off": "关",
   "export.enhanceVoice.on": "开",
   "export.enhanceVoice.hint": "降噪、压缩并平衡旁白音量，使语音更清晰。",
-  "encoding.fast": "快速",
+  "export.passthrough": "原始（最快）",
+  "export.passthrough.hint":
+    "按原样复制录制内容——不应用样式、光标或叠加层。如有剪辑或摄像头画面，则需要完整导出。",
+  "encoding.fast":"快速",
   "encoding.balanced": "均衡",
   "encoding.quality": "高质量",
 

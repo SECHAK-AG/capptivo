@@ -18,8 +18,12 @@
  * heuristic, and yield latency accounted as encode wait would corrupt them.
  */
 
-/** Longest the loop may hold the main thread before handing it back. */
-export const EXPORT_YIELD_INTERVAL_MS = 50;
+/**
+ * Longest the loop may hold the main thread before handing it back.
+ * 50 ms tripped every ~2 frames at ~28 ms composite (4546 yields on a 176 s
+ * export). 500 ms keeps the window draggable without the old ~22 s yield tax.
+ */
+export const EXPORT_YIELD_INTERVAL_MS = 500;
 
 /**
  * Hand the main thread back, then resume as soon as the browser will let us.
