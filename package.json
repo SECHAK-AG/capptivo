@@ -11,7 +11,7 @@
     "preview": "vite preview",
     "typecheck": "tsc --noEmit",
     "test:selfcheck": "node scripts/run-selfchecks.mjs",
-    "test": "tsc --noEmit && node scripts/run-selfchecks.mjs && node scripts/fetch-ffmpeg.selfcheck.mjs && node scripts/release-contract.selfcheck.mjs && node scripts/release-workflow.selfcheck.mjs",
+    "test": "tsc --noEmit && node scripts/run-selfchecks.mjs && node scripts/fetch-ffmpeg.selfcheck.mjs && node scripts/release-contract.selfcheck.mjs && node scripts/release-workflow.selfcheck.mjs && node scripts/check-cursor-hotspots.mjs",
     "lint": "eslint .",
     "check:cursor-hotspots": "node scripts/check-cursor-hotspots.mjs",
     "tauri": "tauri",
