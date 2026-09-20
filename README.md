@@ -67,10 +67,10 @@ Captions need a system [whisper.cpp](https://github.com/ggerganov/whisper.cpp)
 GitHub Actions builds macOS (Intel + Apple Silicon), Windows, and Linux
 installers — no local Windows/Linux machines needed.
 
-1. Bump `version` in `package.json`, `src-tauri/tauri.conf.json`, and
-   `src-tauri/Cargo.toml` (keep them identical).
-2. Commit and push to `main`, then tag and push the tag (must match the
-   version, e.g. `0.1.0` → `v0.1.0`):
+1. Bump the desktop version in `package.json`, `src-tauri/tauri.conf.json`, `src-tauri/Cargo.toml`, and the `desktop` package entry in `src-tauri/Cargo.lock`.
+   Keep all four entries identical.
+2. Commit and push the version change to the canonical [`SECHAK-AG/capptivo`](https://github.com/SECHAK-AG/capptivo) default branch.
+   Create and push a matching tag, for example `v0.1.0`:
 
 ```bash
 git tag v0.1.0
@@ -78,22 +78,20 @@ git push origin main
 git push origin v0.1.0
 ```
 
-3. The [Release](https://github.com/SECHAK-AG/capptivo/actions/workflows/release.yml)
-   workflow builds all platforms and opens a **draft** GitHub Release with the
-   installers attached. Review the draft, then publish it.
+3. From the [Release workflow](https://github.com/SECHAK-AG/capptivo/actions/workflows/release.yml), select the canonical default branch and run it manually with that existing tag.
+   The workflow accepts only a `vMAJOR.MINOR.PATCH` tag whose commit is reachable from the canonical default branch and whose four version entries match the tag.
+   It creates or replaces the assets of a **draft** GitHub Release.
+   Review and publish the draft separately
 
-You can also run the workflow manually from the Actions tab
-(`workflow_dispatch`) without pushing a tag.
+**Release environment and signing:** Configure the protected `release` environment with `TAURI_SIGNING_PRIVATE_KEY` and `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`.
+They are required to sign the updater artifacts for every platform.
+The current macOS bundles are ad hoc signed and not notarized.
+Windows bundles are not Authenticode-signed.
+Apple notarization and Windows code-signing credentials are separate future work
 
-**Signing:** builds are unsigned for now. macOS users may need right-click →
-Open once. When you have Apple / Windows certificates, add the usual Tauri
-signing secrets (`APPLE_CERTIFICATE`, `APPLE_CERTIFICATE_PASSWORD`,
-`APPLE_SIGNING_IDENTITY`, `APPLE_ID`, `APPLE_PASSWORD`, `APPLE_TEAM_ID`,
-and/or Windows `TAURI_SIGNING_*`) in the repo Settings → Secrets.
-
-**Permissions:** if the workflow fails with “Resource not accessible by
-integration”, set Settings → Actions → General → Workflow permissions to
-**Read and write**.
+**Permissions:** Keep the repository-default `GITHUB_TOKEN` permissions read-only.
+The publish job grants only its own `contents: write` scope.
+If policy blocks that scope, review the organization or enterprise Actions policy
 
 ---
 
@@ -126,14 +124,37 @@ Platform notes:
 ## Quick start
 
 ```bash
-pnpm install
-pnpm tauri dev
+corepack pnpm install
+corepack pnpm tauri dev
 ```
 
-Requires **Rust**, **Node**, and **pnpm**. FFmpeg is fetched automatically as a
-per-platform sidecar on first dev/build (`scripts/fetch-ffmpeg.mjs`), installed
-as `capptivo-ffmpeg` / `capptivo-ffprobe` so Linux packages do not collide with
-the system `ffmpeg` package.
+Requires **Rust 1.98.0**, the **Node** version declared in `.node-version`, and
+**Corepack**. The Rust toolchain file includes rustfmt and Clippy, while Corepack
+selects the pinned pnpm release from `package.json`.
+FFmpeg is fetched automatically as a per-platform sidecar on first dev/build
+(`scripts/fetch-ffmpeg.mjs`), installed as `capptivo-ffmpeg` /
+`capptivo-ffprobe` so Linux packages do not collide with the system `ffmpeg`
+package. Exact source URLs, archive members, sizes, and SHA-256 digests are
+committed in `scripts/ffmpeg-sidecars.json`. The fetcher verifies downloaded,
+extracted, staged, and cached files before it permits Tauri's chained command
+to continue; a missing or invalid cache entry is replaced from the pinned
+source.
+
+On Windows, a portable Rust 1.98.0 toolchain can be placed under `.local`. Run
+development commands through the repository launcher so Rust is selected only
+from that directory:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts/with-local-rust.ps1 corepack pnpm tauri dev
+```
+
+The launcher prefers a verified versioned MSVC toolchain, such as
+`.local/rustup/toolchains/1.98.0-x86_64-pc-windows-msvc/bin`, and uses a sole
+matching alias only when that directory is absent. It keeps Cargo state and
+build output under `.local`, does not install or download Rust, and does not
+fall back to a host toolchain. Native Windows builds still require the MSVC C++
+Build Tools, including `link.exe`, on `PATH`; the
+portable directory replaces only the Rust installation.
 
 macOS: grant Screen Recording in System Settings on first launch, then relaunch.  
 Open the recorder with **⌥⇧R** (**Alt+Shift+R** on Windows/Linux), or click the tray icon.
@@ -288,9 +309,16 @@ src-tauri/src/
 ## Development
 
 ```bash
-pnpm tauri dev                 # app + Vite
+corepack pnpm tauri dev        # app + Vite
 cd src-tauri && cargo test --no-default-features
 cargo check --no-default-features
+```
+
+Windows development with portable Rust uses the repository root:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts/with-local-rust.ps1 cargo test --manifest-path src-tauri/Cargo.toml --no-default-features
+powershell -ExecutionPolicy Bypass -File scripts/with-local-rust.ps1 cargo check --manifest-path src-tauri/Cargo.toml --no-default-features
 ```
 
 ---

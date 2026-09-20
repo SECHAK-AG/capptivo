@@ -4,9 +4,9 @@
   "version": "1.0.3",
   "identifier": "com.capptivo.desktop",
   "build": {
-    "beforeDevCommand": "pnpm fetch:ffmpeg && pnpm dev",
+    "beforeDevCommand": "corepack pnpm fetch:ffmpeg && corepack pnpm dev",
     "devUrl": "http://localhost:1420",
-    "beforeBuildCommand": "pnpm fetch:ffmpeg && pnpm build",
+    "beforeBuildCommand": "corepack pnpm fetch:ffmpeg && corepack pnpm build",
     "frontendDist": "../dist"
   },
   "app": {

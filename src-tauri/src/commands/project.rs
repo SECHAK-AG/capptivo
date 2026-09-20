@@ -277,7 +277,9 @@ pub fn delete_project(app: AppHandle, state: State<AppState>, id: String) -> App
 
 #[tauri::command]
 pub async fn ensure_thumbnail(app: AppHandle, id: String) -> AppResult<Option<String>> {
-    tauri::async_runtime::spawn_blocking(move || app.state::<AppState>().store.ensure_thumbnail(&id))
-        .await
-        .map_err(|e| AppError::Other(format!("thumbnail task failed: {e}")))?
+    tauri::async_runtime::spawn_blocking(move || {
+        app.state::<AppState>().store.ensure_thumbnail(&id)
+    })
+    .await
+    .map_err(|e| AppError::Other(format!("thumbnail task failed: {e}")))?
 }

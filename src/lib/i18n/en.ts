@@ -85,6 +85,8 @@ export const en = {
     "Preview stopped: the graphics driver reset. Reopen the editor if it does not recover.",
   "editor.gpuReloaded":
     "The editor reloaded after a graphics reset. You can export again.",
+  "editor.framesDropped":
+    "This recording dropped {seconds}s of frames under system load — those moments play as a freeze. Close heavy apps while recording to avoid this.",
   "export.dialog.title": "Export",
   "export.dialog.description": "Choose format, encoding, frame rate, and file type.",
   "export.format": "Format",
@@ -101,7 +103,10 @@ export const en = {
   "export.enhanceVoice.on": "On",
   "export.enhanceVoice.hint":
     "Denoise, compress, and level narration for clearer speech.",
-  "encoding.fast": "Fast",
+  "export.passthrough": "Original (fastest)",
+  "export.passthrough.hint":
+    "Copies the recording as-is — no styling, cursor, or overlays. Cuts and camera need a full export.",
+  "encoding.fast":"Fast",
   "encoding.balanced": "Balanced",
   "encoding.quality": "Quality",
 

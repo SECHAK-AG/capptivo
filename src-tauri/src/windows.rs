@@ -257,7 +257,10 @@ fn bar_edges(win: &tauri::WebviewWindow) -> tauri::Result<(f64, f64)> {
         return Ok((rect.y + y, rect.y + y + h));
     }
     let chrome = geometry().layout.chrome_height();
-    Ok((rect.bottom() - chrome - RECORDER_BOTTOM_MARGIN, rect.bottom() - RECORDER_BOTTOM_MARGIN))
+    Ok((
+        rect.bottom() - chrome - RECORDER_BOTTOM_MARGIN,
+        rect.bottom() - RECORDER_BOTTOM_MARGIN,
+    ))
 }
 
 /// Move + resize the recorder as a **single** window-server update.
@@ -560,8 +563,7 @@ static DOCK_REGULAR: AtomicBool = AtomicBool::new(false);
 fn wants_dock_presence(app: &AppHandle, except: Option<&str>) -> bool {
     app.webview_windows().keys().any(|label| {
         let label = label.as_str();
-        Some(label) != except
-            && (label == LIBRARY_LABEL || label.starts_with(EDITOR_LABEL_PREFIX))
+        Some(label) != except && (label == LIBRARY_LABEL || label.starts_with(EDITOR_LABEL_PREFIX))
     })
 }
 
@@ -1436,10 +1438,7 @@ fn create_camera_preview_window(app: &AppHandle, device_id: &str) -> tauri::Resu
         return Ok(());
     }
 
-    let url = format!(
-        "camera.html?device={}",
-        urlencoding_minimal(device_id)
-    );
+    let url = format!("camera.html?device={}", urlencoding_minimal(device_id));
     let (x, y) = camera_default_position(app);
     let win = crate::webview_gpu::apply_gpu_args(
         WebviewWindowBuilder::new(app, CAMERA_LABEL, WebviewUrl::App(url.into()))
@@ -1632,18 +1631,20 @@ fn arm_annotation_escape(app: &AppHandle) {
         return;
     }
     use tauri_plugin_global_shortcut::{GlobalShortcutExt, ShortcutState};
-    let result = app.global_shortcut().on_shortcut(ANNOTATION_ESCAPE_HOTKEY, |app, _, event| {
-        if event.state() != ShortcutState::Pressed {
-            return;
-        }
-        let Some(win) = app.get_webview_window(ANNOTATION_LABEL) else {
-            return;
-        };
-        if !win.is_visible().unwrap_or(false) {
-            return;
-        }
-        let _ = app.emit(ANNOTATION_ESCAPE_EVENT, ());
-    });
+    let result = app
+        .global_shortcut()
+        .on_shortcut(ANNOTATION_ESCAPE_HOTKEY, |app, _, event| {
+            if event.state() != ShortcutState::Pressed {
+                return;
+            }
+            let Some(win) = app.get_webview_window(ANNOTATION_LABEL) else {
+                return;
+            };
+            if !win.is_visible().unwrap_or(false) {
+                return;
+            }
+            let _ = app.emit(ANNOTATION_ESCAPE_EVENT, ());
+        });
     if let Err(e) = result {
         ANNOTATION_ESCAPE_ARMED.store(false, Ordering::SeqCst);
         tracing::warn!(%e, "failed to register annotation Escape hotkey");
@@ -2032,12 +2033,7 @@ fn build_editor_window(
 /// Focus an existing editor/library window, or schedule creation off the caller
 /// stack. New WebViews must never be built inside a sync IPC invoke from another
 /// WebView (Windows WebView2 blank/abort) — see [`defer_on_ui`].
-fn ensure_editor_window(
-    app: &AppHandle,
-    label: &str,
-    url: &str,
-    title: &str,
-) -> tauri::Result<()> {
+fn ensure_editor_window(app: &AppHandle, label: &str, url: &str, title: &str) -> tauri::Result<()> {
     if let Some(win) = app.get_webview_window(label) {
         return present_on_active_monitor(app, &win);
     }

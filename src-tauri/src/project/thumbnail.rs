@@ -25,7 +25,9 @@ pub fn write_from_bgra(
     let stride = bytes_per_row as usize;
     let tight = (width as usize) * 4;
     if stride < tight {
-        return Err(AppError::Encoder("invalid frame stride for thumbnail".into()));
+        return Err(AppError::Encoder(
+            "invalid frame stride for thumbnail".into(),
+        ));
     }
 
     let tw = THUMB_MAX_WIDTH.min(width).max(1);
@@ -54,8 +56,7 @@ pub fn write_from_bgra(
     let tmp = path.with_extension("jpg.tmp");
     img.save_with_format(&tmp, ImageFormat::Jpeg)
         .map_err(|e| AppError::Encoder(format!("thumbnail jpeg write: {e}")))?;
-    std::fs::rename(&tmp, path)
-        .map_err(|e| AppError::Encoder(format!("thumbnail rename: {e}")))?;
+    std::fs::rename(&tmp, path).map_err(|e| AppError::Encoder(format!("thumbnail rename: {e}")))?;
     Ok(())
 }
 

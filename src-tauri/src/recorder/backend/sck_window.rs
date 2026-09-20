@@ -12,13 +12,13 @@ use crate::recorder::hw_encoder;
 use crossbeam_channel::{Sender, TrySendError};
 use objc::{msg_send, sel, sel_impl};
 use objc_id::Id;
+use objc_id::ShareId;
 use screencapturekit_sys::cm_sample_buffer_ref::CMSampleBufferRef;
 use screencapturekit_sys::content_filter::{UnsafeContentFilter, UnsafeInitParams};
 use screencapturekit_sys::cv_pixel_buffer_ref::CVPixelBufferRef;
-use screencapturekit_sys::os_types::base::{BOOL, CMTime, CMTimeScale};
+use screencapturekit_sys::os_types::base::{CMTime, CMTimeScale, BOOL};
 use screencapturekit_sys::sc_stream_frame_info::SCFrameStatus;
 use screencapturekit_sys::shareable_content::{UnsafeSCDisplay, UnsafeSCWindow};
-use objc_id::ShareId;
 use screencapturekit_sys::stream::UnsafeSCStream;
 use screencapturekit_sys::stream_configuration::{
     UnsafeStreamConfiguration, UnsafeStreamConfigurationRef,
@@ -234,7 +234,10 @@ fn run_window_capture_inner(
 
 /// SCK stream size hint — truncate, not round. Encoder
 /// dimensions still come from the first CVPixelBuffer, not this value.
-fn stream_config_pixels(window: &UnsafeSCWindow, displays: &[ShareId<UnsafeSCDisplay>]) -> (u32, u32) {
+fn stream_config_pixels(
+    window: &UnsafeSCWindow,
+    displays: &[ShareId<UnsafeSCDisplay>],
+) -> (u32, u32) {
     let f = window.get_frame();
     let rect = CaptureRect {
         x: f.origin.x,
