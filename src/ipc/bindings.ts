@@ -220,6 +220,13 @@ export const commands = {
   /** Migrates fragmented recordings to seekable MP4; no-op once progressive. */
   ensureSeekableRecording: (projectId: string) =>
     invoke<void>("ensure_seekable_recording", { projectId }),
+  /** Stream-copy the recording untouched — the "Original" export fast path. */
+  exportPassthrough: (args: {
+    projectId: string;
+    outPath: string;
+    preset: "off" | "podcast";
+    hasSystemAudio: boolean;
+  }) => invoke<void>("export_passthrough", args),
   /** Fail before encode when the destination volume is too full. */
   checkExportDiskSpace: (args: { path: string; needed: number }) =>
     invoke<void>("check_export_disk_space", args),

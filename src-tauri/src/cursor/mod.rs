@@ -320,7 +320,10 @@ fn run_sampler_loop(
                 let nx = (px - rect.x) / rect.width;
                 let ny = (py - rect.y) / rect.height;
                 let shape = shape_debounce.feed(probe.shape());
-                let ButtonSample { held: button, missed_taps } = probe.button();
+                let ButtonSample {
+                    held: button,
+                    missed_taps,
+                } = probe.button();
                 let moved = nx != last_x || ny != last_y;
                 let t = t0.elapsed().as_secs_f64();
                 let (cx, cy) = (nx.clamp(0.0, 1.0), ny.clamp(0.0, 1.0));
@@ -330,8 +333,20 @@ fn run_sampler_loop(
                 // Only when the polled state shows no edge — otherwise the
                 // edge logic below already represents the transition.
                 if missed_taps > 0 && button == last_button && !button {
-                    samples.push(CursorSample { t, x: cx, y: cy, kind: CursorKind::Down, shape });
-                    samples.push(CursorSample { t, x: cx, y: cy, kind: CursorKind::Up, shape });
+                    samples.push(CursorSample {
+                        t,
+                        x: cx,
+                        y: cy,
+                        kind: CursorKind::Down,
+                        shape,
+                    });
+                    samples.push(CursorSample {
+                        t,
+                        x: cx,
+                        y: cy,
+                        kind: CursorKind::Up,
+                        shape,
+                    });
                     last_x = nx;
                     last_y = ny;
                     last_shape = shape;
@@ -547,27 +562,63 @@ mod macos_probe {
                         msg_send![class!(NSCursor), IBeamCursorForVerticalLayout],
                         CursorShape::Text,
                     );
-                    add(msg_send![class!(NSCursor), pointingHandCursor], CursorShape::Pointer);
-                    add(msg_send![class!(NSCursor), openHandCursor], CursorShape::Grab);
-                    add(msg_send![class!(NSCursor), closedHandCursor], CursorShape::Grabbing);
-                    add(msg_send![class!(NSCursor), crosshairCursor], CursorShape::Crosshair);
+                    add(
+                        msg_send![class!(NSCursor), pointingHandCursor],
+                        CursorShape::Pointer,
+                    );
+                    add(
+                        msg_send![class!(NSCursor), openHandCursor],
+                        CursorShape::Grab,
+                    );
+                    add(
+                        msg_send![class!(NSCursor), closedHandCursor],
+                        CursorShape::Grabbing,
+                    );
+                    add(
+                        msg_send![class!(NSCursor), crosshairCursor],
+                        CursorShape::Crosshair,
+                    );
                     add(
                         msg_send![class!(NSCursor), operationNotAllowedCursor],
                         CursorShape::NotAllowed,
                     );
-                    add(msg_send![class!(NSCursor), dragLinkCursor], CursorShape::Alias);
-                    add(msg_send![class!(NSCursor), dragCopyCursor], CursorShape::Copy);
+                    add(
+                        msg_send![class!(NSCursor), dragLinkCursor],
+                        CursorShape::Alias,
+                    );
+                    add(
+                        msg_send![class!(NSCursor), dragCopyCursor],
+                        CursorShape::Copy,
+                    );
                     add(
                         msg_send![class!(NSCursor), contextualMenuCursor],
                         CursorShape::ContextMenu,
                     );
                     // Classic black resize arrows (split views, table columns).
-                    add(msg_send![class!(NSCursor), resizeLeftRightCursor], CursorShape::ResizeEw);
-                    add(msg_send![class!(NSCursor), resizeLeftCursor], CursorShape::ResizeEw);
-                    add(msg_send![class!(NSCursor), resizeRightCursor], CursorShape::ResizeEw);
-                    add(msg_send![class!(NSCursor), resizeUpDownCursor], CursorShape::ResizeNs);
-                    add(msg_send![class!(NSCursor), resizeUpCursor], CursorShape::ResizeNs);
-                    add(msg_send![class!(NSCursor), resizeDownCursor], CursorShape::ResizeNs);
+                    add(
+                        msg_send![class!(NSCursor), resizeLeftRightCursor],
+                        CursorShape::ResizeEw,
+                    );
+                    add(
+                        msg_send![class!(NSCursor), resizeLeftCursor],
+                        CursorShape::ResizeEw,
+                    );
+                    add(
+                        msg_send![class!(NSCursor), resizeRightCursor],
+                        CursorShape::ResizeEw,
+                    );
+                    add(
+                        msg_send![class!(NSCursor), resizeUpDownCursor],
+                        CursorShape::ResizeNs,
+                    );
+                    add(
+                        msg_send![class!(NSCursor), resizeUpCursor],
+                        CursorShape::ResizeNs,
+                    );
+                    add(
+                        msg_send![class!(NSCursor), resizeDownCursor],
+                        CursorShape::ResizeNs,
+                    );
 
                     // Window-edge resize cursors — the shape users actually see
                     // at window borders — have no public accessors. Probe the
@@ -576,8 +627,14 @@ mod macos_probe {
                     let private: [(&str, CursorShape); 12] = [
                         ("_windowResizeEastWestCursor", CursorShape::ResizeEw),
                         ("_windowResizeNorthSouthCursor", CursorShape::ResizeNs),
-                        ("_windowResizeNorthEastSouthWestCursor", CursorShape::ResizeNesw),
-                        ("_windowResizeNorthWestSouthEastCursor", CursorShape::ResizeNwse),
+                        (
+                            "_windowResizeNorthEastSouthWestCursor",
+                            CursorShape::ResizeNesw,
+                        ),
+                        (
+                            "_windowResizeNorthWestSouthEastCursor",
+                            CursorShape::ResizeNwse,
+                        ),
                         ("_windowResizeEastCursor", CursorShape::ResizeEw),
                         ("_windowResizeWestCursor", CursorShape::ResizeEw),
                         ("_windowResizeNorthCursor", CursorShape::ResizeNs),
@@ -589,8 +646,7 @@ mod macos_probe {
                     ];
                     for (name, shape) in private {
                         let sel = objc::runtime::Sel::register(name);
-                        let responds: bool =
-                            msg_send![class!(NSCursor), respondsToSelector: sel];
+                        let responds: bool = msg_send![class!(NSCursor), respondsToSelector: sel];
                         if responds {
                             add(msg_send![class!(NSCursor), performSelector: sel], shape);
                         }

@@ -21,6 +21,17 @@ export function showError(message: string): void {
   });
 }
 
+/** Non-fatal heads-up (e.g. dropped frames): amber, same shape as errors. */
+export function showWarning(message: string): void {
+  const trimmed = message.trim();
+  if (!trimmed) return;
+  toast(trimmed, {
+    duration: 8000,
+    icon: "⚠️",
+    style: { ...TOAST_STYLE, background: "oklch(0.55 0.15 75)" },
+  });
+}
+
 export function AppToaster() {
   return (
     <Toaster

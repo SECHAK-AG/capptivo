@@ -29,16 +29,11 @@ pub fn save_custom_background(
 }
 
 #[tauri::command(async)]
-pub fn list_custom_backgrounds(
-    state: State<'_, AppState>,
-) -> AppResult<Vec<CustomBackground>> {
+pub fn list_custom_backgrounds(state: State<'_, AppState>) -> AppResult<Vec<CustomBackground>> {
     backgrounds::list(state.store.app_data_dir())
 }
 
 #[tauri::command(async)]
-pub fn delete_custom_background(
-    state: State<'_, AppState>,
-    id: String,
-) -> AppResult<()> {
+pub fn delete_custom_background(state: State<'_, AppState>, id: String) -> AppResult<()> {
     backgrounds::delete(state.store.app_data_dir(), &id)
 }

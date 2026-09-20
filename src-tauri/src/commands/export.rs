@@ -9,18 +9,17 @@ use crate::error::{AppError, AppResult};
 use crate::export_h264::H264StreamMuxer;
 use crate::export_rawvideo::RawvideoStreamEncoder;
 use crate::recorder::encoder::{
-    attach_export_audio as run_attach_export_audio,
-    mux_export_audio as run_mux_export_audio,
-    prepare_export_audio as run_prepare_export_audio,
-    AudioEnhancePreset,
+    attach_export_audio as run_attach_export_audio, mux_export_audio as run_mux_export_audio,
+    prepare_export_audio as run_prepare_export_audio, AudioEnhancePreset,
 };
 use crate::state::{AppState, ExportSink};
 use std::io::{Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use tauri::State;
 
 /// Suffix for in-progress editor exports — removed on abort; renamed on success.
-const EXPORT_PARTIAL_SUFFIX: &str = ".capptivo-export.partial";
+const EXPORT_PARTIAL_SUFFIX: &str = ".capptivo-export";
 
 /// A kept timeline segment (source seconds) the export video is built from; the
 /// audio is trimmed to match.
@@ -151,6 +150,37 @@ pub async fn ensure_seekable_recording(
     })
     .await
     .map_err(|e| AppError::Other(format!("finalize task failed: {e}")))?
+}
+
+/// Copy a project's `screen.mp4` straight to the export path — the "Original"
+/// fast path for takes with no edits: no decode, no composite, no re-encode.
+/// Writes to the temp sidecar and promotes, like every other export route.
+#[tauri::command]
+pub async fn export_passthrough(
+    state: State<'_, AppState>,
+    project_id: String,
+    out_path: String,
+    preset: String,
+    has_system_audio: bool,
+) -> AppResult<()> {
+    let screen = state.store.project_dir(&project_id)?.join("screen.mp4");
+    let final_path = PathBuf::from(out_path);
+    let temp_path = export_temp_path(&final_path);
+    if temp_path.exists() {
+        let _ = std::fs::remove_file(&temp_path);
+    }
+    let preset = AudioEnhancePreset::parse(&preset);
+    tauri::async_runtime::spawn_blocking(move || {
+        crate::recorder::encoder::passthrough_export(
+            &screen,
+            &temp_path,
+            preset,
+            has_system_audio,
+        )?;
+        promote_temp_to_final(&temp_path, &final_path)
+    })
+    .await
+    .map_err(|e| AppError::Other(format!("passthrough export task failed: {e}")))?
 }
 
 /// Fail early when the volume hosting `path` cannot hold `needed` bytes.
@@ -304,18 +334,17 @@ pub fn abort_export(state: State<AppState>, handle: u64, reason: String) -> AppR
 /// Start ffmpeg reading Annex-B H.264 from IPC writes; output is a temp MP4
 /// promoted on [`finish_export_h264_stream`].
 #[tauri::command(async)]
-pub fn begin_export_h264_stream(
-    state: State<AppState>,
-    path: String,
-    fps: u32,
-) -> AppResult<u64> {
+pub fn begin_export_h264_stream(state: State<AppState>, path: String, fps: u32) -> AppResult<u64> {
     let final_path = PathBuf::from(path);
     let muxer = H264StreamMuxer::spawn(&final_path, fps)?;
     let mut next = state.next_export_id.lock();
     let handle = *next;
     *next += 1;
     drop(next);
-    state.h264_exports.lock().insert(handle, muxer);
+    state
+        .h264_exports
+        .lock()
+        .insert(handle, Arc::new(crate::export_h264::H264ExportSession::new(muxer)));
     Ok(handle)
 }
 
@@ -323,8 +352,9 @@ const H264_HANDLE_HEADER: &str = "x-export-handle";
 
 /// Append one Annex-B chunk to the ffmpeg stdin pipe.
 ///
-/// Take the muxer out of the map for the duration of the (blocking) pipe write
-/// so abort/finish are not stuck behind a full OS pipe.
+/// Keep the session in the map while the pipe write blocks. Its cancellation
+/// handle can kill FFmpeg concurrently, so abort and finish cannot race a
+/// remove/reinsert operation.
 #[tauri::command(async)]
 pub fn write_export_h264_chunk(
     state: State<AppState>,
@@ -336,22 +366,13 @@ pub fn write_export_h264_chunk(
             "write_export_h264_chunk expects a raw byte body".into(),
         ));
     };
-    let mut muxer = state
+    let session = state
         .h264_exports
         .lock()
-        .remove(&handle)
+        .get(&handle)
+        .cloned()
         .ok_or_else(|| AppError::Other(format!("unknown h264 export handle {handle}")))?;
-    let result = muxer.write_chunk(chunk);
-    // Abort may have removed the slot while we held the muxer — drop ours.
-    let mut exports = state.h264_exports.lock();
-    if exports.contains_key(&handle) {
-        muxer.abort();
-    } else if result.is_ok() {
-        exports.insert(handle, muxer);
-    } else {
-        muxer.abort();
-    }
-    result
+    session.write_chunk(chunk)
 }
 
 #[tauri::command]
@@ -359,17 +380,20 @@ pub async fn finish_export_h264_stream(
     state: State<'_, AppState>,
     handle: u64,
 ) -> AppResult<String> {
-    let muxer = state
+    let session = state
         .h264_exports
         .lock()
-        .remove(&handle)
+        .get(&handle)
+        .cloned()
         .ok_or_else(|| AppError::Other(format!("unknown h264 export handle {handle}")))?;
-    tauri::async_runtime::spawn_blocking(move || {
-        let path = muxer.finish()?;
+    let result = tauri::async_runtime::spawn_blocking(move || {
+        let path = session.finish()?;
         Ok(path.to_string_lossy().into_owned())
     })
     .await
-    .map_err(|e| AppError::Other(format!("h264 export finish task failed: {e}")))?
+    .map_err(|e| AppError::Other(format!("h264 export finish task failed: {e}")))?;
+    state.h264_exports.lock().remove(&handle);
+    result
 }
 
 #[tauri::command(async)]
@@ -378,9 +402,11 @@ pub fn abort_export_h264_stream(
     handle: u64,
     reason: String,
 ) -> AppResult<()> {
-    if let Some(muxer) = state.h264_exports.lock().remove(&handle) {
+    let session = state.h264_exports.lock().get(&handle).cloned();
+    if let Some(session) = session {
         tracing::error!(handle, %reason, "h264 export aborted");
-        muxer.abort();
+        session.abort();
+        state.h264_exports.lock().remove(&handle);
     }
     Ok(())
 }
@@ -404,7 +430,10 @@ pub fn begin_export_rawvideo_stream(
     let handle = *next;
     *next += 1;
     drop(next);
-    state.rawvideo_exports.lock().insert(handle, encoder);
+    state
+        .rawvideo_exports
+        .lock()
+        .insert(handle, Arc::new(crate::export_rawvideo::RawvideoExportSession::new(encoder)));
     Ok(handle)
 }
 
@@ -412,8 +441,9 @@ const RAWVIDEO_HANDLE_HEADER: &str = "x-export-handle";
 
 /// Append one full RGBA frame to the ffmpeg stdin pipe.
 ///
-/// Take the encoder out of the map for the duration of the (blocking) pipe write
-/// so abort/finish are not stuck behind a full OS pipe.
+/// Keep the session in the map while the pipe write blocks. Its cancellation
+/// handle can kill FFmpeg concurrently, so abort and finish cannot race a
+/// remove/reinsert operation.
 #[tauri::command(async)]
 pub fn write_export_rawvideo_frame(
     state: State<AppState>,
@@ -425,21 +455,13 @@ pub fn write_export_rawvideo_frame(
             "write_export_rawvideo_frame expects a raw byte body".into(),
         ));
     };
-    let mut encoder = state
+    let session = state
         .rawvideo_exports
         .lock()
-        .remove(&handle)
+        .get(&handle)
+        .cloned()
         .ok_or_else(|| AppError::Other(format!("unknown rawvideo export handle {handle}")))?;
-    let result = encoder.write_frame(chunk);
-    let mut exports = state.rawvideo_exports.lock();
-    if exports.contains_key(&handle) {
-        encoder.abort();
-    } else if result.is_ok() {
-        exports.insert(handle, encoder);
-    } else {
-        encoder.abort();
-    }
-    result
+    session.write_frame(chunk)
 }
 
 #[tauri::command]
@@ -447,17 +469,20 @@ pub async fn finish_export_rawvideo_stream(
     state: State<'_, AppState>,
     handle: u64,
 ) -> AppResult<String> {
-    let encoder = state
+    let session = state
         .rawvideo_exports
         .lock()
-        .remove(&handle)
+        .get(&handle)
+        .cloned()
         .ok_or_else(|| AppError::Other(format!("unknown rawvideo export handle {handle}")))?;
-    tauri::async_runtime::spawn_blocking(move || {
-        let path = encoder.finish()?;
+    let result = tauri::async_runtime::spawn_blocking(move || {
+        let path = session.finish()?;
         Ok(path.to_string_lossy().into_owned())
     })
     .await
-    .map_err(|e| AppError::Other(format!("rawvideo export finish task failed: {e}")))?
+    .map_err(|e| AppError::Other(format!("rawvideo export finish task failed: {e}")))?;
+    state.rawvideo_exports.lock().remove(&handle);
+    result
 }
 
 #[tauri::command(async)]
@@ -466,16 +491,21 @@ pub fn abort_export_rawvideo_stream(
     handle: u64,
     reason: String,
 ) -> AppResult<()> {
-    if let Some(encoder) = state.rawvideo_exports.lock().remove(&handle) {
+    let session = state.rawvideo_exports.lock().get(&handle).cloned();
+    if let Some(session) = session {
         tracing::error!(handle, %reason, "rawvideo export aborted");
-        encoder.abort();
+        session.abort();
+        state.rawvideo_exports.lock().remove(&handle);
     }
     Ok(())
 }
 
 fn export_temp_path(final_path: &Path) -> PathBuf {
     let mut os = final_path.as_os_str().to_os_string();
-    os.push(EXPORT_PARTIAL_SUFFIX);
+    os.push(format!(
+        "{EXPORT_PARTIAL_SUFFIX}-{}.partial",
+        uuid::Uuid::new_v4()
+    ));
     PathBuf::from(os)
 }
 
@@ -521,15 +551,10 @@ fn volume_available_bytes_at(path: &Path) -> Option<u64> {
     use windows::core::PCWSTR;
     use windows::Win32::Storage::FileSystem::GetDiskFreeSpaceExW;
 
-    let wide: Vec<u16> = path
-        .as_os_str()
-        .encode_wide()
-        .chain([0])
-        .collect();
+    let wide: Vec<u16> = path.as_os_str().encode_wide().chain([0]).collect();
     let mut free = 0u64;
-    let ok = unsafe {
-        GetDiskFreeSpaceExW(PCWSTR(wide.as_ptr()), Some(&mut free), None, None).is_ok()
-    };
+    let ok =
+        unsafe { GetDiskFreeSpaceExW(PCWSTR(wide.as_ptr()), Some(&mut free), None, None).is_ok() };
     ok.then_some(free)
 }
 

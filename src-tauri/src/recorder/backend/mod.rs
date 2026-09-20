@@ -200,11 +200,7 @@ impl CaptureHandle {
 
     /// Attach a native microphone receiver (cpal / Pulse). Same stop-hook
     /// rules as [`Self::attach_audio`].
-    pub fn attach_mic(
-        &mut self,
-        rx: Receiver<RawAudio>,
-        on_stop: impl FnOnce() + Send + 'static,
-    ) {
+    pub fn attach_mic(&mut self, rx: Receiver<RawAudio>, on_stop: impl FnOnce() + Send + 'static) {
         self.mic = Some(rx);
         self.chain_stop(on_stop);
     }
@@ -481,7 +477,10 @@ mod tests {
             addr,
             "a pooled buffer must be handed back, not reallocated"
         );
-        assert!(second.iter().all(|b| *b == 9), "contents must be the new frame");
+        assert!(
+            second.iter().all(|b| *b == 9),
+            "contents must be the new frame"
+        );
     }
 
     #[test]
@@ -492,7 +491,10 @@ mod tests {
         pool.put(pool.fill_from(&[0xAAu8; 64]));
         let shorter = pool.fill_from(&[0xBBu8; 8]);
         assert_eq!(shorter.len(), 8, "length must follow the source exactly");
-        assert!(shorter.iter().all(|b| *b == 0xBB), "no stale bytes may survive");
+        assert!(
+            shorter.iter().all(|b| *b == 0xBB),
+            "no stale bytes may survive"
+        );
     }
 
     #[test]
@@ -501,7 +503,11 @@ mod tests {
         for _ in 0..FRAME_POOL_CAP * 3 {
             pool.put(vec![0u8; 16]);
         }
-        assert_eq!(pool.len(), FRAME_POOL_CAP, "the pool must not grow without bound");
+        assert_eq!(
+            pool.len(),
+            FRAME_POOL_CAP,
+            "the pool must not grow without bound"
+        );
     }
 
     #[test]

@@ -35,13 +35,17 @@ pub struct UpdateAvailablePayload {
 pub enum UpdateStatusPayload {
     Checking,
     UpToDate,
-    Installing { version: String },
+    Installing {
+        version: String,
+    },
     /// Real download bytes — `total` is `None` when the server omits Content-Length.
     Progress {
         downloaded: u64,
         total: Option<u64>,
     },
-    Error { message: String },
+    Error {
+        message: String,
+    },
     BusyRecording,
 }
 
@@ -57,12 +61,7 @@ pub fn install_update(app: AppHandle) {
     tauri::async_runtime::spawn(async move {
         if let Err(e) = run_install(&app).await {
             tracing::warn!(%e, "updater install failed");
-            emit_status(
-                &app,
-                &UpdateStatusPayload::Error {
-                    message: e.clone(),
-                },
-            );
+            emit_status(&app, &UpdateStatusPayload::Error { message: e.clone() });
             // Last resort if no shell is listening.
             if !shells_open(&app) {
                 notify(&app, &e, MessageDialogKind::Error);
@@ -289,13 +288,7 @@ async fn run_install(app: &AppHandle) -> Result<(), String> {
                     if let Some(p) = pct {
                         last_pct = p;
                     }
-                    emit_status(
-                        &app,
-                        &UpdateStatusPayload::Progress {
-                            downloaded,
-                            total,
-                        },
-                    );
+                    emit_status(&app, &UpdateStatusPayload::Progress { downloaded, total });
                 }
             },
             || {},
@@ -354,9 +347,9 @@ fn payload_from_update(update: &Update) -> UpdateAvailablePayload {
 }
 
 fn shells_open(app: &AppHandle) -> bool {
-    app.webview_windows().into_iter().any(|(label, _)| {
-        label == LIBRARY_LABEL || label.starts_with(EDITOR_LABEL_PREFIX)
-    })
+    app.webview_windows()
+        .into_iter()
+        .any(|(label, _)| label == LIBRARY_LABEL || label.starts_with(EDITOR_LABEL_PREFIX))
 }
 
 fn emit_available(app: &AppHandle, payload: &UpdateAvailablePayload) -> bool {

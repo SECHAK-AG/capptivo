@@ -366,7 +366,9 @@ unsafe fn candidate_devices() -> Vec<*mut Object> {
                 continue;
             }
             let uid: *mut Object = msg_send![device, uniqueID];
-            let Some(uid) = rust_string(uid) else { continue };
+            let Some(uid) = rust_string(uid) else {
+                continue;
+            };
             if seen.contains(&uid) {
                 continue;
             }
@@ -378,10 +380,13 @@ unsafe fn candidate_devices() -> Vec<*mut Object> {
     // Path 1 — AVCaptureDeviceDiscoverySession over whichever external device
     // types this macOS knows about. `AVCaptureDeviceTypeExternal` is macOS 14+;
     // `…ExternalUnknown` is the 10.15–13 spelling. Resolve both dynamically.
-    let types: Vec<*mut Object> = ["AVCaptureDeviceTypeExternal", "AVCaptureDeviceTypeExternalUnknown"]
-        .into_iter()
-        .filter_map(|s| dynamic_nsstring_const(s))
-        .collect();
+    let types: Vec<*mut Object> = [
+        "AVCaptureDeviceTypeExternal",
+        "AVCaptureDeviceTypeExternalUnknown",
+    ]
+    .into_iter()
+    .filter_map(|s| dynamic_nsstring_const(s))
+    .collect();
     if !types.is_empty() {
         let type_array = nsarray(&types);
         // A nil mediaType returns devices of *any* media type among those
@@ -452,7 +457,9 @@ pub fn list_devices() -> AppResult<Vec<CaptureDevice>> {
                 continue;
             }
             let uid: *mut Object = msg_send![device, uniqueID];
-            let Some(uid) = rust_string(uid) else { continue };
+            let Some(uid) = rust_string(uid) else {
+                continue;
+            };
             let name: *mut Object = msg_send![device, localizedName];
             let name = rust_string(name).unwrap_or_else(|| "iOS device".to_string());
             let model: *mut Object = msg_send![device, modelID];
@@ -1011,17 +1018,17 @@ impl CaptureBackend for AvfDeviceBackend {
             .name("avf-device-capture".into())
             .spawn(move || {
                 let _pool = unsafe { AutoreleasePool::new() };
-                let mut session = match unsafe { build_session(&unique_id, want_audio, &thread_ctx) }
-                {
-                    Ok(session) => {
-                        let _ = ready_tx.send(Ok(()));
-                        session
-                    }
-                    Err(e) => {
-                        let _ = ready_tx.send(Err(e));
-                        return;
-                    }
-                };
+                let mut session =
+                    match unsafe { build_session(&unique_id, want_audio, &thread_ctx) } {
+                        Ok(session) => {
+                            let _ = ready_tx.send(Ok(()));
+                            session
+                        }
+                        Err(e) => {
+                            let _ = ready_tx.send(Err(e));
+                            return;
+                        }
+                    };
 
                 // Idle until stopped, but notice a yanked cable: without this the
                 // encode loop would block forever on a channel nothing will ever

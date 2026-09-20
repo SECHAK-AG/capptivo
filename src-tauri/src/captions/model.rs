@@ -123,22 +123,14 @@ fn download_file(app: &AppHandle, temp: &Path, dest: &Path) -> AppResult<()> {
         let n = match std::io::Read::read(&mut reader, &mut buf) {
             Ok(n) => n,
             Err(e) => {
-                return Err(fail(
-                    temp,
-                    Some(file),
-                    format!("download read: {e}"),
-                ));
+                return Err(fail(temp, Some(file), format!("download read: {e}")));
             }
         };
         if n == 0 {
             break;
         }
         if let Err(e) = file.write_all(&buf[..n]) {
-            return Err(fail(
-                temp,
-                Some(file),
-                format!("download write: {e}"),
-            ));
+            return Err(fail(temp, Some(file), format!("download write: {e}")));
         }
         hasher.update(&buf[..n]);
         downloaded += n as u64;
@@ -233,6 +225,8 @@ mod tests {
     fn pinned_model_digest_is_a_sha256() {
         assert_eq!(WHISPER_MODEL_SHA256.len(), 64);
         assert!(WHISPER_MODEL_SHA256.chars().all(|c| c.is_ascii_hexdigit()));
-        assert!(WHISPER_MODEL_SHA256.chars().all(|c| !c.is_ascii_uppercase()));
+        assert!(WHISPER_MODEL_SHA256
+            .chars()
+            .all(|c| !c.is_ascii_uppercase()));
     }
 }

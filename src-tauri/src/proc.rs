@@ -103,9 +103,7 @@ pub fn sidecar_or_path(sidecar: &str, path_fallbacks: &[&str]) -> PathBuf {
         }
     }
     find_in_path(path_fallbacks).unwrap_or_else(|| {
-        PathBuf::from(exe_name(
-            path_fallbacks.first().copied().unwrap_or(sidecar),
-        ))
+        PathBuf::from(exe_name(path_fallbacks.first().copied().unwrap_or(sidecar)))
     })
 }
 
@@ -228,4 +226,3 @@ mod tests {
         assert!(!summary.contains('\u{FFFD}'), "must not split a character");
     }
 }
-

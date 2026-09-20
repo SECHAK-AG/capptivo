@@ -3,7 +3,9 @@
 
 use crate::error::{AppError, AppResult};
 use crate::permissions::PermissionStatus;
-use crate::recorder::types::{CaptureAreaSelection, CaptureDevice, CaptureSource, RecorderConfig, RecorderState};
+use crate::recorder::types::{
+    CaptureAreaSelection, CaptureDevice, CaptureSource, RecorderConfig, RecorderState,
+};
 use crate::state::{AppState, CurrentProject, ExportSink};
 use crate::windows;
 use std::io::Write;
@@ -36,10 +38,7 @@ pub fn list_microphones() -> AppResult<Vec<crate::recorder::types::MicrophoneDev
 /// Open the selected mic early (discard samples) so Record skips BT open latency.
 /// Soft-fail at the UI: a warm miss still cold-opens on Record.
 #[tauri::command(async)]
-pub fn warm_microphone(
-    device_id: Option<String>,
-    label: Option<String>,
-) -> AppResult<()> {
+pub fn warm_microphone(device_id: Option<String>, label: Option<String>) -> AppResult<()> {
     crate::recorder::warm_microphone(device_id.as_deref(), label.as_deref())
 }
 
@@ -110,7 +109,8 @@ pub fn recorder_state(state: State<AppState>) -> RecorderState {
 pub fn prepare_window_capture(source_id: String) -> AppResult<()> {
     #[cfg(all(target_os = "macos", feature = "scap-capture"))]
     {
-        if let Some(window_id) = crate::recorder::backend::picker_sources::parse_window_id(&source_id)
+        if let Some(window_id) =
+            crate::recorder::backend::picker_sources::parse_window_id(&source_id)
         {
             return crate::recorder::backend::prepare_for_capture(window_id);
         }
@@ -419,18 +419,12 @@ pub fn complete_area_pick(
 }
 
 #[tauri::command]
-pub fn cancel_area_pick(
-    app: AppHandle,
-    pick_state: State<'_, crate::area_picker::AreaPickState>,
-) {
+pub fn cancel_area_pick(app: AppHandle, pick_state: State<'_, crate::area_picker::AreaPickState>) {
     crate::area_picker::cancel_area_pick(&app, &pick_state);
 }
 
 #[tauri::command]
-pub fn show_area_frame_guide(
-    app: AppHandle,
-    selection: CaptureAreaSelection,
-) -> AppResult<()> {
+pub fn show_area_frame_guide(app: AppHandle, selection: CaptureAreaSelection) -> AppResult<()> {
     crate::area_picker::show_area_frame_guide(&app, &selection)
 }
 

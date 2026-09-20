@@ -85,6 +85,8 @@ export const de: Record<TranslationKey, string> = {
   "export.error.gpuContextLost": "Export gestoppt: Der Grafiktreiber wurde während des Renderns zurückgesetzt. Bitte erneut exportieren.",
   "editor.previewGpuLost": "Vorschau gestoppt: Der Grafiktreiber wurde zurückgesetzt. Editor erneut öffnen, falls sie nicht wiederkehrt.",
   "editor.gpuReloaded": "Der Editor wurde nach einem Grafik-Reset neu geladen. Sie können erneut exportieren.",
+  "editor.framesDropped":
+    "Bei dieser Aufnahme wurden {seconds} s an Frames durch Systemlast verworfen — diese Momente erscheinen als Standbild. Schließen Sie während der Aufnahme ressourcenintensive Apps, um das zu vermeiden.",
   "export.dialog.title": "Exportieren",
   "export.dialog.description": "Format, Kodierung, Bildrate und Dateityp wählen.",
   "export.format": "Format",
@@ -101,7 +103,10 @@ export const de: Record<TranslationKey, string> = {
   "export.enhanceVoice.on": "An",
   "export.enhanceVoice.hint":
     "Rauschen entfernen, komprimieren und Pegel angleichen für klarere Sprache.",
-  "encoding.fast": "Schnell",
+  "export.passthrough": "Original (am schnellsten)",
+  "export.passthrough.hint":
+    "Kopiert die Aufnahme unverändert — ohne Styling, Cursor oder Overlays. Schnitte und Kamera erfordern einen vollständigen Export.",
+  "encoding.fast":"Schnell",
   "encoding.balanced": "Ausgewogen",
   "encoding.quality": "Qualität",
 
