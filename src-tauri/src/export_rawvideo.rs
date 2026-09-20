@@ -11,7 +11,10 @@ use crate::recorder::hw_encoder;
 use std::io::{BufRead, BufWriter, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Child, ChildStderr, ChildStdin, Stdio};
-use std::sync::{atomic::{AtomicU8, Ordering}, Arc, Mutex};
+use std::sync::{
+    atomic::{AtomicU8, Ordering},
+    Arc, Mutex,
+};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
@@ -294,7 +297,9 @@ impl RawvideoExportSession {
     pub fn write_frame(&self, frame: &[u8]) -> AppResult<()> {
         let state = self.state.load(Ordering::Acquire);
         if state != SESSION_RUNNING && state != SESSION_FINISHING {
-            return Err(AppError::Other("rawvideo export is no longer running".into()));
+            return Err(AppError::Other(
+                "rawvideo export is no longer running".into(),
+            ));
         }
         let mut encoder = self
             .encoder
@@ -331,7 +336,11 @@ impl RawvideoExportSession {
             .ok_or_else(|| AppError::Other("rawvideo export session is closed".into()))?;
         let result = encoder.finish();
         self.state.store(
-            if result.is_ok() { SESSION_FINISHED } else { SESSION_ABORTED },
+            if result.is_ok() {
+                SESSION_FINISHED
+            } else {
+                SESSION_ABORTED
+            },
             Ordering::Release,
         );
         result

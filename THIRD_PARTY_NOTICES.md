@@ -21,7 +21,7 @@ as a **separate process** (no linking into Capptivo).
 | Bundled names | `capptivo-ffmpeg`, `capptivo-ffprobe` |
 | Typical license | GPL (static builds include GPL-licensed codecs such as libx264) |
 | Sources used | [BtbN/FFmpeg-Builds](https://github.com/BtbN/FFmpeg-Builds) (Windows/Linux GPL builds); [ffmpeg.martin-riedl.de](https://ffmpeg.martin-riedl.de/) (macOS) |
-| Pinned builds | [BtbN snapshot N-126313-g1ae4048218](https://github.com/BtbN/FFmpeg-Builds/releases/tag/autobuild-2026-08-29-13-12) (Windows/Linux); Martin Riedl FFmpeg 9.0.1 (macOS) |
+| Pinned builds | [BtbN snapshot](https://github.com/BtbN/FFmpeg-Builds/releases/tag/autobuild-2026-09-20-13-11) (Windows N-126716-g3faf57342f / Linux N-126717-g150c4e9edf); Martin Riedl FFmpeg 9.0.1 (macOS) |
 | Integrity manifest | `scripts/ffmpeg-sidecars.json` (exact URLs, archive members, sizes, and SHA-256 digests) |
 | Upstream | https://ffmpeg.org/ · https://github.com/FFmpeg/FFmpeg |
 

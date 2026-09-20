@@ -317,14 +317,9 @@ fn select_for(ffmpeg: &Path, chosen: EncoderChoice, width: u32, height: u32) -> 
     }
     let mut order = Vec::with_capacity(candidates().len());
     order.push(chosen);
-    order.extend(
-        candidates()
-            .iter()
-            .copied()
-            .filter(|candidate| {
-                candidate.name != chosen.name && candidate.name != SOFTWARE_FALLBACK.name
-            }),
-    );
+    order.extend(candidates().iter().copied().filter(|candidate| {
+        candidate.name != chosen.name && candidate.name != SOFTWARE_FALLBACK.name
+    }));
 
     for choice in order {
         match probe_at(ffmpeg, &choice, width, height) {

@@ -90,7 +90,6 @@ export function CameraApp() {
   };
 
   useLayoutEffect(() => {
-    const video = videoRef.current;
     ensureCameraCaptureSubscribed();
     bindCameraCaptureApi({
       getDeviceId: () => deviceRef.current,
@@ -103,13 +102,13 @@ export function CameraApp() {
     });
     const initial = deviceFromUrl();
     if (initial) void reopen(initial, { force: true });
-    const video = videoRef.current;
 
     return () => {
       bindCameraCaptureApi(null);
       const stream = streamRef.current;
       streamRef.current = null;
       if (stream) for (const t of stream.getTracks()) t.stop();
+      const video = videoRef.current;
       if (video) video.srcObject = null;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps

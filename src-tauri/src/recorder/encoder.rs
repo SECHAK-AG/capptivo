@@ -1340,17 +1340,32 @@ mod tests {
             eprintln!("ffmpeg not found — skipping passthrough test");
             return;
         }
-        let dir = std::env::temp_dir().join(format!("capptivo-passthrough-{}", uuid::Uuid::new_v4()));
+        let dir =
+            std::env::temp_dir().join(format!("capptivo-passthrough-{}", uuid::Uuid::new_v4()));
         fs::create_dir_all(&dir).unwrap();
         let src = dir.join("screen.mp4");
 
         // 1s of video + tone, the same two-stream shape a real take has.
         let make = proc::command(&ffmpeg)
             .args([
-                "-hide_banner", "-loglevel", "error", "-y",
-                "-f", "lavfi", "-i", "testsrc=size=320x240:rate=30:duration=1",
-                "-f", "lavfi", "-i", "sine=frequency=440:duration=1",
-                "-c:v", "libx264", "-pix_fmt", "yuv420p", "-c:a", "aac",
+                "-hide_banner",
+                "-loglevel",
+                "error",
+                "-y",
+                "-f",
+                "lavfi",
+                "-i",
+                "testsrc=size=320x240:rate=30:duration=1",
+                "-f",
+                "lavfi",
+                "-i",
+                "sine=frequency=440:duration=1",
+                "-c:v",
+                "libx264",
+                "-pix_fmt",
+                "yuv420p",
+                "-c:a",
+                "aac",
             ])
             .arg(&src)
             .status()
@@ -1359,11 +1374,17 @@ mod tests {
 
         let plain = dir.join("plain.mp4");
         passthrough_export(&src, &plain, AudioEnhancePreset::Off, false).unwrap();
-        assert!(fs::metadata(&plain).unwrap().len() > 1024, "copy produced a trivial file");
+        assert!(
+            fs::metadata(&plain).unwrap().len() > 1024,
+            "copy produced a trivial file"
+        );
 
         let enhanced = dir.join("enhanced.mp4");
         passthrough_export(&src, &enhanced, AudioEnhancePreset::Podcast, false).unwrap();
-        assert!(fs::metadata(&enhanced).unwrap().len() > 1024, "enhance produced a trivial file");
+        assert!(
+            fs::metadata(&enhanced).unwrap().len() > 1024,
+            "enhance produced a trivial file"
+        );
 
         let _ = fs::remove_dir_all(&dir);
     }

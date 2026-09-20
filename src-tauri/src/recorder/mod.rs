@@ -1415,7 +1415,10 @@ mod tests {
         // stall, and the saved duration still matches the clock.
         let fps = 30;
         let p = plan_frame(20.0, fps, 0);
-        assert_eq!(p.repeats, 600, "the whole gap is filled, none of it skipped");
+        assert_eq!(
+            p.repeats, 600,
+            "the whole gap is filled, none of it skipped"
+        );
         assert_eq!(p.next_index, 601);
 
         // The heartbeat path (`fill_repeats`) still rate-limits a single tick

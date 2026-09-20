@@ -10,7 +10,10 @@ use crate::recorder::encoder::ffmpeg_path;
 use std::io::{BufRead, BufWriter, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Child, ChildStderr, ChildStdin, Stdio};
-use std::sync::{atomic::{AtomicU8, Ordering}, Arc, Mutex};
+use std::sync::{
+    atomic::{AtomicU8, Ordering},
+    Arc, Mutex,
+};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
@@ -293,7 +296,11 @@ impl H264ExportSession {
             .ok_or_else(|| AppError::Other("h264 export session is closed".into()))?;
         let result = muxer.finish();
         self.state.store(
-            if result.is_ok() { SESSION_FINISHED } else { SESSION_ABORTED },
+            if result.is_ok() {
+                SESSION_FINISHED
+            } else {
+                SESSION_ABORTED
+            },
             Ordering::Release,
         );
         result

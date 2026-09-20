@@ -64,21 +64,21 @@
     "x86_64-pc-windows-msvc": {
       "archives": [
         {
-          "url": "https://github.com/BtbN/FFmpeg-Builds/releases/download/autobuild-2026-08-29-13-12/ffmpeg-N-126313-g1ae4048218-win64-gpl.zip",
-          "size": 170696774,
-          "sha256": "fd3520fbdb8aa01da1a41ba41c5e5218a0d1b22c6697c9c11376b59ffa5dfc19",
+          "url": "https://github.com/BtbN/FFmpeg-Builds/releases/download/autobuild-2026-09-20-13-11/ffmpeg-N-126716-g3faf57342f-win64-gpl.zip",
+          "size": 194564474,
+          "sha256": "1e41954de78ce3ebdee55bbe6beb74aa89878b9fdf57b196a9e7e656a03f0a3b",
           "files": [
             {
-              "archivePath": "ffmpeg-N-126313-g1ae4048218-win64-gpl/bin/ffmpeg.exe",
+              "archivePath": "ffmpeg-N-126716-g3faf57342f-win64-gpl/bin/ffmpeg.exe",
               "sidecar": "capptivo-ffmpeg",
-              "size": 145831936,
-              "sha256": "773ed53b6287fe7b7224818786c42b9b0eb734f8b2692e77df688b8910407eda"
+              "size": 164346880,
+              "sha256": "f733c26e0b9cf32035af6a803fed5fde95523e4e87073b4fa717cbe3170fb28f"
             },
             {
-              "archivePath": "ffmpeg-N-126313-g1ae4048218-win64-gpl/bin/ffprobe.exe",
+              "archivePath": "ffmpeg-N-126716-g3faf57342f-win64-gpl/bin/ffprobe.exe",
               "sidecar": "capptivo-ffprobe",
-              "size": 145619968,
-              "sha256": "513d533a883febb1aa94893c00092283f28acd127d4bfa8c35bb3b82343b7324"
+              "size": 164137472,
+              "sha256": "762aa148bee838b68606cbf49236bc5aa74a47a33d764bb5f204edafb80fbf6e"
             }
           ]
         }
@@ -87,21 +87,21 @@
     "x86_64-unknown-linux-gnu": {
       "archives": [
         {
-          "url": "https://github.com/BtbN/FFmpeg-Builds/releases/download/autobuild-2026-08-29-13-12/ffmpeg-N-126313-g1ae4048218-linux64-gpl.tar.xz",
-          "size": 128032364,
-          "sha256": "60434d10a131f4979b47ca7e531c4d1850080187e4936953a8c294e9c4907bb0",
+          "url": "https://github.com/BtbN/FFmpeg-Builds/releases/download/autobuild-2026-09-20-13-11/ffmpeg-N-126717-g150c4e9edf-linux64-gpl.tar.xz",
+          "size": 151529908,
+          "sha256": "ae89029125072aba13a9b4abe21c4df2bef5055e93d14965ae2ba2768089cbaa",
           "files": [
             {
-              "archivePath": "ffmpeg-N-126313-g1ae4048218-linux64-gpl/bin/ffmpeg",
+              "archivePath": "ffmpeg-N-126717-g150c4e9edf-linux64-gpl/bin/ffmpeg",
               "sidecar": "capptivo-ffmpeg",
-              "size": 146841744,
-              "sha256": "88b13f4b21e36c28eee32cbca99f86c1088fa66644f013802d3664ab3fe2db56"
+              "size": 172682344,
+              "sha256": "309cbb6e5124f4933476a9147eaddb2995eb38b4ab0cc7cc21d6c56bbb8bc6c0"
             },
             {
-              "archivePath": "ffmpeg-N-126313-g1ae4048218-linux64-gpl/bin/ffprobe",
+              "archivePath": "ffmpeg-N-126717-g150c4e9edf-linux64-gpl/bin/ffprobe",
               "sidecar": "capptivo-ffprobe",
-              "size": 146620432,
-              "sha256": "fefddb7ced9efd9668a6441a29ece611ddfca521d872025b7029d4e186412771"
+              "size": 172444712,
+              "sha256": "750f17d019d762acfd8869c034ce2dae9caf3eb89e9f092840f62920a6a92e12"
             }
           ]
         }

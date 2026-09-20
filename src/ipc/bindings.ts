@@ -74,7 +74,7 @@ export const commands = {
   hideRecorder: () => invoke<void>("hide_recorder"),
   /** Resize recorder window to hug chrome. Popovers use `setRecorderMenu`. */
   setRecorderLayout: (
-    layout: "setup" | "alert" | "hud" | "hud-mini" | "countdown",
+    layout: "setup" | "alert" | "hud" | "hud-mini" | "hud-notice" | "countdown",
   ) => invoke<void>("set_recorder_layout", { layout }),
   /** Hug the setup pill — pass measured content width (logical px). */
   setRecorderBarWidth: (width: number) =>
