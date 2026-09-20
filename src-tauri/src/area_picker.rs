@@ -12,7 +12,7 @@ use crate::recorder::types::{CaptureAreaSelection, CaptureCrop};
 #[cfg(target_os = "macos")]
 use core_graphics::display::CGDisplay;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::mpsc;
+use std::sync::{mpsc, Mutex};
 use tauri::{
     AppHandle, Emitter, Manager, PhysicalPosition, PhysicalSize, WebviewUrl, WebviewWindowBuilder,
 };
@@ -26,6 +26,7 @@ const FRAME_OUTSET: f64 = 3.0;
 /// Bumped on every show/hide so a deferred Windows create can’t resurrect a
 /// guide the user already dismissed (or a newer show replaced).
 static FRAME_EPOCH: AtomicU64 = AtomicU64::new(0);
+static FRAME_OPERATION: Mutex<()> = Mutex::new(());
 
 struct VirtualDesktop {
     x: f64,
@@ -474,12 +475,13 @@ fn rect_overlap(ax: f64, ay: f64, aw: f64, ah: f64, bx: f64, by: f64, bw: f64, b
 /// New WebView creation is deferred (`defer_on_ui`) — same Windows WebView2
 /// rule as camera/library/editor (blank HWND if built inside sync IPC).
 pub fn show_area_frame_guide(app: &AppHandle, selection: &CaptureAreaSelection) -> AppResult<()> {
+    // Claim the request before geometry lookup so a concurrent hide can cancel
+    // the whole operation, including work that has not reached the HWND yet.
     let epoch = FRAME_EPOCH.fetch_add(1, Ordering::AcqRel) + 1;
     let bounds = selection_frame_bounds(app, selection)?;
 
     if let Some(win) = app.get_webview_window(AREA_FRAME_LABEL) {
-        apply_frame_geometry(&win, &bounds)?;
-        return present_area_frame(app, &win, selection, &bounds);
+        return present_area_frame(app, &win, selection, &bounds, epoch);
     }
 
     let selection = selection.clone();
@@ -500,13 +502,14 @@ fn create_and_present_area_frame(
     selection: &CaptureAreaSelection,
     epoch: u64,
 ) -> AppResult<()> {
+    let _operation = FRAME_OPERATION.lock().unwrap_or_else(|e| e.into_inner());
     if FRAME_EPOCH.load(Ordering::Acquire) != epoch {
         return Ok(());
     }
     let bounds = selection_frame_bounds(app, selection)?;
     // Race: another deferred create may have won.
     if app.get_webview_window(AREA_FRAME_LABEL).is_none() {
-        let win = crate::webview_gpu::apply_gpu_args(
+        crate::webview_gpu::apply_gpu_args(
             WebviewWindowBuilder::new(app, AREA_FRAME_LABEL, WebviewUrl::App("frame.html".into()))
                 .title("Area guide")
                 .inner_size(bounds.width, bounds.height)
@@ -522,14 +525,8 @@ fn create_and_present_area_frame(
         )
         .build()
         .map_err(|e| AppError::Other(format!("failed to open area frame: {e}")))?;
-        apply_frame_geometry(&win, &bounds)?;
-    } else if let Some(win) = app.get_webview_window(AREA_FRAME_LABEL) {
-        apply_frame_geometry(&win, &bounds)?;
     }
     if FRAME_EPOCH.load(Ordering::Acquire) != epoch {
-        // Don't bump epoch — a newer show/hide owns it. Just park if we raced
-        // a hide that ran before the HWND existed.
-        park_area_frame(app);
         return Ok(());
     }
     let Some(win) = app.get_webview_window(AREA_FRAME_LABEL) else {
@@ -537,7 +534,7 @@ fn create_and_present_area_frame(
             "area frame window missing after open".into(),
         ));
     };
-    present_area_frame(app, &win, selection, &bounds)
+    present_area_frame_locked(app, &win, selection, &bounds, epoch)
 }
 
 fn present_area_frame(
@@ -545,14 +542,39 @@ fn present_area_frame(
     win: &tauri::WebviewWindow,
     selection: &CaptureAreaSelection,
     bounds: &FrameBounds,
+    epoch: u64,
 ) -> AppResult<()> {
+    let _operation = FRAME_OPERATION.lock().unwrap_or_else(|e| e.into_inner());
+    present_area_frame_locked(app, win, selection, bounds, epoch)
+}
+
+fn present_area_frame_locked(
+    app: &AppHandle,
+    win: &tauri::WebviewWindow,
+    selection: &CaptureAreaSelection,
+    bounds: &FrameBounds,
+    epoch: u64,
+) -> AppResult<()> {
+    if FRAME_EPOCH.load(Ordering::Acquire) != epoch {
+        return Ok(());
+    }
+    apply_frame_geometry(win, bounds)?;
     // Must be click-through: an interactive always-on-top frame eats the desktop.
     win.set_ignore_cursor_events(true).map_err(|e| {
+        // Fail closed: bump epoch and park so a broken guide cannot linger on top.
         hide_area_frame_guide(app);
         AppError::Other(format!("area guide could not enable click-through: {e}"))
     })?;
     let _ = win.set_always_on_top(true);
-    crate::windows::exclude_overlay_from_capture(win);
+    if FRAME_EPOCH.load(Ordering::Acquire) != epoch {
+        return Ok(());
+    }
+    crate::windows::show_capture_overlay(app, win).map_err(|e| {
+        let _ = win.hide();
+        AppError::Other(format!(
+            "area guide could not be shown with capture exclusion: {e}"
+        ))
+    })?;
     let scale = win.scale_factor().unwrap_or(1.0);
     tracing::info!(
         source_id = %selection.source_id,
@@ -567,7 +589,6 @@ fn present_area_frame(
         scale,
         "area frame guide shown"
     );
-    let _ = win.show();
     // Last word on focus must be the recorder bar, not the guide: `show()` above
     // activates the guide on every reuse (tao clears a window's don't-focus
     // marker after the first show), and the bar's Escape-to-cancel handler is a
@@ -578,6 +599,7 @@ fn present_area_frame(
 }
 
 pub fn hide_area_frame_guide(app: &AppHandle) {
+    let _operation = FRAME_OPERATION.lock().unwrap_or_else(|e| e.into_inner());
     FRAME_EPOCH.fetch_add(1, Ordering::AcqRel);
     park_area_frame(app);
 }
