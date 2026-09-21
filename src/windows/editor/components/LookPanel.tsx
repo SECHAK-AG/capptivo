@@ -222,6 +222,9 @@ function ImageGrid() {
               onClick={() => {
                 const id = menu.id;
                 closeMenu();
+                // Deleting the image removes the uploaded file for good, so ask
+                // first. Same guard the recordings list uses before a delete.
+                if (!window.confirm(t("look.deleteImageConfirm"))) return;
                 void deleteCustomBackground(id);
               }}
             >
