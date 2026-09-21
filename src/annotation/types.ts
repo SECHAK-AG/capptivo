@@ -4,6 +4,7 @@ export type AnnotationTool =
   | "select"
   | "pen"
   | "highlighter"
+  | "laser"
   | "eraser"
   | "shape"
   | "text";
