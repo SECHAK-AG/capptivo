@@ -4,10 +4,11 @@
  * One compositor (the same Pixi one the preview uses, so every route is
  * WYSIWYG) and a small, fixed set of encode routes:
  *
- * - **MP4** — `planMp4Routes()` in `exportRouting.ts`. Annex-B WebCodecs →
- *   ffmpeg `-c copy` when an encoder has been *verified* on this machine
- *   (`annexBProbe.ts`), otherwise RGBA readback → ffmpeg hardware encode. The
- *   RGBA route needs no WebCodecs at all, so it is always available as the floor.
+ * - **MP4** — the native engine first (`exportNative.ts`: Rust decodes,
+ *   composites on the GPU, hardware-encodes and muxes audio in one pass). If it
+ *   fails, `planMp4Routes()` in `exportRouting.ts`: Annex-B WebCodecs → ffmpeg
+ *   `-c copy` when an encoder has been *verified* on this machine
+ *   (`annexBProbe.ts`), otherwise RGBA readback → ffmpeg hardware encode.
  * - **WebM** — mediabunny muxes in-webview (VP9/AV1/VP8 + in-container audio).
  * - **GIF** — gifenc.
  *
@@ -59,6 +60,7 @@ import { AdaptiveEncodeQueue } from "./encodeBackpressure";
 import { ExportSink } from "./exportSink";
 import { openExportAudioTrack } from "./exportAudioTrack";
 import { renderGifToSink } from "./exportGif";
+import { exportMp4Native, nativeExportEnabled } from "./exportNative";
 import { renderMp4ViaFfmpegH264 } from "./exportH264Ffmpeg";
 import { renderMp4ViaFfmpegRawvideo } from "./exportRawvideoFfmpeg";
 import { probeAnnexBConfig } from "./annexBProbe";
@@ -231,25 +233,6 @@ export async function exportProject(
   let prepared: PreparedExportAudio | null = null;
   let gpuWasLost = false;
   try {
-    // Kick audio prepare before ensureSeekable so FFmpeg overlaps that work.
-    if (resolved.format !== "gif") {
-      audioPrep = prepareExportAudioTrack(
-        resolved.container === "webm" ? "webm" : "m4a",
-        settings.audioEnhance,
-        snapshot,
-      ).catch((e) => {
-        console.warn(
-          "export audio prepare failed; will fall back to post-mux",
-          e,
-        );
-        return null;
-      });
-    }
-
-    // Sequential decode opens on Range reads — no upfront migration. If it
-    // fails, each render path retries after ensureSeekableRecording (see
-    // openExportSequentialMedia) or migrates before the seek fallback.
-
     if (resolved.format === "gif") {
       sink = await ExportSink.open(selectedDestination.handle);
       await renderGifToSink(sink, screenUrl, faceCam, resolved, signal, snapshot);
@@ -260,6 +243,47 @@ export async function exportProject(
       destination = null;
       return;
     }
+
+    // MP4: the native engine renders, encodes and muxes audio in one pass.
+    // Any failure but a cancel falls through to the WebView routes below —
+    // Rust has released the destination for them.
+    if (resolved.container === "mp4" && nativeExportEnabled()) {
+      try {
+        await exportMp4Native(
+          selectedDestination.handle,
+          resolved,
+          settings.audioEnhance,
+          signal,
+          snapshot,
+        );
+        throwIfAborted(signal);
+        store.setExportStatus(translateNow("export.status.saving"));
+        await notifyDone(selectedDestination);
+        destination = null;
+        return;
+      } catch (e) {
+        if (isExportCancelled(e)) throw e;
+        logClientError("export:native", e);
+        exportLog(
+          `[export] native route failed (${describeError(e)}); using the WebView routes`,
+        );
+        store.setExportProgress(0);
+      }
+    }
+
+    // Kick audio prepare before ensureSeekable so FFmpeg overlaps that work.
+    audioPrep = prepareExportAudioTrack(
+      resolved.container === "webm" ? "webm" : "m4a",
+      settings.audioEnhance,
+      snapshot,
+    ).catch((e) => {
+      console.warn("export audio prepare failed; will fall back to post-mux", e);
+      return null;
+    });
+
+    // Sequential decode opens on Range reads — no upfront migration. If it
+    // fails, each render path retries after ensureSeekableRecording (see
+    // openExportSequentialMedia) or migrates before the seek fallback.
 
     const attachAudioAndFinish = async () => {
       store.setExportStatus(translateNow("export.status.saving"));

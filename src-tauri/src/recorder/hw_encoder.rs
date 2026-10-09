@@ -54,6 +54,24 @@ impl EncoderChoice {
         }
         args
     }
+
+    /// Codec arguments for encoding NV12 frames at `bitrate` (the native export
+    /// path). Every candidate accepts NV12 directly, so no software pixel
+    /// conversion is requested; VAAPI still needs its GPU upload filter.
+    pub fn nv12_export_args(&self, bitrate: u64) -> Vec<String> {
+        let mut args = vec![
+            "-c:v".to_string(),
+            self.name.to_string(),
+            "-b:v".to_string(),
+            bitrate.to_string(),
+        ];
+        if let Some(upload) = self.upload_filter {
+            args.push("-vf".into());
+            args.push(upload.into());
+        }
+        args.extend(self.tuning_args.iter().map(|a| a.to_string()));
+        args
+    }
 }
 
 // --- Encoder tuning -------------------------------------------------------

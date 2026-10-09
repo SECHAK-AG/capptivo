@@ -1,5 +1,7 @@
 /** TypeScript mirrors of Rust IPC types — keep in sync with `#[serde(rename_all = "camelCase")]`. */
 
+import type { ExportSnapshot } from "../windows/editor/export/exportSnapshot";
+
 export type CaptureSourceKind = "display" | "window";
 
 export interface CaptureSource {
@@ -137,3 +139,60 @@ export type RecorderEvent =
   | { type: "elapsed"; seconds: number }
   | { type: "level"; micDb: number }
   | { type: "error"; message: string; fatal: boolean };
+
+/**
+ * Everything the native engine renders (`RenderDocument` in
+ * `src-tauri/engine/src/document.rs`): the editor's export snapshot, values
+ * only — presets are resolved before a document is handed over.
+ */
+export type NativeRenderDocument = Pick<
+  ExportSnapshot,
+  | "sourceVideoSize"
+  | "sourceAspect"
+  | "aspectRatioPresetId"
+  | "backgroundType"
+  | "look"
+  | "screenContentCrop"
+  | "duration"
+  | "segments"
+  | "zoomFragments"
+  | "blurRegions"
+  | "cursorSettings"
+  | "recordingMetadata"
+  | "faceCam"
+  | "cameraOffsetMs"
+  | "captions"
+  | "captionSettings"
+>;
+
+/** `NativeExportArgs` in `commands/native_export.rs`. */
+export interface NativeExportArgs {
+  job: string;
+  destination: string;
+  projectId: string;
+  screenFile: string;
+  cameraFile: string | null;
+  background: string | null;
+  document: NativeRenderDocument;
+  width: number;
+  height: number;
+  fps: number;
+  bitrate: number;
+  audioPreset: "off" | "podcast";
+  hasSystemAudio: boolean;
+}
+
+export interface NativeExportResult {
+  frames: number;
+  seconds: number;
+  fps: number;
+  gpu: string;
+  encoder: string;
+}
+
+/** Payload of `export://native-progress`. */
+export interface NativeExportProgress {
+  job: string;
+  done: number;
+  total: number;
+}

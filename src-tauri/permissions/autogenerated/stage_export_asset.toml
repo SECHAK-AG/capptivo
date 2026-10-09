@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-stage-export-asset"
+description = "Enables the stage_export_asset command without any pre-configured scope."
+commands.allow = ["stage_export_asset"]
+
+[[permission]]
+identifier = "deny-stage-export-asset"
+description = "Denies the stage_export_asset command without any pre-configured scope."
+commands.deny = ["stage_export_asset"]

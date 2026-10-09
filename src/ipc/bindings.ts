@@ -5,6 +5,8 @@ import type {
   CaptureAreaSelection,
   CaptureDevice,
   CaptureSource,
+  NativeExportArgs,
+  NativeExportResult,
   PermissionStatus,
   PlatformCapabilities,
   Project,
@@ -216,6 +218,17 @@ export const commands = {
     invoke<void>("finish_export_rawvideo_stream", { handle }),
   abortExportRawvideoStream: (handle: string, reason: string) =>
     invoke<void>("abort_export_rawvideo_stream", { handle, reason }),
+  /** Hand bytes (the background image) to an upcoming native export. */
+  stageExportAsset: (bytes: Uint8Array) =>
+    invoke<string>("stage_export_asset", bytes),
+  /**
+   * Native export: Rust decodes, composites and encodes the whole MP4, audio
+   * included. Progress arrives as `native-export-progress` events.
+   */
+  exportNative: (args: NativeExportArgs) =>
+    invoke<NativeExportResult>("export_native", { args }),
+  cancelNativeExport: (job: string) =>
+    invoke<void>("cancel_native_export", { job }),
   /** Returns original dimensions and proxy filename when ready. */
   ensureProxy: (projectId: string) =>
     invoke<{ proxy: string | null; width: number; height: number }>(

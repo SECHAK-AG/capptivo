@@ -1,10 +1,21 @@
 [package]
 name = "desktop"
-version = "1.0.3"
+version = "1.0.4"
 description = "Capptivo Desktop — native screen recorder + editor"
 authors = ["idboussadel"]
 license = "MIT"
 edition = "2021"
+# `tauri dev` runs plain `cargo run`; the workspace also builds the engine's
+# `capptivo-render` CLI, so name the app as the binary to run.
+default-run = "desktop"
+
+# The render engine is its own crate so it builds, tests and benchmarks without
+# Tauri (see engine/src/bin/capptivo-render.rs). Both members share one lockfile
+# and target dir; `default-members` keeps `cargo test` covering the engine.
+[workspace]
+members = [".", "engine"]
+default-members = [".", "engine"]
+resolver = "2"
 
 [lib]
 # The `_lib` suffix keeps the lib name unique so it doesn't conflict with the
@@ -25,6 +36,9 @@ tauri-plugin-dialog = "2"
 tauri-plugin-notification = "2"
 tauri-plugin-global-shortcut = "2"
 tauri-plugin-single-instance = "2"
+
+# --- Native render engine (decode → composite → encode; see engine/) ---
+capptivo-engine = { path = "engine" }
 
 # --- Serialization ---
 serde = { version = "1", features = ["derive"] }

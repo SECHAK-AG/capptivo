@@ -1,0 +1,34 @@
+[package]
+name = "capptivo-engine"
+version = "0.1.0"
+description = "Capptivo render engine: decode, composite and encode editor timelines natively"
+authors = ["idboussadel"]
+license = "MIT"
+edition = "2021"
+publish = false
+
+[lib]
+name = "capptivo_engine"
+
+[[bin]]
+# Headless export + benchmark driver. Not shipped in the app bundle.
+name = "capptivo-render"
+path = "src/bin/capptivo-render.rs"
+
+[dependencies]
+# GPU compositor (Metal / DX12 / Vulkan / GL) and GPU text.
+wgpu = "30"
+glyphon = "0.12"
+bytemuck = { version = "1", features = ["derive"] }
+pollster = "1"
+# Decode ‖ render ‖ encode pipeline stages.
+crossbeam-channel = "0.5"
+# The render document is the JSON contract with the editor.
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "2"
+tracing = "0.1"
+# Cursor glyphs ship as SVG (public/cursors); some embed raster images.
+resvg = { version = "0.48", default-features = false, features = ["raster-images"] }
+# Background images arrive encoded (PNG from gradients/colors, JPEG/WebP presets).
+image = { version = "0.25", default-features = false, features = ["png", "jpeg", "webp"] }

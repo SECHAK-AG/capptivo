@@ -288,7 +288,7 @@ fn validate_suggested_name(name: &str) -> AppResult<()> {
     Ok(())
 }
 
-fn validate_project_file_name(name: &str) -> AppResult<()> {
+pub(super) fn validate_project_file_name(name: &str) -> AppResult<()> {
     if name.is_empty() || name == "." || name == ".." || name.contains(['/', '\\', ':', '\0']) {
         return Err(AppError::Other("invalid export audio source".into()));
     }
@@ -363,7 +363,7 @@ fn destination_reservation_key(path: &Path) -> String {
     }
 }
 
-fn claim_available_destination(
+pub(super) fn claim_available_destination(
     destinations: &parking_lot::Mutex<std::collections::HashMap<String, ExportDestination>>,
     handle: &str,
 ) -> AppResult<PathBuf> {
@@ -397,7 +397,7 @@ fn transition_destination(
     Ok(())
 }
 
-fn release_destination(
+pub(super) fn release_destination(
     destinations: &parking_lot::Mutex<std::collections::HashMap<String, ExportDestination>>,
     handle: &str,
 ) -> AppResult<()> {
@@ -409,7 +409,7 @@ fn release_destination(
     )
 }
 
-fn mark_destination_ready(
+pub(super) fn mark_destination_ready(
     destinations: &parking_lot::Mutex<std::collections::HashMap<String, ExportDestination>>,
     handle: &str,
 ) -> AppResult<()> {
@@ -1079,7 +1079,7 @@ fn remove_destination(
         .path)
 }
 
-fn export_temp_path(final_path: &Path) -> PathBuf {
+pub(super) fn export_temp_path(final_path: &Path) -> PathBuf {
     let mut os = final_path.as_os_str().to_os_string();
     os.push(EXPORT_PARTIAL_SUFFIX);
     PathBuf::from(os)
@@ -1087,7 +1087,7 @@ fn export_temp_path(final_path: &Path) -> PathBuf {
 
 /// Rename a completed temp export onto the user path. The destination is only
 /// replaced once the temp file is fully written and fsynced.
-fn promote_temp_to_final(temp: &Path, final_path: &Path) -> AppResult<()> {
+pub(super) fn promote_temp_to_final(temp: &Path, final_path: &Path) -> AppResult<()> {
     if final_path.exists() {
         std::fs::remove_file(final_path)?;
     }

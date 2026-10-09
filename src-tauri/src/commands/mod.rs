@@ -6,6 +6,7 @@ pub mod backgrounds;
 pub mod captions;
 pub mod error_log;
 pub mod export;
+pub mod native_export;
 pub mod project;
 pub mod recording;
 
@@ -101,6 +102,9 @@ macro_rules! command_handlers {
             $crate::commands::export::prepare_export_audio,
             $crate::commands::export::attach_export_audio,
             $crate::commands::export::remove_temp_file,
+            $crate::commands::native_export::stage_export_asset,
+            $crate::commands::native_export::export_native,
+            $crate::commands::native_export::cancel_native_export,
             $crate::commands::export::complete_export,
             $crate::commands::export::discard_export_destination,
             // error log (friend-install diagnostics)

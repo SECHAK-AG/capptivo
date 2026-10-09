@@ -10,6 +10,7 @@ use parking_lot::Mutex;
 use std::collections::{HashMap, HashSet};
 use std::fs::File;
 use std::path::PathBuf;
+use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 use tauri::async_runtime::Mutex as AsyncMutex;
 use tauri::{AppHandle, Emitter, Manager};
@@ -32,6 +33,11 @@ pub struct AppState {
     pub rawvideo_exports: Mutex<HashMap<String, RawvideoExportSlot>>,
     /// Project-scoped prepared audio sidecars, keyed by opaque capability.
     pub prepared_export_audio: Mutex<HashMap<String, PathBuf>>,
+    /// Native exports in flight, by job id: setting the flag cancels the job.
+    pub native_exports: Mutex<HashMap<String, Arc<AtomicBool>>>,
+    /// Bytes the editor staged for a native export (the background image),
+    /// claimed once by token.
+    pub staged_export_assets: Mutex<HashMap<String, Vec<u8>>>,
     /// Optional face-cam file being written by the camera WebView during capture.
     pub camera_sink: Mutex<Option<ExportSink>>,
     /// Project ids with a preview-proxy transcode in flight, so concurrent
@@ -130,6 +136,8 @@ impl AppState {
             h264_exports: Mutex::new(HashMap::new()),
             rawvideo_exports: Mutex::new(HashMap::new()),
             prepared_export_audio: Mutex::new(HashMap::new()),
+            native_exports: Mutex::new(HashMap::new()),
+            staged_export_assets: Mutex::new(HashMap::new()),
             camera_sink: Mutex::new(None),
             proxy_jobs: Mutex::new(HashSet::new()),
             camera_jobs: Mutex::new(HashSet::new()),

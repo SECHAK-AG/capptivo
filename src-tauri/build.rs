@@ -90,6 +90,9 @@ fn main() {
         "prepare_export_audio",
         "attach_export_audio",
         "remove_temp_file",
+        "stage_export_asset",
+        "export_native",
+        "cancel_native_export",
         "complete_export",
         "discard_export_destination",
         // error log

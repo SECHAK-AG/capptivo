@@ -60,3 +60,18 @@ Notable UI / media libraries used by Capptivo include React, Tauri, mediabunny,
 gifenc, and various Radix UI packages — each under its upstream license (typically
 MIT/Apache-2.0). They are not re-licensed by Capptivo; Capptivo's own code is
 distributed under `MIT`.
+
+---
+
+## Inter and Poppins fonts (bundled in the render engine)
+
+The native render engine (`src-tauri/engine`) embeds two caption fonts so
+exported captions match the editor, which loads the same faces from Google
+Fonts.
+
+| Item | Detail |
+|------|--------|
+| Components | Inter SemiBold 4.1 (Inter Project Authors); Poppins SemiBold (Poppins Project Authors) |
+| Bundled files | `src-tauri/engine/assets/fonts/Inter-SemiBold.ttf`, `Poppins-SemiBold.ttf` |
+| License | SIL Open Font License 1.1 — `Inter-OFL.txt`, `Poppins-OFL.txt` beside the fonts |
+| Upstream | https://github.com/rsms/inter · https://github.com/itfoundry/Poppins |

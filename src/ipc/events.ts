@@ -1,7 +1,7 @@
 /** Typed listeners for Rust `recorder://…` events. */
 
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
-import type { RecorderState } from "./types";
+import type { NativeExportProgress, RecorderState } from "./types";
 
 export const RecorderChannels = {
   stateChanged: "recorder://state-changed",
@@ -52,5 +52,14 @@ export function onInterrupted(
 ): Promise<UnlistenFn> {
   return listen<InterruptedPayload>(RecorderChannels.interrupted, (e) =>
     handler(e.payload.interrupted.framesEncoded),
+  );
+}
+
+/** Native export progress (`export://native-progress`). */
+export function onNativeExportProgress(
+  handler: (progress: NativeExportProgress) => void,
+): Promise<UnlistenFn> {
+  return listen<NativeExportProgress>("export://native-progress", (e) =>
+    handler(e.payload),
   );
 }
