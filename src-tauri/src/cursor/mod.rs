@@ -487,7 +487,7 @@ mod macos_probe {
         fn shape(&mut self) -> CursorShape {
             #[cfg(feature = "scap-capture")]
             {
-                if self.tick % SHAPE_PROBE_EVERY_TICKS == 0 {
+                if self.tick.is_multiple_of(SHAPE_PROBE_EVERY_TICKS) {
                     self.cached_shape = self.classifier.current();
                 }
             }

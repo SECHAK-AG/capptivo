@@ -250,7 +250,7 @@ pub fn pick(ffmpeg: &Path) -> &'static EncoderChoice {
 /// a broken pipe and shelved a 0-byte take.
 ///
 /// Two layers keep captures inside this edge. Backends that can scale on the
-/// GPU ask for a stream that already fits ([`fit_to_hardware_edge`]), so the
+/// GPU ask for a stream that already fits (`fit_to_hardware_edge`), so the
 /// hardware encoder keeps the take. Whatever still arrives larger goes through
 /// [`pick_for`], which re-probes the pick at that size and demotes it to the
 /// software encoder instead of letting it die mid-take.
@@ -262,6 +262,7 @@ pub const HW_ENCODER_EDGE: u32 = 4096;
 /// GPU before a frame is ever copied: encoding the full-size frame in software
 /// instead saturated an M4 (5120×2820 at 60 fps: ~47 % of captured frames
 /// dropped, the system-audio queue overflowing).
+#[cfg(any(all(target_os = "macos", feature = "scap-capture"), test))]
 pub fn fit_to_hardware_edge(width: u32, height: u32) -> Option<(u32, u32)> {
     let edge = width.max(height);
     if edge <= HW_ENCODER_EDGE || width == 0 || height == 0 {
@@ -280,6 +281,7 @@ pub fn fit_to_hardware_edge(width: u32, height: u32) -> Option<(u32, u32)> {
 /// scaled. A silent downscale reads as "the recording is soft", and a silent
 /// failure (the 0-byte take this replaces) reads as "the app is broken"; the
 /// toast is the difference between the two.
+#[cfg(any(all(target_os = "macos", feature = "scap-capture"), test))]
 pub fn scaled_capture_notice(native: (u32, u32), actual: (u32, u32)) -> Option<String> {
     if fit_to_hardware_edge(native.0, native.1).is_none() || actual == native {
         return None;

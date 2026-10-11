@@ -1,5 +1,5 @@
 //! The local project store — the desktop replacement for the `recordings` table
-//! + S3. One directory per recording under the app data dir. All writes are
+//! and S3. One directory per recording under the app data dir. All writes are
 //! atomic (write `.tmp`, fsync, rename) so a crash never corrupts a project.
 
 use super::model::{CaptureSnapshot, Meta, Project, ProjectFiles, ProjectSummary, SCHEMA_VERSION};

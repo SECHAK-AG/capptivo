@@ -64,21 +64,21 @@
     "x86_64-pc-windows-msvc": {
       "archives": [
         {
-          "url": "https://github.com/BtbN/FFmpeg-Builds/releases/download/autobuild-2026-09-20-13-11/ffmpeg-N-126716-g3faf57342f-win64-gpl.zip",
-          "size": 194564474,
-          "sha256": "1e41954de78ce3ebdee55bbe6beb74aa89878b9fdf57b196a9e7e656a03f0a3b",
+          "url": "https://github.com/jellyfin/jellyfin-ffmpeg/releases/download/v8.1.3-1/jellyfin-ffmpeg_8.1.3-1_portable_win64-clang-gpl.zip",
+          "size": 68034152,
+          "sha256": "3691f8b2d4c39c511b5faff1c8c4687bd782dac823e63ba69f0755f7ce1af9ce",
           "files": [
             {
-              "archivePath": "ffmpeg-N-126716-g3faf57342f-win64-gpl/bin/ffmpeg.exe",
+              "archivePath": "ffmpeg.exe",
               "sidecar": "capptivo-ffmpeg",
-              "size": 164346880,
-              "sha256": "f733c26e0b9cf32035af6a803fed5fde95523e4e87073b4fa717cbe3170fb28f"
+              "size": 92391424,
+              "sha256": "47495334f74912826bc474d246fe69fb4c01cd0d3c612d24b6a06000fe4c1483"
             },
             {
-              "archivePath": "ffmpeg-N-126716-g3faf57342f-win64-gpl/bin/ffprobe.exe",
+              "archivePath": "ffprobe.exe",
               "sidecar": "capptivo-ffprobe",
-              "size": 164137472,
-              "sha256": "762aa148bee838b68606cbf49236bc5aa74a47a33d764bb5f204edafb80fbf6e"
+              "size": 92167168,
+              "sha256": "673949ee5d0406529863232eb1053517a3b518e669fe600a45a3e7a638b22fec"
             }
           ]
         }
@@ -87,21 +87,21 @@
     "x86_64-unknown-linux-gnu": {
       "archives": [
         {
-          "url": "https://github.com/BtbN/FFmpeg-Builds/releases/download/autobuild-2026-09-20-13-11/ffmpeg-N-126717-g150c4e9edf-linux64-gpl.tar.xz",
-          "size": 151529908,
-          "sha256": "ae89029125072aba13a9b4abe21c4df2bef5055e93d14965ae2ba2768089cbaa",
+          "url": "https://github.com/jellyfin/jellyfin-ffmpeg/releases/download/v8.1.3-1/jellyfin-ffmpeg_8.1.3-1_portable_linux64-gpl.tar.xz",
+          "size": 60368340,
+          "sha256": "b86dc023c64a5a9a410e6e3a938a970460214fae78f31c1553c9f88f1c289b6a",
           "files": [
             {
-              "archivePath": "ffmpeg-N-126717-g150c4e9edf-linux64-gpl/bin/ffmpeg",
+              "archivePath": "ffmpeg",
               "sidecar": "capptivo-ffmpeg",
-              "size": 172682344,
-              "sha256": "309cbb6e5124f4933476a9147eaddb2995eb38b4ab0cc7cc21d6c56bbb8bc6c0"
+              "size": 109525528,
+              "sha256": "79a8d05b3d26859cc5267966a5c7b711f28104c8fd4fa53db8b89e9db00106b5"
             },
             {
-              "archivePath": "ffmpeg-N-126717-g150c4e9edf-linux64-gpl/bin/ffprobe",
+              "archivePath": "ffprobe",
               "sidecar": "capptivo-ffprobe",
-              "size": 172444712,
-              "sha256": "750f17d019d762acfd8869c034ce2dae9caf3eb89e9f092840f62920a6a92e12"
+              "size": 109230488,
+              "sha256": "7b379df65bcf973ac0243c1f6b2293c850023f027aee4ec5441fde76c8db30c8"
             }
           ]
         }

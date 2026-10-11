@@ -5,12 +5,11 @@
 //! (fullscreen dim WebViews freeze Windows). Crop coords are display-local in
 //! the same space scap/WGC use for source rects.
 
+use crate::cursor::CaptureRect;
 use crate::error::{AppError, AppResult};
 #[cfg(target_os = "macos")]
 use crate::recorder::backend::picker_sources;
 use crate::recorder::types::{CaptureAreaSelection, CaptureCrop};
-#[cfg(target_os = "macos")]
-use core_graphics::display::CGDisplay;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{mpsc, Mutex};
 use tauri::{
@@ -180,7 +179,7 @@ fn virtual_desktop(app: &AppHandle) -> AppResult<VirtualDesktop> {
     #[cfg(target_os = "windows")]
     {
         let _ = app;
-        return windows_virtual_desktop();
+        windows_virtual_desktop()
     }
     #[cfg(not(target_os = "windows"))]
     {
@@ -266,30 +265,34 @@ fn resolve_selection(
         )));
     }
 
-    let cx = x + width / 2.0;
-    let cy = y + height / 2.0;
+    let area = CaptureRect {
+        x,
+        y,
+        width,
+        height,
+    };
 
     #[cfg(target_os = "windows")]
     {
         let _ = app;
-        return resolve_selection_windows(cx, cy, x, y, width, height, MIN);
+        resolve_selection_windows(&area, MIN)
     }
     #[cfg(target_os = "macos")]
     {
-        resolve_selection_tauri(app, cx, cy, x, y, width, height, MIN)
+        resolve_selection_tauri(app, &area, MIN)
     }
 }
 
 #[cfg(target_os = "windows")]
-fn resolve_selection_windows(
-    cx: f64,
-    cy: f64,
-    x: f64,
-    y: f64,
-    width: f64,
-    height: f64,
-    min: f64,
-) -> AppResult<CaptureAreaSelection> {
+fn resolve_selection_windows(area: &CaptureRect, min: f64) -> AppResult<CaptureAreaSelection> {
+    let CaptureRect {
+        x,
+        y,
+        width,
+        height,
+    } = *area;
+    let cx = x + width / 2.0;
+    let cy = y + height / 2.0;
     for (id, mx, my, mw, mh) in windows_logical_monitors() {
         if cx < mx || cx >= mx + mw || cy < my || cy >= my + mh {
             continue;
@@ -349,14 +352,17 @@ fn resolve_selection_windows(
 #[cfg(target_os = "macos")]
 fn resolve_selection_tauri(
     app: &AppHandle,
-    cx: f64,
-    cy: f64,
-    x: f64,
-    y: f64,
-    width: f64,
-    height: f64,
+    area: &CaptureRect,
     min: f64,
 ) -> AppResult<CaptureAreaSelection> {
+    let CaptureRect {
+        x,
+        y,
+        width,
+        height,
+    } = *area;
+    let cx = x + width / 2.0;
+    let cy = y + height / 2.0;
     let monitors = app
         .available_monitors()
         .map_err(|e| AppError::Other(format!("monitors: {e}")))?;
@@ -372,7 +378,12 @@ fn resolve_selection_tauri(
             continue;
         }
 
-        let source_id = match_display_source(mx, my, mw, mh)?;
+        let source_id = match_display_source(&CaptureRect {
+            x: mx,
+            y: my,
+            width: mw,
+            height: mh,
+        })?;
         let mut crop_x = x - mx;
         let mut crop_y = y - my;
         let mut crop_w = width;
@@ -428,20 +439,10 @@ fn resolve_selection_tauri(
 /// Map a logical monitor rect (Tauri space) to the backend's `display:{id}`
 /// source id. macOS only — Windows resolve walks Win32 monitors directly.
 #[cfg(target_os = "macos")]
-fn match_display_source(mx: f64, my: f64, mw: f64, mh: f64) -> AppResult<String> {
+fn match_display_source(monitor: &CaptureRect) -> AppResult<String> {
     let mut best: Option<(u32, f64)> = None;
     for (id, _) in picker_sources::list_displays()? {
-        let b = CGDisplay::new(id).bounds();
-        let overlap = rect_overlap(
-            mx,
-            my,
-            mw,
-            mh,
-            b.origin.x,
-            b.origin.y,
-            b.size.width,
-            b.size.height,
-        );
+        let overlap = picker_sources::rect_overlap(monitor, &picker_sources::display_bounds(id));
         if overlap > 0.0 {
             let prev = best.map(|(_, o)| o).unwrap_or(0.0);
             if overlap > prev {
@@ -457,16 +458,6 @@ fn match_display_source(mx: f64, my: f64, mw: f64, mh: f64) -> AppResult<String>
 #[cfg(target_os = "windows")]
 fn windows_logical_monitors() -> Vec<(isize, f64, f64, f64, f64)> {
     crate::recorder::backend::win_preview::logical_monitors()
-}
-
-fn rect_overlap(ax: f64, ay: f64, aw: f64, ah: f64, bx: f64, by: f64, bw: f64, bh: f64) -> f64 {
-    let x0 = ax.max(bx);
-    let y0 = ay.max(by);
-    let x1 = (ax + aw).min(bx + bw);
-    let y1 = (ay + ah).min(by + bh);
-    let w = (x1 - x0).max(0.0);
-    let h = (y1 - y0).max(0.0);
-    w * h
 }
 
 /// Click-through border around the crop. Sized to the selection only — a
@@ -646,20 +637,6 @@ fn frame_guide_bounds(x: f64, y: f64, width: f64, height: f64) -> FrameBounds {
     }
 }
 
-#[cfg(test)]
-mod frame_guide_tests {
-    use super::{frame_guide_bounds, FRAME_OUTSET};
-
-    #[test]
-    fn frame_guide_outsets_the_crop() {
-        let b = frame_guide_bounds(100.0, 200.0, 640.0, 360.0);
-        assert!((b.x - (100.0 - FRAME_OUTSET)).abs() < f64::EPSILON);
-        assert!((b.y - (200.0 - FRAME_OUTSET)).abs() < f64::EPSILON);
-        assert!((b.width - (640.0 + FRAME_OUTSET * 2.0)).abs() < f64::EPSILON);
-        assert!((b.height - (360.0 + FRAME_OUTSET * 2.0)).abs() < f64::EPSILON);
-    }
-}
-
 #[cfg(target_os = "windows")]
 fn monitor_origin_for_source(_app: &AppHandle, source_id: &str) -> AppResult<(f64, f64)> {
     let Some(("display", id_str)) = source_id.split_once(':') else {
@@ -687,7 +664,7 @@ fn monitor_origin_for_source(app: &AppHandle, source_id: &str) -> AppResult<(f64
     let display_id: u32 = id_str
         .parse()
         .map_err(|_| AppError::InvalidSource(format!("bad display id: {id_str}")))?;
-    let b = CGDisplay::new(display_id).bounds();
+    let display = picker_sources::display_bounds(display_id);
 
     let monitors = app
         .available_monitors()
@@ -700,16 +677,13 @@ fn monitor_origin_for_source(app: &AppHandle, source_id: &str) -> AppResult<(f64
         let my = m.position().y as f64 / scale;
         let mw = m.size().width as f64 / scale;
         let mh = m.size().height as f64 / scale;
-        let overlap = rect_overlap(
-            mx,
-            my,
-            mw,
-            mh,
-            b.origin.x,
-            b.origin.y,
-            b.size.width,
-            b.size.height,
-        );
+        let monitor = CaptureRect {
+            x: mx,
+            y: my,
+            width: mw,
+            height: mh,
+        };
+        let overlap = picker_sources::rect_overlap(&monitor, &display);
         if overlap > 0.0 {
             let prev = best.map(|(_, _, o)| o).unwrap_or(0.0);
             if overlap > prev {
@@ -720,4 +694,18 @@ fn monitor_origin_for_source(app: &AppHandle, source_id: &str) -> AppResult<(f64
 
     best.map(|(mx, my, _)| (mx, my))
         .ok_or_else(|| AppError::InvalidSource("no monitor for display".into()))
+}
+
+#[cfg(test)]
+mod frame_guide_tests {
+    use super::{frame_guide_bounds, FRAME_OUTSET};
+
+    #[test]
+    fn frame_guide_outsets_the_crop() {
+        let b = frame_guide_bounds(100.0, 200.0, 640.0, 360.0);
+        assert!((b.x - (100.0 - FRAME_OUTSET)).abs() < f64::EPSILON);
+        assert!((b.y - (200.0 - FRAME_OUTSET)).abs() < f64::EPSILON);
+        assert!((b.width - (640.0 + FRAME_OUTSET * 2.0)).abs() < f64::EPSILON);
+        assert!((b.height - (360.0 + FRAME_OUTSET * 2.0)).abs() < f64::EPSILON);
+    }
 }

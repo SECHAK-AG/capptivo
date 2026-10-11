@@ -186,10 +186,8 @@ async fn run_check(app: &AppHandle, prompt: Prompt) -> Result<(), String> {
         if let Ok(mut slot) = PENDING.lock() {
             *slot = None;
         }
-        if prompt == Prompt::Interactive {
-            if !emit_status(app, &UpdateStatusPayload::UpToDate) {
-                notify(app, "Capptivo is up to date.", MessageDialogKind::Info);
-            }
+        if prompt == Prompt::Interactive && !emit_status(app, &UpdateStatusPayload::UpToDate) {
+            notify(app, "Capptivo is up to date.", MessageDialogKind::Info);
         }
         return Ok(());
     };
@@ -271,11 +269,10 @@ async fn run_install(app: &AppHandle) -> Result<(), String> {
                     downloaded = downloaded.saturating_add(chunk as u64);
                     // Throttle: ≥100ms, or a whole percent tick when total is known.
                     let pct = total.map(|t| {
-                        if t == 0 {
-                            0
-                        } else {
-                            ((downloaded.saturating_mul(100)) / t).min(100) as u8
-                        }
+                        downloaded
+                            .saturating_mul(100)
+                            .checked_div(t)
+                            .map_or(0, |pct| pct.min(100) as u8)
                     });
                     let due = first
                         || last_emit.elapsed() >= Duration::from_millis(100)

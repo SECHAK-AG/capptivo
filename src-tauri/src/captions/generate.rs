@@ -201,7 +201,7 @@ fn parse_silence_stderr(stderr: &str) -> Vec<SilenceInterval> {
         if let Some(cap) = line
             .split("silence_start:")
             .nth(1)
-            .and_then(|s| s.trim().split_whitespace().next())
+            .and_then(|s| s.split_whitespace().next())
         {
             if let Ok(secs) = cap.parse::<f64>() {
                 pending_start = Some((secs.max(0.0) * 1000.0).round() as u64);
@@ -211,7 +211,7 @@ fn parse_silence_stderr(stderr: &str) -> Vec<SilenceInterval> {
         if let Some(cap) = line
             .split("silence_end:")
             .nth(1)
-            .and_then(|s| s.trim().split_whitespace().next())
+            .and_then(|s| s.split_whitespace().next())
         {
             if let (Some(start), Ok(secs)) = (pending_start, cap.parse::<f64>()) {
                 let end = (secs * 1000.0).round() as u64;

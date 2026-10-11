@@ -465,12 +465,15 @@ fn set_follows_spaces(_win: &tauri::WebviewWindow, _follows: bool) {}
 /// listed (title-based matching used to collide with the HUD's `"Capptivo"`
 /// title and black out fullscreen shells). Invisible exclusion requires Windows
 /// 10 version 2004, build 19041 or later.
-#[cfg(any(target_os = "macos", target_os = "windows"))]
+#[cfg(any(
+    all(target_os = "macos", feature = "scap-capture"),
+    target_os = "windows"
+))]
 const CAPTURE_EXCLUDED_LABELS: &[&str] = &[RECORDER_LABEL, CAMERA_LABEL, "area-frame"];
 
 /// macOS: CGWindowIDs (`NSWindow.windowNumber`) for SCK `excluded_targets`.
 /// Prefer this over window *titles* — titles change (library `setTitle`, rename).
-#[cfg(target_os = "macos")]
+#[cfg(all(target_os = "macos", feature = "scap-capture"))]
 pub fn overlay_cgwindow_ids(app: &AppHandle) -> Vec<u32> {
     use objc::runtime::Object;
     use objc::{msg_send, sel, sel_impl};
@@ -555,7 +558,7 @@ fn apply_display_affinity(
             "failed to access the `{label}` window handle: {e}"
         ))
     })?;
-    let hwnd = HWND(hwnd.0 as *mut std::ffi::c_void);
+    let hwnd = HWND(hwnd.0);
     unsafe { SetWindowDisplayAffinity(hwnd, affinity) }.map_err(|e| {
         tauri::Error::Anyhow(anyhow::anyhow!(
             "failed to set display affinity for `{label}`: {e}"
@@ -737,12 +740,6 @@ fn apply_overlay_spaces(win: &tauri::WebviewWindow) {
     }
 }
 
-#[cfg(not(target_os = "macos"))]
-fn enable_native_fullscreen(_win: &tauri::WebviewWindow) {}
-
-#[cfg(not(target_os = "macos"))]
-fn apply_overlay_spaces(_win: &tauri::WebviewWindow) {}
-
 /// Current mouse location in global top-left coordinates (same space as Tauri
 /// window positions), if CoreGraphics will give it to us.
 #[cfg(target_os = "macos")]
@@ -921,6 +918,10 @@ fn sync_dock_policy(
 }
 
 /// Show the recorder bar after a full-screen overlay (area pick) and pin to all Spaces.
+#[cfg(any(
+    all(target_os = "macos", feature = "scap-capture"),
+    all(target_os = "windows", feature = "wgc-capture")
+))]
 pub(crate) fn reveal_recorder_bar(app: &AppHandle) {
     let _ = show_recorder_popover(app);
 }
@@ -940,6 +941,10 @@ pub(crate) fn reveal_recorder_bar(app: &AppHandle) {
 ///
 /// No-ops while capture is active — yanking focus mid-recording would be
 /// visible in the recording itself — and when the bar is hidden.
+#[cfg(any(
+    all(target_os = "macos", feature = "scap-capture"),
+    all(target_os = "windows", feature = "wgc-capture")
+))]
 pub(crate) fn focus_recorder_bar(app: &AppHandle) {
     if recorder_capture_active(app) {
         return;

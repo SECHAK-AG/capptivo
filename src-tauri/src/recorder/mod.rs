@@ -287,8 +287,6 @@ impl RecorderController {
                         message,
                         fatal: true,
                     });
-                } else if artifacts.interrupted {
-                    self.set_state(RecorderState::Idle);
                 } else {
                     self.set_state(RecorderState::Idle);
                 }
@@ -1012,7 +1010,10 @@ fn fill_repeats(ts_secs: f64, fps: u32, next_index: u64, max_fill: u64) -> u64 {
 /// agree on what a slot is — see [`capture_slot_gate`].
 // Called only from the Windows capture backend. Elsewhere the tests below are
 // its only caller, which `dead_code` analysis does not count.
-#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
+#[cfg_attr(
+    not(all(target_os = "windows", feature = "wgc-capture")),
+    allow(dead_code)
+)]
 fn frame_slot(ts_secs: f64, fps: u32) -> u64 {
     (ts_secs * f64::from(fps.max(1))).round().max(0.0) as u64
 }
@@ -1030,7 +1031,10 @@ fn frame_slot(ts_secs: f64, fps: u32) -> u64 {
 /// starves a slot the encoder wanted" holds only while both use the same slot
 /// arithmetic, so the two functions must be edited together.
 // Called only from the Windows capture backend — see `frame_slot`.
-#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
+#[cfg_attr(
+    not(all(target_os = "windows", feature = "wgc-capture")),
+    allow(dead_code)
+)]
 pub(crate) fn capture_slot_gate(ts_secs: f64, fps: u32, next_slot: u64) -> Option<u64> {
     let slot = frame_slot(ts_secs, fps);
     if slot < next_slot {
@@ -1307,7 +1311,7 @@ mod tests {
         let stride = w * 4;
         let mut buf = vec![8u8; (stride * h) as usize];
         // Opaque alpha
-        for px in buf.chunks_exact_mut(4) {
+        for px in buf.as_chunks_mut::<4>().0 {
             px[3] = 255;
         }
         assert!(is_capture_warmup_black(&buf, w, h, stride));

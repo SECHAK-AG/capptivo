@@ -310,8 +310,10 @@ mod tests {
         ];
         let out = super::interleave_planar_f32(buffers).unwrap();
         let samples: Vec<f32> = out
-            .chunks_exact(4)
-            .map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]]))
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .map(|&c| f32::from_le_bytes(c))
             .collect();
         assert_eq!(samples, vec![1.0, 3.0, 2.0, 4.0]);
     }

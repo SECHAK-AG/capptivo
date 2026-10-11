@@ -34,6 +34,10 @@ const OUTPUT_TYPE_SCREEN: u8 = 0;
 /// How long `start()` waits for the first frame before failing window capture.
 pub const FIRST_FRAME_TIMEOUT: Duration = Duration::from_secs(10);
 
+/// First-frame signal: the stream's pixel size, the capture epoch, and that
+/// epoch on the host clock (ns), or why capture could not start.
+pub type CaptureReady = AppResult<([u32; 2], Instant, u64)>;
+
 struct QuietErrors;
 impl UnsafeSCStreamError for QuietErrors {
     fn handle_error(&self) {
@@ -43,18 +47,14 @@ impl UnsafeSCStreamError for QuietErrors {
 
 /// Fires once with the pixel size of the first complete frame (encoder contract).
 struct ReadyGate {
-    tx: Mutex<Option<Sender<AppResult<([u32; 2], Instant, u64)>>>>,
+    tx: Mutex<Option<Sender<CaptureReady>>>,
     epoch: Instant,
     epoch_host_ns: u64,
     done: AtomicBool,
 }
 
 impl ReadyGate {
-    fn new(
-        tx: Sender<AppResult<([u32; 2], Instant, u64)>>,
-        epoch: Instant,
-        epoch_host_ns: u64,
-    ) -> Self {
+    fn new(tx: Sender<CaptureReady>, epoch: Instant, epoch_host_ns: u64) -> Self {
         Self {
             tx: Mutex::new(Some(tx)),
             epoch,
@@ -130,7 +130,7 @@ pub fn run_window_capture(
     stop: Arc<AtomicBool>,
     dropped: Arc<AtomicU64>,
     tx: Sender<RawFrame>,
-    ready: Sender<AppResult<([u32; 2], Instant, u64)>>,
+    ready: Sender<CaptureReady>,
 ) {
     if let Err(e) = run_window_capture_inner(window_id, fps, stop, dropped, tx, ready.clone()) {
         let _ = ready.send(Err(e));
@@ -143,7 +143,7 @@ fn run_window_capture_inner(
     stop: Arc<AtomicBool>,
     dropped: Arc<AtomicU64>,
     tx: Sender<RawFrame>,
-    ready: Sender<AppResult<([u32; 2], Instant, u64)>>,
+    ready: Sender<CaptureReady>,
 ) -> AppResult<()> {
     let content = picker_sources::shareable_content_on_screen()
         .map_err(|e| AppError::Other(format!("SCShareableContent: {e}")))?;

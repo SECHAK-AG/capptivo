@@ -134,8 +134,8 @@ fn download_file(app: &AppHandle, temp: &Path, dest: &Path) -> AppResult<()> {
         }
         hasher.update(&buf[..n]);
         downloaded += n as u64;
-        if total > 0 {
-            let pct = ((downloaded * 100) / total).min(100) as u8;
+        if let Some(pct) = (downloaded * 100).checked_div(total) {
+            let pct = pct.min(100) as u8;
             if pct >= last_pct.saturating_add(2) || pct == 100 {
                 last_pct = pct;
                 emit_progress(

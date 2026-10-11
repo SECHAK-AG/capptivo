@@ -153,7 +153,7 @@ fn rasterize_cursor(file: &str, hotspot: (f64, f64), invert: bool) -> Result<Gly
 
 /// `255 − c` on the straight colour of every visible pixel, kept premultiplied.
 fn invert_premultiplied(rgba: &mut [u8]) {
-    for px in rgba.chunks_exact_mut(4) {
+    for px in rgba.as_chunks_mut::<4>().0 {
         let a = u32::from(px[3]);
         if a == 0 {
             continue;

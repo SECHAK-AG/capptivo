@@ -11,10 +11,7 @@ use crate::recorder::hw_encoder;
 use std::io::{BufRead, BufWriter, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Child, ChildStderr, ChildStdin, Stdio};
-use std::sync::{
-    atomic::{AtomicU8, Ordering},
-    Arc, Mutex,
-};
+use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
@@ -43,7 +40,7 @@ impl RawvideoStreamEncoder {
         fps: u32,
         bitrate: u32,
     ) -> AppResult<Self> {
-        if width < 2 || height < 2 || width % 2 != 0 || height % 2 != 0 {
+        if width < 2 || height < 2 || !width.is_multiple_of(2) || !height.is_multiple_of(2) {
             return Err(AppError::Encoder(format!(
                 "rawvideo export requires even dimensions ≥2 (got {width}x{height})"
             )));
@@ -234,15 +231,6 @@ impl RawvideoStreamEncoder {
             .clone()
     }
 
-    pub fn kill_handle(&self) -> KillHandle {
-        let child = Arc::clone(&self.child);
-        Arc::new(move || {
-            if let Ok(mut child) = child.lock() {
-                let _ = child.kill();
-            }
-        })
-    }
-
     fn kill_child(&self) {
         if let Ok(mut child) = self.child.lock() {
             let _ = child.kill();
@@ -264,108 +252,6 @@ impl Drop for RawvideoStreamEncoder {
             }
         }
         let _ = std::fs::remove_file(&self.temp_path);
-    }
-}
-
-pub type KillHandle = Arc<dyn Fn() + Send + Sync>;
-
-const SESSION_RUNNING: u8 = 0;
-const SESSION_FINISHING: u8 = 1;
-const SESSION_FINISHED: u8 = 2;
-const SESSION_ABORTING: u8 = 3;
-const SESSION_ABORTED: u8 = 4;
-
-/// Thread-safe ownership wrapper for a raw-video encoder. Keeping the session
-/// in the command map while a pipe write blocks lets cancellation kill the
-/// child without a remove/reinsert race.
-pub struct RawvideoExportSession {
-    encoder: Mutex<Option<RawvideoStreamEncoder>>,
-    kill: KillHandle,
-    state: AtomicU8,
-}
-
-impl RawvideoExportSession {
-    pub fn new(encoder: RawvideoStreamEncoder) -> Self {
-        let kill = encoder.kill_handle();
-        Self {
-            encoder: Mutex::new(Some(encoder)),
-            kill,
-            state: AtomicU8::new(SESSION_RUNNING),
-        }
-    }
-
-    pub fn write_frame(&self, frame: &[u8]) -> AppResult<()> {
-        let state = self.state.load(Ordering::Acquire);
-        if state != SESSION_RUNNING && state != SESSION_FINISHING {
-            return Err(AppError::Other(
-                "rawvideo export is no longer running".into(),
-            ));
-        }
-        let mut encoder = self
-            .encoder
-            .lock()
-            .map_err(|_| AppError::Other("rawvideo export lock poisoned".into()))?;
-        let result = encoder
-            .as_mut()
-            .ok_or_else(|| AppError::Other("rawvideo export session is closed".into()))?
-            .write_frame(frame);
-        let state = self.state.load(Ordering::Acquire);
-        if state == SESSION_ABORTING || state == SESSION_ABORTED {
-            if let Some(encoder) = encoder.take() {
-                encoder.abort();
-            }
-            return Err(AppError::Other("rawvideo export cancelled".into()));
-        }
-        result
-    }
-
-    pub fn finish(&self) -> AppResult<PathBuf> {
-        self.state
-            .compare_exchange(
-                SESSION_RUNNING,
-                SESSION_FINISHING,
-                Ordering::AcqRel,
-                Ordering::Acquire,
-            )
-            .map_err(|_| AppError::Other("rawvideo export already finalized".into()))?;
-        let encoder = self
-            .encoder
-            .lock()
-            .map_err(|_| AppError::Other("rawvideo export lock poisoned".into()))?
-            .take()
-            .ok_or_else(|| AppError::Other("rawvideo export session is closed".into()))?;
-        let result = encoder.finish();
-        self.state.store(
-            if result.is_ok() {
-                SESSION_FINISHED
-            } else {
-                SESSION_ABORTED
-            },
-            Ordering::Release,
-        );
-        result
-    }
-
-    pub fn abort(&self) {
-        if self
-            .state
-            .compare_exchange(
-                SESSION_RUNNING,
-                SESSION_ABORTING,
-                Ordering::AcqRel,
-                Ordering::Acquire,
-            )
-            .is_err()
-        {
-            return;
-        }
-        (self.kill)();
-        if let Ok(mut encoder) = self.encoder.lock() {
-            if let Some(encoder) = encoder.take() {
-                encoder.abort();
-            }
-        }
-        self.state.store(SESSION_ABORTED, Ordering::Release);
     }
 }
 

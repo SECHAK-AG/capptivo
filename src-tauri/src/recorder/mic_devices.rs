@@ -49,7 +49,7 @@ fn list_microphones_impl() -> Vec<MicrophoneDevice> {
 
         out.push(MicrophoneDevice { device_id, label });
     }
-    out.sort_by(|a, b| a.label.to_lowercase().cmp(&b.label.to_lowercase()));
+    out.sort_by_cached_key(|d| d.label.to_lowercase());
     out
 }
 

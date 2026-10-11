@@ -10,10 +10,7 @@ use crate::recorder::encoder::ffmpeg_path;
 use std::io::{BufRead, BufWriter, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Child, ChildStderr, ChildStdin, Stdio};
-use std::sync::{
-    atomic::{AtomicU8, Ordering},
-    Arc, Mutex,
-};
+use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
@@ -196,15 +193,6 @@ impl H264StreamMuxer {
             .clone()
     }
 
-    pub fn kill_handle(&self) -> KillHandle {
-        let child = Arc::clone(&self.child);
-        Arc::new(move || {
-            if let Ok(mut child) = child.lock() {
-                let _ = child.kill();
-            }
-        })
-    }
-
     fn kill_child(&self) {
         if let Ok(mut child) = self.child.lock() {
             let _ = child.kill();
@@ -226,106 +214,6 @@ impl Drop for H264StreamMuxer {
             }
         }
         let _ = std::fs::remove_file(&self.temp_path);
-    }
-}
-
-pub type KillHandle = Arc<dyn Fn() + Send + Sync>;
-
-const SESSION_RUNNING: u8 = 0;
-const SESSION_FINISHING: u8 = 1;
-const SESSION_FINISHED: u8 = 2;
-const SESSION_ABORTING: u8 = 3;
-const SESSION_ABORTED: u8 = 4;
-
-/// Thread-safe ownership wrapper for a stream muxer. The muxer stays discoverable
-/// while a blocking pipe write is in progress, so abort can kill its child
-/// without racing a remove/reinsert operation in the Tauri command map.
-pub struct H264ExportSession {
-    muxer: Mutex<Option<H264StreamMuxer>>,
-    kill: KillHandle,
-    state: AtomicU8,
-}
-
-impl H264ExportSession {
-    pub fn new(muxer: H264StreamMuxer) -> Self {
-        let kill = muxer.kill_handle();
-        Self {
-            muxer: Mutex::new(Some(muxer)),
-            kill,
-            state: AtomicU8::new(SESSION_RUNNING),
-        }
-    }
-
-    pub fn write_chunk(&self, chunk: &[u8]) -> AppResult<()> {
-        let state = self.state.load(Ordering::Acquire);
-        if state != SESSION_RUNNING && state != SESSION_FINISHING {
-            return Err(AppError::Other("h264 export is no longer running".into()));
-        }
-        let mut muxer = self
-            .muxer
-            .lock()
-            .map_err(|_| AppError::Other("h264 export lock poisoned".into()))?;
-        let result = muxer
-            .as_mut()
-            .ok_or_else(|| AppError::Other("h264 export session is closed".into()))?
-            .write_chunk(chunk);
-        let state = self.state.load(Ordering::Acquire);
-        if state == SESSION_ABORTING || state == SESSION_ABORTED {
-            if let Some(muxer) = muxer.take() {
-                muxer.abort();
-            }
-            return Err(AppError::Other("h264 export cancelled".into()));
-        }
-        result
-    }
-
-    pub fn finish(&self) -> AppResult<PathBuf> {
-        self.state
-            .compare_exchange(
-                SESSION_RUNNING,
-                SESSION_FINISHING,
-                Ordering::AcqRel,
-                Ordering::Acquire,
-            )
-            .map_err(|_| AppError::Other("h264 export already finalized".into()))?;
-        let muxer = self
-            .muxer
-            .lock()
-            .map_err(|_| AppError::Other("h264 export lock poisoned".into()))?
-            .take()
-            .ok_or_else(|| AppError::Other("h264 export session is closed".into()))?;
-        let result = muxer.finish();
-        self.state.store(
-            if result.is_ok() {
-                SESSION_FINISHED
-            } else {
-                SESSION_ABORTED
-            },
-            Ordering::Release,
-        );
-        result
-    }
-
-    pub fn abort(&self) {
-        if self
-            .state
-            .compare_exchange(
-                SESSION_RUNNING,
-                SESSION_ABORTING,
-                Ordering::AcqRel,
-                Ordering::Acquire,
-            )
-            .is_err()
-        {
-            return;
-        }
-        (self.kill)();
-        if let Ok(mut muxer) = self.muxer.lock() {
-            if let Some(muxer) = muxer.take() {
-                muxer.abort();
-            }
-        }
-        self.state.store(SESSION_ABORTED, Ordering::Release);
     }
 }
 

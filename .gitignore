@@ -31,4 +31,3 @@ src-tauri/binaries/
 src-tauri/.updater-keys/
 .pnpm-store
 .agents
-.crewhandle

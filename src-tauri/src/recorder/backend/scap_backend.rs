@@ -142,8 +142,7 @@ impl CaptureBackend for ScapBackend {
         };
 
         let (tx, rx) = crossbeam_channel::bounded::<RawFrame>(CAPTURE_CHANNEL_CAP);
-        let (meta_tx, meta_rx) =
-            crossbeam_channel::bounded::<AppResult<([u32; 2], Instant, u64)>>(1);
+        let (meta_tx, meta_rx) = crossbeam_channel::bounded::<sck_window::CaptureReady>(1);
         let stop_flag = Arc::new(AtomicBool::new(false));
         let dropped = Arc::new(AtomicU64::new(0));
 

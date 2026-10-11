@@ -68,8 +68,8 @@ jobs:
       - name: Check formatting
         run: cargo fmt --all --manifest-path src-tauri/Cargo.toml -- --check
 
-      - name: Check Rust with Clippy (warnings advisory)
-        run: cargo clippy --manifest-path src-tauri/Cargo.toml --locked --no-default-features --all-targets
+      - name: Check Rust with Clippy
+        run: cargo clippy --manifest-path src-tauri/Cargo.toml --locked --no-default-features --all-targets -- -D warnings
 
       - name: Test Rust
         run: cargo test --manifest-path src-tauri/Cargo.toml --locked --no-default-features

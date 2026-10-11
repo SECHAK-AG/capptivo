@@ -158,11 +158,11 @@ fn make_backend(app: &AppHandle) -> Box<dyn CaptureBackend> {
     {
         use crate::recorder::backend::{AvfDeviceBackend, RoutingBackend, DEVICE_ID_PREFIX};
         let device = Box::new(AvfDeviceBackend::new());
-        return Box::new(RoutingBackend::new(
+        Box::new(RoutingBackend::new(
             make_screen_backend(app),
             device,
             DEVICE_ID_PREFIX,
-        ));
+        ))
     }
     #[cfg(not(target_os = "macos"))]
     make_screen_backend(app)

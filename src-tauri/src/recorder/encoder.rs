@@ -1123,7 +1123,7 @@ pub(crate) fn pcm_pad_bytes(
     sample_rate: u32,
     channels: u16,
 ) -> usize {
-    if !(timeline_secs > 0.0) || sample_rate == 0 || channels == 0 {
+    if timeline_secs.is_nan() || timeline_secs <= 0.0 || sample_rate == 0 || channels == 0 {
         return 0;
     }
     let frame = channels as u64 * 4;

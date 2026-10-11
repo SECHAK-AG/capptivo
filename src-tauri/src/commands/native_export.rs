@@ -300,8 +300,8 @@ fn validate_job_id(job: &str) -> AppResult<()> {
 fn validate_output(width: u32, height: u32, fps: u32) -> AppResult<()> {
     if width == 0
         || height == 0
-        || width % 4 != 0
-        || height % 2 != 0
+        || !width.is_multiple_of(4)
+        || !height.is_multiple_of(2)
         || width > 8192
         || height > 8192
     {

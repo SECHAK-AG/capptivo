@@ -20,8 +20,8 @@ as a **separate process** (no linking into Capptivo).
 | Component | FFmpeg / ffprobe |
 | Bundled names | `capptivo-ffmpeg`, `capptivo-ffprobe` |
 | Typical license | GPL (static builds include GPL-licensed codecs such as libx264) |
-| Sources used | [BtbN/FFmpeg-Builds](https://github.com/BtbN/FFmpeg-Builds) (Windows/Linux GPL builds); [ffmpeg.martin-riedl.de](https://ffmpeg.martin-riedl.de/) (macOS) |
-| Pinned builds | [BtbN snapshot](https://github.com/BtbN/FFmpeg-Builds/releases/tag/autobuild-2026-09-20-13-11) (Windows N-126716-g3faf57342f / Linux N-126717-g150c4e9edf); Martin Riedl FFmpeg 9.0.1 (macOS) |
+| Sources used | [jellyfin/jellyfin-ffmpeg](https://github.com/jellyfin/jellyfin-ffmpeg) (Windows/Linux portable GPL builds); [ffmpeg.martin-riedl.de](https://ffmpeg.martin-riedl.de/) (macOS) |
+| Pinned builds | [jellyfin-ffmpeg 8.1.3-1](https://github.com/jellyfin/jellyfin-ffmpeg/releases/tag/v8.1.3-1) (Windows `portable_win64-clang-gpl` / Linux `portable_linux64-gpl`); Martin Riedl FFmpeg 9.0.1 (macOS) |
 | Integrity manifest | `scripts/ffmpeg-sidecars.json` (exact URLs, archive members, sizes, and SHA-256 digests) |
 | Upstream | https://ffmpeg.org/ · https://github.com/FFmpeg/FFmpeg |
 

@@ -156,8 +156,8 @@ fn png_base64(image: &CGImageRef) -> Option<String> {
     let h = image.height() as u32;
     let tw = PREVIEW_MAX_WIDTH.min(w).max(1);
     let th = ((h as u64 * tw as u64) / w as u64).max(1) as u32;
-    let stride = image.bytes_per_row() as usize;
-    let bpp = (image.bits_per_pixel() as usize / 8).max(1);
+    let stride = image.bytes_per_row();
+    let bpp = (image.bits_per_pixel() / 8).max(1);
     let data = image.data();
     let raw = data.bytes();
 

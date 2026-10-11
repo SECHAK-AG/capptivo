@@ -78,7 +78,7 @@ pub fn list(app_data: &Path) -> AppResult<Vec<CustomBackground>> {
         ));
     }
     // Newest first so a just-uploaded swatch sits near the +.
-    out.sort_by(|a, b| b.0.cmp(&a.0));
+    out.sort_by_key(|(modified, _)| std::cmp::Reverse(*modified));
     Ok(out.into_iter().map(|(_, bg)| bg).collect())
 }
 

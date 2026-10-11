@@ -46,17 +46,7 @@ pub fn display_for_rect(rect: &CaptureRect) -> Option<u32> {
     let mut best: Option<(u32, f64)> = None;
     let displays = list_displays().ok()?;
     for (id, _) in displays {
-        let b = CGDisplay::new(id).bounds();
-        let overlap = rect_overlap(
-            rect.x,
-            rect.y,
-            rect.width,
-            rect.height,
-            b.origin.x,
-            b.origin.y,
-            b.size.width,
-            b.size.height,
-        );
+        let overlap = rect_overlap(rect, &display_bounds(id));
         if overlap > 0.0 {
             let prev = best.map(|(_, o)| o).unwrap_or(0.0);
             if overlap > prev {
@@ -67,12 +57,23 @@ pub fn display_for_rect(rect: &CaptureRect) -> Option<u32> {
     best.map(|(id, _)| id)
 }
 
+/// A display's bounds in global points.
+pub fn display_bounds(display_id: u32) -> CaptureRect {
+    let b = CGDisplay::new(display_id).bounds();
+    CaptureRect {
+        x: b.origin.x,
+        y: b.origin.y,
+        width: b.size.width,
+        height: b.size.height,
+    }
+}
+
 /// Integer backing scale for a display (matches `scaleFactor(for:)`).
 pub fn display_scale_factor(display_id: u32) -> u32 {
     let cg = CGDisplay::new(display_id);
     cg.display_mode()
         .map(|m| {
-            let w = m.width().max(1) as u64;
+            let w = m.width().max(1);
             (m.pixel_width() / w).max(1) as u32
         })
         .unwrap_or(1)
@@ -95,16 +96,13 @@ pub fn display_for_window_frame(
     let mut best: Option<(u32, f64)> = None;
     for d in displays {
         let b = d.get_frame();
-        let overlap = rect_overlap(
-            frame.x,
-            frame.y,
-            frame.width,
-            frame.height,
-            b.origin.x,
-            b.origin.y,
-            b.size.width,
-            b.size.height,
-        );
+        let display = CaptureRect {
+            x: b.origin.x,
+            y: b.origin.y,
+            width: b.size.width,
+            height: b.size.height,
+        };
+        let overlap = rect_overlap(frame, &display);
         let contains_mid = frame.width > 0.0
             && frame.height > 0.0
             && b.origin.x <= frame.x + frame.width * 0.5
@@ -151,7 +149,7 @@ pub fn recordable_windows() -> AppResult<Vec<PickerWindow>> {
         })
         .collect();
 
-    windows.sort_by(|a, b| a.title.to_lowercase().cmp(&b.title.to_lowercase()));
+    windows.sort_by_cached_key(|w| w.title.to_lowercase());
     windows.dedup_by_key(|w| w.id);
     Ok(windows)
 }
@@ -262,7 +260,7 @@ fn window_is_recordable(p: WindowProbe<'_>) -> bool {
         return false;
     }
     if let Some(bundle) = p.owner_bundle {
-        if BLOCKED_OWNER_BUNDLES.iter().any(|b| *b == bundle) {
+        if BLOCKED_OWNER_BUNDLES.contains(&bundle) {
             return false;
         }
     }
@@ -306,11 +304,12 @@ fn is_system_chrome_title(title: &str) -> bool {
     ) || title.starts_with("Item-")
 }
 
-fn rect_overlap(ax: f64, ay: f64, aw: f64, ah: f64, bx: f64, by: f64, bw: f64, bh: f64) -> f64 {
-    let x0 = ax.max(bx);
-    let y0 = ay.max(by);
-    let x1 = (ax + aw).min(bx + bw);
-    let y1 = (ay + ah).min(by + bh);
+/// Area where `a` and `b` intersect (0 when they don't).
+pub fn rect_overlap(a: &CaptureRect, b: &CaptureRect) -> f64 {
+    let x0 = a.x.max(b.x);
+    let y0 = a.y.max(b.y);
+    let x1 = (a.x + a.width).min(b.x + b.width);
+    let y1 = (a.y + a.height).min(b.y + b.height);
     let w = (x1 - x0).max(0.0);
     let h = (y1 - y0).max(0.0);
     w * h
@@ -412,11 +411,19 @@ mod tests {
 
     #[test]
     fn rect_overlap_picks_larger_intersection() {
-        let a = rect_overlap(0.0, 0.0, 100.0, 100.0, 50.0, 50.0, 100.0, 100.0);
-        let b = rect_overlap(0.0, 0.0, 100.0, 100.0, 200.0, 200.0, 10.0, 10.0);
+        let rect = |x, y, width, height| CaptureRect {
+            x,
+            y,
+            width,
+            height,
+        };
+        let window = rect(0.0, 0.0, 100.0, 100.0);
+        let a = rect_overlap(&window, &rect(50.0, 50.0, 100.0, 100.0));
+        let b = rect_overlap(&window, &rect(200.0, 200.0, 10.0, 10.0));
         assert!(a > b);
+        assert_eq!(a, 2500.0);
         assert_eq!(
-            rect_overlap(0.0, 0.0, 10.0, 10.0, 100.0, 100.0, 10.0, 10.0),
+            rect_overlap(&rect(0.0, 0.0, 10.0, 10.0), &rect(100.0, 100.0, 10.0, 10.0)),
             0.0
         );
     }

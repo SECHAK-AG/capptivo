@@ -126,7 +126,7 @@ pub fn run() {
             // fullscreen + green expand arrows need Regular) and back
             // when the last closes.
             #[cfg(target_os = "macos")]
-            let _ = app.set_activation_policy(tauri::ActivationPolicy::Accessory);
+            app.set_activation_policy(tauri::ActivationPolicy::Accessory);
 
             Ok(())
         })

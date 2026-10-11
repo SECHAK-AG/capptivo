@@ -13,6 +13,7 @@ use std::time::{Duration, Instant};
 const W: u32 = 640;
 const H: u32 = 360;
 
+#[derive(Default)]
 pub struct TestPatternBackend {
     /// If set, the producer stops after this many frames (keeps tests bounded).
     /// Dropping the sender disconnects the channel, which the encode loop reads
@@ -28,16 +29,6 @@ pub struct TestPatternBackend {
     /// hands over an unpainted surface before the source draws anything — the
     /// frames `is_capture_warmup_black` is meant to skip.
     pub black_frames: u64,
-}
-
-impl Default for TestPatternBackend {
-    fn default() -> Self {
-        Self {
-            max_frames: None,
-            quiet_after: None,
-            black_frames: 0,
-        }
-    }
 }
 
 impl CaptureBackend for TestPatternBackend {
@@ -121,7 +112,7 @@ impl CaptureBackend for TestPatternBackend {
 fn render_black_frame(elapsed: Duration) -> RawFrame {
     let bytes_per_row = W * 4;
     let mut data = vec![0u8; (bytes_per_row * H) as usize];
-    for px in data.chunks_exact_mut(4) {
+    for px in data.as_chunks_mut::<4>().0 {
         px[3] = 255; // opaque black
     }
     RawFrame {
