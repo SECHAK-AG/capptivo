@@ -68,7 +68,7 @@
   },
   "plugins": {
     "updater": {
-      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IERCNkIxQTkxRjJFQjVDOTUKUldTVlhPdnlrUnByMjE4aVBENFNhV0Q5aWtaMjZzRHFGdlBNMUVkRVBadlBJNFN4SHFUQW0wWkkK",
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDk2NzE1QjVBMkRGRDlCODUKUldTRm0vMHRXbHR4bHRDaXhZWkhBNHJ3OUJ0bklDOE5BL2dZbHZiZU8zeXh3UnIxYVkzalIrcUcK",
       "endpoints": [
         "https://github.com/SECHAK-AG/capptivo/releases/latest/download/latest.json"
       ]
