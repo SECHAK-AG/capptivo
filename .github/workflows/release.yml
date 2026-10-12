@@ -436,8 +436,22 @@ jobs:
           }
 
           test "$(resolve_tag)" = "$RELEASE_SHA"
-          if release=$(gh api "repos/$RELEASE_REPOSITORY/releases/tags/$RELEASE_TAG" 2>/dev/null); then
-            test "$(jq -r '.draft' <<<"$release")" = "true"
+
+          releases=$(gh release list \
+            --repo "$RELEASE_REPOSITORY" \
+            --limit 1000 \
+            --json databaseId,tagName,isDraft)
+          matches=$(jq -c --arg tag "$RELEASE_TAG" '[.[] | select(.tagName == $tag)]' <<<"$releases")
+          match_count=$(jq 'length' <<<"$matches")
+          if [[ "$match_count" -gt 1 ]]; then
+            echo "multiple GitHub releases found for $RELEASE_TAG" >&2
+            exit 1
+          elif [[ "$match_count" -eq 1 ]]; then
+            if [[ "$(jq -r '.[0].isDraft' <<<"$matches")" != "true" ]]; then
+              echo "GitHub release $RELEASE_TAG is already published" >&2
+              exit 1
+            fi
+            release_id=$(jq -r '.[0].databaseId' <<<"$matches")
           else
             gh release create "$RELEASE_TAG" \
               --repo "$RELEASE_REPOSITORY" \
@@ -445,9 +459,41 @@ jobs:
               --draft \
               --title "Capptivo $RELEASE_TAG" \
               --notes-file release-notes.md
-            release=$(gh api "repos/$RELEASE_REPOSITORY/releases/tags/$RELEASE_TAG")
+
+            release_id=""
+            for attempt in {1..10}; do
+              releases=$(gh release list \
+                --repo "$RELEASE_REPOSITORY" \
+                --limit 1000 \
+                --json databaseId,tagName,isDraft)
+              matches=$(jq -c --arg tag "$RELEASE_TAG" '[.[] | select(.tagName == $tag)]' <<<"$releases")
+              match_count=$(jq 'length' <<<"$matches")
+              if [[ "$match_count" -eq 1 ]]; then
+                if [[ "$(jq -r '.[0].isDraft' <<<"$matches")" != "true" ]]; then
+                  echo "GitHub release $RELEASE_TAG was published unexpectedly" >&2
+                  exit 1
+                fi
+                release_id=$(jq -r '.[0].databaseId' <<<"$matches")
+                break
+              fi
+              if [[ "$match_count" -gt 1 ]]; then
+                echo "multiple GitHub releases found for $RELEASE_TAG" >&2
+                exit 1
+              fi
+              sleep 2
+            done
+            if [[ -z "$release_id" ]]; then
+              echo "could not find the new draft release for $RELEASE_TAG" >&2
+              exit 1
+            fi
           fi
-          release_id=$(jq -r '.id' <<<"$release")
+
+          release=$(gh api "repos/$RELEASE_REPOSITORY/releases/$release_id")
+          test "$(jq -r '.draft' <<<"$release")" = "true"
+          test "$(jq -r '.tag_name' <<<"$release")" = "$RELEASE_TAG"
+          upload_url=$(jq -r '.upload_url' <<<"$release")
+          upload_url=${upload_url%%\{*}
+          test -n "$upload_url"
 
           gh api --paginate "repos/$RELEASE_REPOSITORY/releases/$release_id/assets?per_page=100" \
             --jq '.[].id' |
@@ -457,11 +503,26 @@ jobs:
 
           mapfile -d '' assets < <(find payload -mindepth 1 -maxdepth 1 -type f -print0 | sort -z)
           test "${#assets[@]}" -gt 0
-          gh release upload "$RELEASE_TAG" "${assets[@]}" --repo "$RELEASE_REPOSITORY"
+          for asset in "${assets[@]}"; do
+            asset_name=${asset##*/}
+            encoded_name=$(jq -rn --arg name "$asset_name" '$name | @uri')
+            gh api \
+              --method POST \
+              --header "Content-Type: application/octet-stream" \
+              --input "$asset" \
+              "$upload_url?name=$encoded_name" >/dev/null
+          done
 
           rm -rf remote-assets
           mkdir remote-assets
-          gh release download "$RELEASE_TAG" --repo "$RELEASE_REPOSITORY" --dir remote-assets
+          gh api --paginate "repos/$RELEASE_REPOSITORY/releases/$release_id/assets?per_page=100" \
+            --jq '.[] | [.id, .name] | @tsv' > remote-assets-list.tsv
+          while IFS=$'\t' read -r asset_id asset_name; do
+            gh api \
+              --header "Accept: application/octet-stream" \
+              --output "remote-assets/$asset_name" \
+              "repos/$RELEASE_REPOSITORY/releases/assets/$asset_id"
+          done < remote-assets-list.tsv
           diff -u \
             <(find payload -mindepth 1 -maxdepth 1 -type f -printf '%f\n' | sort) \
             <(find remote-assets -mindepth 1 -maxdepth 1 -type f -printf '%f\n' | sort)
@@ -469,10 +530,15 @@ jobs:
           (cd remote-assets && sha256sum --check --strict SHA256SUMS)
           test "$(resolve_tag)" = "$RELEASE_SHA"
 
-          gh release edit "$RELEASE_TAG" \
-            --repo "$RELEASE_REPOSITORY" \
-            --draft \
-            --title "Capptivo $RELEASE_TAG" \
-            --notes-file release-notes.md
-          test "$(gh api "repos/$RELEASE_REPOSITORY/releases/tags/$RELEASE_TAG" --jq '.draft')" = "true"
+          jq -n \
+            --arg name "Capptivo $RELEASE_TAG" \
+            --rawfile body release-notes.md \
+            '{name: $name, body: $body, draft: true}' > "$RUNNER_TEMP/release-update.json"
+          gh api \
+            --method PATCH \
+            --input "$RUNNER_TEMP/release-update.json" \
+            "repos/$RELEASE_REPOSITORY/releases/$release_id" >/dev/null
+          release=$(gh api "repos/$RELEASE_REPOSITORY/releases/$release_id")
+          test "$(jq -r '.draft' <<<"$release")" = "true"
+          test "$(jq -r '.tag_name' <<<"$release")" = "$RELEASE_TAG"
           test "$(resolve_tag)" = "$RELEASE_SHA"
