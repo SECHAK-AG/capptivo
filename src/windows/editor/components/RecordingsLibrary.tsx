@@ -15,9 +15,12 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { commands } from "@/ipc/bindings";
 import type { ProjectSummary } from "@/ipc/types";
+import type { TranslationKey } from "@/lib/i18n";
 import { useI18n } from "@/lib/settings";
 import { cn } from "@/lib/utils";
 import { mediaUrl } from "../store";
+
+type Translate = (key: TranslationKey, params?: Record<string, string | number>) => string;
 
 function formatCreatedAt(iso: string): string {
   const d = new Date(iso);
@@ -28,14 +31,18 @@ function formatCreatedAt(iso: string): string {
   }).format(d);
 }
 
-function displayTitle(p: ProjectSummary): string {
-  return p.title?.trim() || "Untitled recording";
+function displayTitle(p: ProjectSummary, t: Translate): string {
+  return p.title?.trim() || t("app.untitled");
 }
 
-function matchesNameFilter(project: ProjectSummary, query: string): boolean {
+function matchesNameFilter(
+  project: ProjectSummary,
+  query: string,
+  t: Translate,
+): boolean {
   const needle = query.trim().toLowerCase();
   if (!needle) return true;
-  return displayTitle(project).toLowerCase().includes(needle);
+  return displayTitle(project, t).toLowerCase().includes(needle);
 }
 
 /** Poster from `thumbnail.jpg` only — backfill once if the file is missing. */
@@ -113,8 +120,8 @@ export function RecordingsLibrary({ currentProjectId, onOpenProject }: Recording
   const searchRef = useRef<HTMLInputElement>(null);
 
   const filteredProjects = useMemo(
-    () => projects.filter((p) => matchesNameFilter(p, nameFilter)),
-    [projects, nameFilter],
+    () => projects.filter((p) => matchesNameFilter(p, nameFilter, t)),
+    [projects, nameFilter, t],
   );
 
   const applyNameFilter = useCallback(() => {
@@ -135,16 +142,16 @@ export function RecordingsLibrary({ currentProjectId, onOpenProject }: Recording
         setError(null);
       });
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Failed to load recordings");
+      setError(e instanceof Error ? e.message : t("library.loadFailed"));
     }
-  }, []);
+  }, [t]);
 
   useEffect(() => {
     void refresh();
   }, [refresh]);
 
   const remove = async (id: string, title: string) => {
-    if (!window.confirm(`Delete “${title}”? This cannot be undone.`)) return;
+    if (!window.confirm(t("library.deleteConfirm", { title }))) return;
     setBusyId(id);
     try {
       await commands.deleteProject(id);
@@ -152,7 +159,7 @@ export function RecordingsLibrary({ currentProjectId, onOpenProject }: Recording
         setProjects((prev) => prev.filter((p) => p.id !== id));
       });
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Failed to delete");
+      setError(e instanceof Error ? e.message : t("library.deleteFailed"));
     } finally {
       setBusyId(null);
     }
@@ -161,10 +168,10 @@ export function RecordingsLibrary({ currentProjectId, onOpenProject }: Recording
   return (
     <div className="flex min-h-full flex-col bg-background text-foreground">
       <header className="mx-auto w-full max-w-6xl shrink-0 px-8 pb-2 pt-10">
-        <h1 className="text-3xl font-semibold tracking-tight text-foreground">Recordings</h1>
-        <p className="mt-2 text-sm text-muted-foreground">
-          Your videos stay on this device. Click a recording to open the editor.
-        </p>
+        <h1 className="text-3xl font-semibold tracking-tight text-foreground">
+          {t("library.title")}
+        </h1>
+        <p className="mt-2 text-sm text-muted-foreground">{t("library.subtitle")}</p>
       </header>
 
       <div className="mx-auto w-full max-w-6xl flex-1 px-8 pb-12 pt-6">
@@ -219,7 +226,7 @@ export function RecordingsLibrary({ currentProjectId, onOpenProject }: Recording
 
         {projects.length === 0 ? (
           <p className="py-20 text-center text-sm text-muted-foreground">
-            No recordings yet. Capture from the menubar tray, then come back here.
+            {t("library.empty")}
           </p>
         ) : filteredProjects.length === 0 ? (
           <p className="py-20 text-center text-sm text-muted-foreground">
@@ -228,7 +235,7 @@ export function RecordingsLibrary({ currentProjectId, onOpenProject }: Recording
         ) : (
           <ul className="grid grid-cols-1 gap-5 sm:grid-cols-2 lg:grid-cols-3">
             {filteredProjects.map((p) => {
-              const title = displayTitle(p);
+              const title = displayTitle(p, t);
               const busy = busyId === p.id;
               const isCurrent = p.id === currentProjectId;
               return (
@@ -271,7 +278,7 @@ export function RecordingsLibrary({ currentProjectId, onOpenProject }: Recording
                             size="icon"
                             className="size-8 shrink-0 text-muted-foreground"
                             disabled={busy}
-                            aria-label={`Actions for ${title}`}
+                            aria-label={t("library.rowActions", { title })}
                           >
                             <MoreHorizontal className="size-4" />
                           </Button>
@@ -282,7 +289,7 @@ export function RecordingsLibrary({ currentProjectId, onOpenProject }: Recording
                             onClick={() => void remove(p.id, title)}
                           >
                             <Trash2 className="size-4" />
-                            Delete
+                            {t("library.delete")}
                           </DropdownMenuItem>
                         </DropdownMenuContent>
                       </DropdownMenu>
