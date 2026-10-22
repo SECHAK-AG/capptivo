@@ -29,6 +29,7 @@ import {
 
 import { Button } from "@/components/ui/button";
 import { DropdownMenuItem } from "@/components/ui/dropdown-menu";
+import { Slider } from "@/components/ui/slider";
 import { LANGUAGES } from "@/lib/i18n";
 import { useI18n } from "@/lib/settings";
 import { cn } from "@/lib/utils";
@@ -678,7 +679,10 @@ function AudioMenu({
 }) {
   const { t } = useI18n();
   const enabled = useRecorderStore((s) => s.options.captureSystemAudio);
+  const micEnabled = useRecorderStore((s) => s.micEnabled);
+  const duckingAmount = useRecorderStore((s) => s.options.duckingAmount);
   const setOption = useRecorderStore((s) => s.setOption);
+  const showDucking = enabled && micEnabled;
 
   return (
     <RecorderMenu
@@ -711,6 +715,26 @@ function AudioMenu({
       >
         {t("recorder.audio.system")}
       </SelectMenuItem>
+      {showDucking ? (
+        <div className="px-3 py-2">
+          <div className="mb-1.5 flex items-center justify-between">
+            <span className="text-xs text-muted-foreground">
+              {t("recorder.audio.ducking")}
+            </span>
+            <span className="text-xs tabular-nums text-muted-foreground">
+              {Math.round(duckingAmount * 100)}%
+            </span>
+          </div>
+          <Slider
+            value={[duckingAmount * 100]}
+            min={0}
+            max={100}
+            step={5}
+            onValueChange={(v) => setOption("duckingAmount", v[0] / 100)}
+            aria-label={t("recorder.audio.ducking")}
+          />
+        </div>
+      ) : null}
     </RecorderMenu>
   );
 }

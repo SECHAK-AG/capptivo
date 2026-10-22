@@ -25,6 +25,19 @@ pub struct Project {
     pub editor_state: Option<serde_json::Value>,
 }
 
+/// How the audio in `screen.mp4` is laid out on disk.
+///
+/// * [`AudioTrackLayout::Single`] — one track, the mix (the sole source).
+/// * [`AudioTrackLayout::MixSystemMic`] — three tracks: `0:a:0` the mix,
+///   `0:a:1` system/desktop audio, `0:a:2` the microphone.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum AudioTrackLayout {
+    #[default]
+    Single,
+    MixSystemMic,
+}
+
 /// The capture configuration a recording was made with (for reproducibility and
 /// display in a future library UI).
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -37,11 +50,22 @@ pub struct CaptureSnapshot {
     /// New recordings always write `false` and redraw the cursor in the editor.
     #[serde(default = "default_shows_system_cursor")]
     pub shows_system_cursor: bool,
+    /// How the audio tracks are laid out in `screen.mp4`.
+    #[serde(default)]
+    pub audio_tracks: AudioTrackLayout,
+    /// Ducking amount (`0.0..=1.0`) applied to system audio in the mix track.
+    /// Meaningful only when [`CaptureSnapshot::audio_tracks`] is `MixSystemMic`.
+    #[serde(default = "default_ducking_amount")]
+    pub ducking_amount: f32,
 }
 
 fn default_shows_system_cursor() -> bool {
     // Missing field on older projects → assume baked cursor (avoid double-draw).
     true
+}
+
+fn default_ducking_amount() -> f32 {
+    0.5
 }
 
 /// Relative file names within the project directory.

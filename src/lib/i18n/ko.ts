@@ -342,6 +342,7 @@ export const ko: Record<TranslationKey, string> = {
   "recorder.audio.off": "오디오 없음",
   "recorder.audio.system": "시스템 오디오",
   "recorder.audio.none": "시스템 오디오 없음",
+  "recorder.audio.ducking": "시스템 오디오 줄이기",
   "recorder.sources.displays": "디스플레이",
   "recorder.sources.windows": "창",
   "recorder.sources.empty": "소스를 찾을 수 없습니다.",

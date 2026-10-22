@@ -342,6 +342,7 @@ export const ja: Record<TranslationKey, string> = {
   "recorder.audio.off": "オーディオなし",
   "recorder.audio.system": "システム音声",
   "recorder.audio.none": "システム音声なし",
+  "recorder.audio.ducking": "システム音声を下げる",
   "recorder.sources.displays": "ディスプレイ",
   "recorder.sources.windows": "ウィンドウ",
   "recorder.sources.empty": "ソースが見つかりません。",

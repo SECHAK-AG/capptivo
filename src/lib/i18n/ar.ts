@@ -345,6 +345,7 @@ export const ar: Record<TranslationKey, string> = {
   "recorder.audio.off": "بدون صوت",
   "recorder.audio.system": "صوت النظام",
   "recorder.audio.none": "بدون صوت النظام",
+  "recorder.audio.ducking": "تخفيف صوت النظام",
   "recorder.sources.displays": "الشاشات",
   "recorder.sources.windows": "النوافذ",
   "recorder.sources.empty": "لم يتم العثور على مصادر.",

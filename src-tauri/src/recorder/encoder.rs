@@ -46,6 +46,9 @@ pub struct Encoder {
     mic_channels: u16,
     mic_pcm_bytes: u64,
     mic_format_locked: bool,
+    /// How much to duck (lower) system audio while the mic is loud, `0.0..=1.0`.
+    /// Only applied when both system audio and the mic are muxed (3-track layout).
+    ducking_amount: f32,
     stderr_text: Arc<Mutex<String>>,
     stderr_reader: Option<JoinHandle<()>>,
     width: u32,
@@ -66,6 +69,7 @@ impl Encoder {
         quality: QualityPreset,
         system_audio: bool,
         microphone: bool,
+        ducking_amount: f32,
     ) -> AppResult<Self> {
         let bitrate = quality.target_bitrate(width, height);
         let ffmpeg = ffmpeg_path();
@@ -167,6 +171,7 @@ impl Encoder {
             mic_channels: SYSTEM_AUDIO_CHANNELS,
             mic_pcm_bytes: 0,
             mic_format_locked: false,
+            ducking_amount,
             stderr_text,
             stderr_reader: Some(stderr_reader),
             width,
@@ -426,39 +431,35 @@ impl Encoder {
             )));
         }
 
-        if let Some(pcm_path) = self.pcm_path.take() {
+        // Mux the captured audio into the video as one pass. When both system
+        // audio and the mic were recorded we write a 3-track layout (mix first,
+        // then system, then mic) so the mix stays at `0:a:0` for existing
+        // consumers; a single source writes its one track as `0:a:0`.
+        let system_pcm = self.pcm_path.take().and_then(|path| {
             if let Some(mut pcm) = self.pcm.take() {
                 let _ = pcm.flush();
             }
-            let bytes = fs::metadata(&pcm_path).map(|m| m.len()).unwrap_or(0);
-            if bytes > 0 {
-                mux_pcm_audio(
-                    &self.output,
-                    &pcm_path,
-                    self.pcm_rate,
-                    self.pcm_channels,
-                    false,
-                )?;
-            }
-            let _ = fs::remove_file(&pcm_path);
-        }
-
-        if let Some(mic_path) = self.mic_pcm_path.take() {
+            let bytes = fs::metadata(&path).map(|m| m.len()).unwrap_or(0);
+            (bytes > 0).then_some((path, self.pcm_rate, self.pcm_channels))
+        });
+        let mic_pcm = self.mic_pcm_path.take().and_then(|path| {
             if let Some(mut pcm) = self.mic_pcm.take() {
                 let _ = pcm.flush();
             }
-            let bytes = fs::metadata(&mic_path).map(|m| m.len()).unwrap_or(0);
-            if bytes > 0 {
-                let mix = mp4_has_audio_stream(&self.output);
-                mux_pcm_audio(
-                    &self.output,
-                    &mic_path,
-                    self.mic_rate,
-                    self.mic_channels,
-                    mix,
-                )?;
-            }
-            let _ = fs::remove_file(&mic_path);
+            let bytes = fs::metadata(&path).map(|m| m.len()).unwrap_or(0);
+            (bytes > 0).then_some((path, self.mic_rate, self.mic_channels))
+        });
+
+        if system_pcm.is_some() || mic_pcm.is_some() {
+            let sys = system_pcm.as_ref().map(|(p, r, c)| (p.as_path(), *r, *c));
+            let mic = mic_pcm.as_ref().map(|(p, r, c)| (p.as_path(), *r, *c));
+            mux_audio_tracks(&self.output, sys, mic, self.ducking_amount)?;
+        }
+        if let Some((path, _, _)) = system_pcm {
+            let _ = fs::remove_file(&path);
+        }
+        if let Some((path, _, _)) = mic_pcm {
+            let _ = fs::remove_file(&path);
         }
 
         // `Drop` forbids moving out of `self`; PathBuf::default is fine leftover.
@@ -634,13 +635,16 @@ pub fn finalize_recording_mp4(video_path: &Path) -> AppResult<()> {
         video_path.with_file_name(format!("capptivo-finalize-{}.{ext}", uuid::Uuid::new_v4()));
 
     let ffmpeg = ffmpeg_path();
-    // `-c copy` keeps every stream (video + any already-muxed audio) byte-for-byte;
-    // dropping the fragment flags and adding `+faststart` rewrites the container as
-    // a normal progressive MP4 with the moov moved to the front.
+    // `-map 0` is required: a bare `-c copy` applies default stream selection and
+    // keeps only the *default* audio track, silently dropping the non-default
+    // `System`/`Mic` tracks of a 3-track recording. Mapping every stream keeps
+    // the full layout byte-for-byte; dropping the fragment flags and adding
+    // `+faststart` rewrites the container as a progressive MP4 with the moov
+    // moved to the front.
     let status = proc::command(&ffmpeg)
         .args(["-hide_banner", "-loglevel", "error", "-y", "-i"])
         .arg(video_path)
-        .args(["-c", "copy", "-movflags", "+faststart"])
+        .args(["-map", "0", "-c", "copy", "-movflags", "+faststart"])
         .arg(&tmp)
         .status()
         .map_err(|e| AppError::Encoder(format!("finalize spawn failed: {e}")))?;
@@ -808,7 +812,9 @@ fn run_prepare_export_audio_inner(
     segments: &[(f64, f64)],
     enhance: Option<&str>,
 ) -> AppResult<bool> {
-    let (filter_complex, map_label) = build_audio_filtergraph(segments, enhance, "[0:a]");
+    // Pin the filter input to the *mixed* track (`0:a:0`). A 3-track recording
+    // has system/mic at `0:a:1`/`0:a:2`; we must never export those.
+    let (filter_complex, map_label) = build_audio_filtergraph(segments, enhance, "[0:a:0]");
 
     let ext = out_path
         .extension()
@@ -923,13 +929,17 @@ fn run_passthrough(screen_path: &Path, out_path: &Path, enhance: Option<&str>) -
         .arg(screen_path);
     match enhance {
         Some(chain) => {
-            let filter = format!("[0:a]{chain}[aout]");
+            // Pin to the *mixed* track: a 3-track recording has system/mic at
+            // `0:a:1`/`0:a:2`, which must never be exported.
+            let filter = format!("[0:a:0]{chain}[aout]");
             cmd.args(["-map", "0:v:0", "-c:v", "copy"])
                 .args(["-filter_complex", &filter])
                 .args(["-map", "[aout]", "-c:a", "aac", "-b:a", "192k"]);
         }
         None => {
-            cmd.args(["-map", "0", "-c", "copy"]);
+            // Copy only the video and the *mixed* audio track (`0:a:0`), never
+            // the raw system/mic tracks of a 3-track recording.
+            cmd.args(["-map", "0:v:0", "-map", "0:a:0?", "-c", "copy"]);
         }
     }
     let status = cmd
@@ -1041,7 +1051,8 @@ fn run_mux_export_audio_inner(
     segments: &[(f64, f64)],
     enhance: Option<&str>,
 ) -> AppResult<()> {
-    let (filter_complex, map_label) = build_audio_filtergraph(segments, enhance, "[1:a]");
+    // Pin the filter input to the *mixed* track of the audio source (`1:a:0`).
+    let (filter_complex, map_label) = build_audio_filtergraph(segments, enhance, "[1:a:0]");
 
     let ext = video_path
         .extension()
@@ -1061,7 +1072,8 @@ fn run_mux_export_audio_inner(
         cmd.args(["-filter_complex", &filter_complex]);
     }
     let map = if filter_complex.is_empty() {
-        "1:a".to_string()
+        // Pin to the *mixed* track (`1:a:0`), not every audio stream.
+        "1:a:0".to_string()
     } else {
         map_label
     };
@@ -1137,90 +1149,292 @@ pub(crate) fn pcm_pad_bytes(
     gap.min(MAX_PAD) as usize
 }
 
-fn mux_pcm_audio(
+/// Mux the captured audio sidecars into `video_mp4` in a single FFmpeg pass.
+///
+/// * Both `system` and `mic` present → a 3-track layout: `0:a:0` the mix
+///   (system ducked under the mic via `sidechaincompress` + `amix`), `0:a:1`
+///   system, `0:a:2` mic. This keeps the mix first so existing `0:a:0`
+///   consumers (editor preview, export, captions) are unaffected.
+/// * A single source present → its one track, at `0:a:0`.
+///
+/// The mix track is the first input's `amix` output; the raw system/mic tracks
+/// are added after it so they can be split out later without re-encoding.
+fn mux_audio_tracks(
     video_mp4: &Path,
-    pcm_path: &Path,
-    sample_rate: u32,
-    channels: u16,
-    mix_with_existing: bool,
+    system: Option<(&Path, u32, u16)>,
+    mic: Option<(&Path, u32, u16)>,
+    ducking_amount: f32,
 ) -> AppResult<()> {
     let ffmpeg = ffmpeg_path();
     let tmp = video_mp4.with_extension("mux.mp4");
-    let mix = mix_with_existing && mp4_has_audio_stream(video_mp4);
-    let status = if mix {
-        proc::command(&ffmpeg)
-            .args(["-hide_banner", "-loglevel", "error", "-y", "-i"])
-            .arg(video_mp4)
-            .args([
-                "-f",
-                "f32le",
-                "-ar",
-                &sample_rate.to_string(),
-                "-ac",
-                &channels.to_string(),
-                "-i",
-            ])
-            .arg(pcm_path)
-            .args([
-                "-filter_complex",
-                "[0:a][1:a]amix=inputs=2:duration=first:dropout_transition=0[aout]",
-                "-map",
-                "0:v:0",
-                "-map",
-                "[aout]",
-                "-c:v",
-                "copy",
-                "-c:a",
-                "aac",
-                "-b:a",
-                "192k",
-                "-shortest",
-                "-movflags",
-                "+frag_keyframe+empty_moov+default_base_moof",
-            ])
-            .arg(&tmp)
-            .status()
-    } else {
-        proc::command(&ffmpeg)
-            .args(["-hide_banner", "-loglevel", "error", "-y", "-i"])
-            .arg(video_mp4)
-            .args([
-                "-f",
-                "f32le",
-                "-ar",
-                &sample_rate.to_string(),
-                "-ac",
-                &channels.to_string(),
-                "-i",
-            ])
-            .arg(pcm_path)
-            .args([
-                "-c:v",
-                "copy",
-                "-c:a",
-                "aac",
-                "-b:a",
-                "192k",
-                "-shortest",
-                "-movflags",
-                "+frag_keyframe+empty_moov+default_base_moof",
-            ])
-            .arg(&tmp)
-            .status()
+
+    let mut inputs: Vec<String> = Vec::new();
+    let mut input_args: Vec<String> = Vec::new();
+    inputs.push(video_mp4.to_string_lossy().into_owned());
+    match system {
+        Some((path, rate, channels)) => {
+            input_args.extend([
+                "-f".into(),
+                "f32le".into(),
+                "-ar".into(),
+                rate.to_string(),
+                "-ac".into(),
+                channels.to_string(),
+                "-i".into(),
+                path.to_string_lossy().into_owned(),
+            ]);
+        }
+        None => {}
     }
-    .map_err(|e| AppError::Encoder(format!("pcm-audio mux spawn failed: {e}")))?;
+    match mic {
+        Some((path, rate, channels)) => {
+            input_args.extend([
+                "-f".into(),
+                "f32le".into(),
+                "-ar".into(),
+                rate.to_string(),
+                "-ac".into(),
+                channels.to_string(),
+                "-i".into(),
+                path.to_string_lossy().into_owned(),
+            ]);
+        }
+        None => {}
+    }
+    // Input index of each PCM source (0 is always the video).
+    let system_idx = if system.is_some() { 1 } else { 0 };
+    let mic_idx = if mic.is_some() { system_idx + 1 } else { 0 };
+
+    let (filter_complex, maps, track_titles) = match (system.is_some(), mic.is_some()) {
+        // Both: 3-track layout with ducked mix first. The raw tracks come from
+        // the filter's named pads so each keeps its original format.
+        (true, true) => {
+            let filter = build_ducking_mix_filter(system_idx, mic_idx, ducking_amount);
+            let maps = vec!["0:v:0".to_string(), "[mix]".into(), "[sys_track]".into(), "[mic_track]".into()];
+            let titles = vec!["Mix".to_string(), "System".into(), "Mic".into()];
+            (Some(filter), maps, titles)
+        }
+        // System only: one track.
+        (true, false) => (
+            None,
+            vec!["0:v:0".to_string(), format!("{system_idx}:a:0")],
+            vec!["System".to_string()],
+        ),
+        // Mic only: one track.
+        (false, true) => (
+            None,
+            vec!["0:v:0".to_string(), format!("{mic_idx}:a:0")],
+            vec!["Mic".to_string()],
+        ),
+        _ => unreachable!("mux_audio_tracks called with no audio"),
+    };
+
+    let mut cmd = proc::command(&ffmpeg);
+    cmd.args(["-hide_banner", "-loglevel", "error", "-y", "-i"]).arg(&inputs[0]);
+    for arg in &input_args {
+        cmd.arg(arg);
+    }
+    if let Some(filter) = &filter_complex {
+        cmd.args(["-filter_complex", filter]);
+    }
+    for map in &maps {
+        cmd.args(["-map", map]);
+    }
+    // Name the audio tracks and mark only the mix (track 0) as default so
+    // players and the editor preview pick the mix, not the raw tracks.
+    for (i, title) in track_titles.iter().enumerate() {
+        cmd.arg(format!("-metadata:s:a:{i}")).arg(format!("title={title}"));
+        let disp = if i == 0 { "default" } else { "0" };
+        cmd.args([format!("-disposition:a:{i}").as_str(), disp]);
+    }
+    cmd.args([
+        "-c:v",
+        "copy",
+        "-c:a",
+        "aac",
+        "-b:a",
+        "192k",
+        "-shortest",
+        "-movflags",
+        "+frag_keyframe+empty_moov+default_base_moof",
+    ]);
+    let status = cmd.arg(&tmp).status().map_err(|e| {
+        AppError::Encoder(format!("audio-track mux spawn failed: {e}"))
+    })?;
 
     if !status.success() {
         let _ = fs::remove_file(&tmp);
+        // A ducked mix that fails (e.g. an FFmpeg build without
+        // `sidechaincompress`) should not lose the recording: retry once with a
+        // plain `amix` so the take still gets a usable mixed track.
+        if filter_complex.is_some() {
+            tracing::warn!("ducking mix failed ({status}); retrying with a plain amix");
+            return mux_audio_tracks_plain(video_mp4, system, mic, &tmp);
+        }
         return Err(AppError::Encoder(format!(
-            "pcm-audio mux failed with {status}"
+            "audio-track mux failed with {status}"
         )));
     }
 
     fs::rename(&tmp, video_mp4).map_err(|e| {
         let _ = fs::remove_file(&tmp);
-        AppError::Encoder(format!("pcm-audio mux rename failed: {e}"))
+        AppError::Encoder(format!("audio-track mux rename failed: {e}"))
     })
+}
+
+/// Fallback for [`mux_audio_tracks`] when the ducked mix fails: same 3-track
+/// layout, but the mix is a plain `amix` (no `sidechaincompress`).
+fn mux_audio_tracks_plain(
+    video_mp4: &Path,
+    system: Option<(&Path, u32, u16)>,
+    mic: Option<(&Path, u32, u16)>,
+    tmp: &Path,
+) -> AppResult<()> {
+    let ffmpeg = ffmpeg_path();
+
+    let mut inputs: Vec<String> = Vec::new();
+    let mut input_args: Vec<String> = Vec::new();
+    inputs.push(video_mp4.to_string_lossy().into_owned());
+    match system {
+        Some((path, rate, channels)) => {
+            input_args.extend([
+                "-f".into(),
+                "f32le".into(),
+                "-ar".into(),
+                rate.to_string(),
+                "-ac".into(),
+                channels.to_string(),
+                "-i".into(),
+                path.to_string_lossy().into_owned(),
+            ]);
+        }
+        None => {}
+    }
+    match mic {
+        Some((path, rate, channels)) => {
+            input_args.extend([
+                "-f".into(),
+                "f32le".into(),
+                "-ar".into(),
+                rate.to_string(),
+                "-ac".into(),
+                channels.to_string(),
+                "-i".into(),
+                path.to_string_lossy().into_owned(),
+            ]);
+        }
+        None => {}
+    }
+    let system_idx = if system.is_some() { 1 } else { 0 };
+    let mic_idx = if mic.is_some() { system_idx + 1 } else { 0 };
+
+    // The raw tracks are mapped straight from their inputs (original format) —
+    // only the mix needs the filter.
+    let (filter_complex, maps, track_titles) = match (system.is_some(), mic.is_some()) {
+        (true, true) => {
+            let filter = build_plain_mix_filter(system_idx, mic_idx);
+            let maps = vec![
+                "0:v:0".to_string(),
+                "[mix]".to_string(),
+                format!("{system_idx}:a:0"),
+                format!("{mic_idx}:a:0"),
+            ];
+            let titles = vec!["Mix".to_string(), "System".into(), "Mic".into()];
+            (Some(filter), maps, titles)
+        }
+        (true, false) => (
+            None,
+            vec!["0:v:0".to_string(), format!("{system_idx}:a:0")],
+            vec!["System".to_string()],
+        ),
+        (false, true) => (
+            None,
+            vec!["0:v:0".to_string(), format!("{mic_idx}:a:0")],
+            vec!["Mic".to_string()],
+        ),
+        _ => unreachable!("mux_audio_tracks_plain called with no audio"),
+    };
+
+    let mut cmd = proc::command(&ffmpeg);
+    cmd.args(["-hide_banner", "-loglevel", "error", "-y", "-i"]).arg(&inputs[0]);
+    for arg in &input_args {
+        cmd.arg(arg);
+    }
+    if let Some(filter) = &filter_complex {
+        cmd.args(["-filter_complex", filter]);
+    }
+    for map in &maps {
+        cmd.args(["-map", map]);
+    }
+    for (i, title) in track_titles.iter().enumerate() {
+        cmd.arg(format!("-metadata:s:a:{i}")).arg(format!("title={title}"));
+        let disp = if i == 0 { "default" } else { "0" };
+        cmd.args([format!("-disposition:a:{i}").as_str(), disp]);
+    }
+    cmd.args([
+        "-c:v",
+        "copy",
+        "-c:a",
+        "aac",
+        "-b:a",
+        "192k",
+        "-shortest",
+        "-movflags",
+        "+frag_keyframe+empty_moov+default_base_moof",
+    ]);
+    let status = cmd.arg(tmp).status().map_err(|e| {
+        AppError::Encoder(format!("audio-track mux spawn failed: {e}"))
+    })?;
+
+    if !status.success() {
+        let _ = fs::remove_file(tmp);
+        return Err(AppError::Encoder(format!(
+            "audio-track mux (plain) failed with {status}"
+        )));
+    }
+
+    fs::rename(tmp, video_mp4).map_err(|e| {
+        let _ = fs::remove_file(tmp);
+        AppError::Encoder(format!("audio-track mux rename failed: {e}"))
+    })
+}
+
+/// FFmpeg `filter_complex` for the 3-track layout: a ducked mix first, then the
+/// raw system and mic tracks. `system`/`mic` are the *input indices* of the two
+/// PCM sources.
+///
+/// The compressor is always set strong (`ratio=20`); the user's `amount`
+/// (`0.0..=1.0`) controls only the `mix` (`M`) knob, which blends the untouched
+/// system audio with the ducked one. So `0.0` leaves `sidechaincompress` out
+/// entirely (exactly today's mix) and `1.0` applies the full ~20 dB duck.
+///
+/// Only the *mix* path is normalized (48 kHz stereo); the `[sys_track]` and
+/// `[mic_track]` outputs keep each source's original format, so they can be
+/// split out later without re-encoding. The mic feeds both the trigger (via
+/// `highpass`) and the mix, so it is split with `asplit`.
+fn build_ducking_mix_filter(system: usize, mic: usize, amount: f32) -> String {
+    let amount = amount.clamp(0.0, 1.0);
+    if amount <= 0.0 {
+        return build_plain_mix_filter(system, mic);
+    }
+    format!(
+        "[{mic}:a]asplit=2[mic_raw][mic_track];\
+         [mic_raw]aresample=48000,aformat=channel_layouts=stereo,asplit=2[mic_mix][mic_trigger_raw];\
+         [mic_trigger_raw]highpass=f=120[mic_trigger];\
+         [{system}:a]asplit=2[sys_mix][sys_track];\
+         [sys_mix][mic_trigger]sidechaincompress=threshold=0.04:ratio=20:attack=20:release=400:makeup=1:mix={amount}[sys_ducked];\
+         [sys_ducked][mic_mix]amix=inputs=2:duration=first:dropout_transition=0[mix]"
+    )
+}
+
+/// Plain `amix` mix (no ducking) used as the fallback when the
+/// `sidechaincompress` filter is unavailable. Inputs are normalized to
+/// 48 kHz stereo / fltp so `amix` sees matching layouts.
+fn build_plain_mix_filter(system: usize, mic: usize) -> String {
+    const FMT: &str = "aformat=sample_fmts=fltp:sample_rates=48000:channel_layouts=stereo";
+    format!(
+        "[{system}:a]{FMT}[sys];[{mic}:a]{FMT}[mic];[sys][mic]amix=inputs=2:duration=first:dropout_transition=0[mix]"
+    )
 }
 
 pub(crate) fn ffmpeg_path() -> PathBuf {
@@ -1331,6 +1545,55 @@ mod tests {
         assert_eq!(map, "[ac]");
     }
 
+    #[test]
+    fn ducking_filter_at_half_blends_mix_knob() {
+        let f = build_ducking_mix_filter(1, 2, 0.5);
+        // Fixed strong compressor; the amount only sets the `mix` knob.
+        assert!(f.contains("sidechaincompress=threshold=0.04:ratio=20:"), "{f}");
+        assert!(f.contains(":mix=0.5["), "{f}");
+        // The trigger is highpassed; the mic feeds it and the mix via asplit.
+        assert!(f.contains("highpass=f=120[mic_trigger]"), "{f}");
+        assert!(f.contains("[mic_raw]aresample=48000,aformat=channel_layouts=stereo,asplit=2"), "{f}");
+        // Only the mix is re-normalized; the raw tracks keep their own format
+        // via the named [sys_track]/[mic_track] pads.
+        assert!(f.contains("[sys_track]"), "{f}");
+        assert!(f.contains("[mic_track]"), "{f}");
+        assert!(f.ends_with("amix=inputs=2:duration=first:dropout_transition=0[mix]"), "{f}");
+    }
+
+    #[test]
+    fn ducking_filter_at_full_is_strongest() {
+        let f = build_ducking_mix_filter(1, 2, 1.0);
+        assert!(f.contains(":mix=1["), "{f}");
+    }
+
+    #[test]
+    fn ducking_filter_at_zero_is_the_plain_mix() {
+        // 0% leaves sidechaincompress out entirely — exactly today's mix.
+        let f = build_ducking_mix_filter(1, 2, 0.0);
+        assert!(!f.contains("sidechaincompress"), "{f}");
+        assert!(f.contains("amix=inputs=2:duration=first:dropout_transition=0[mix]"), "{f}");
+    }
+
+    #[test]
+    fn ducking_amount_is_clamped() {
+        assert_eq!(
+            build_ducking_mix_filter(1, 2, 5.0),
+            build_ducking_mix_filter(1, 2, 1.0)
+        );
+        assert_eq!(
+            build_ducking_mix_filter(1, 2, -3.0),
+            build_ducking_mix_filter(1, 2, 0.0)
+        );
+    }
+
+    #[test]
+    fn plain_mix_filter_has_no_sidechain() {
+        let f = build_plain_mix_filter(1, 2);
+        assert!(!f.contains("sidechaincompress"));
+        assert!(f.contains("amix=inputs=2:duration=first:dropout_transition=0[mix]"), "{f}");
+    }
+
     /// The "Original" export fast path: both the plain copy and the
     /// voice-enhance variant must produce a real MP4 from a real recording.
     #[test]
@@ -1403,7 +1666,7 @@ mod tests {
         let missing = dir.join("nope.mp4");
         let pcm = dir.join("a.pcm");
         fs::write(&pcm, [0u8; 8]).unwrap();
-        let err = mux_pcm_audio(&missing, &pcm, 48_000, 2, false).unwrap_err();
+        let err = mux_audio_tracks(&missing, Some((&pcm, 48_000, 2)), None, 0.5).unwrap_err();
         assert!(err.to_string().contains("mux") || err.to_string().contains("ffmpeg"));
         let _ = fs::remove_dir_all(&dir);
     }
@@ -1421,10 +1684,182 @@ mod tests {
         fs::create_dir_all(&dir).unwrap();
         let out = dir.join("screen.mp4");
         let mut enc =
-            Encoder::spawn(&out, 64, 64, 30, QualityPreset::Balanced, false, false).unwrap();
+            Encoder::spawn(&out, 64, 64, 30, QualityPreset::Balanced, false, false, 0.5).unwrap();
         let short = vec![0u8; 16];
         let err = enc.write_frame(&short, 64 * 4).unwrap_err();
         assert!(err.to_string().contains("short") || err.to_string().contains("truncated"));
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// Synthesize `secs` of a sine tone as f32le PCM (native endian) at the
+    /// given rate/channels, matching what the capture sidecars contain.
+    fn write_tone_pcm(dir: &Path, name: &str, freq: f64, secs: f64, rate: u32, channels: u16) -> PathBuf {
+        let path = dir.join(name);
+        let n = (secs * f64::from(rate)) as usize;
+        let mut buf = Vec::with_capacity(n * channels as usize * 4);
+        for i in 0..n {
+            let sample = (2.0 * std::f64::consts::PI * freq * (i as f64) / f64::from(rate)).sin() as f32;
+            for _ in 0..channels {
+                buf.extend_from_slice(&sample.to_ne_bytes());
+            }
+        }
+        fs::write(&path, buf).unwrap();
+        path
+    }
+
+    /// ffprobe the audio stream index → (disposition, title) of `path`.
+    fn probe_audio_tracks(path: &Path) -> Vec<(String, String)> {
+        let out = proc::command(ffprobe_path())
+            .args([
+                "-v",
+                "error",
+                "-select_streams",
+                "a",
+                "-show_entries",
+                "stream=index:disposition:tags=name,title",
+                "-of",
+                "json",
+            ])
+            .arg(path)
+            .output()
+            .expect("ffprobe");
+        let json: serde_json::Value = serde_json::from_slice(&out.stdout).expect("parse ffprobe");
+        let mut rows: Vec<(String, String)> = Vec::new();
+        for s in json["streams"].as_array().unwrap() {
+            let disp = s["disposition"]["default"].as_i64().unwrap_or(0) == 1;
+            // In MP4 the `title` metadata lands in the track's `@nam` box,
+            // which ffprobe surfaces as the `name` tag (not `title`).
+            let title = s["tags"]["name"]
+                .as_str()
+                .or_else(|| s["tags"]["title"].as_str())
+                .unwrap_or("")
+                .to_string();
+            let _ = s["index"];
+            rows.push((disp.to_string(), title));
+        }
+        rows
+    }
+
+    /// The 3-track mux: a video plus desktop and mic tones must come out as
+    /// `Mix` (default) / `System` / `Mic`, and ducking must make the desktop
+    /// part of the mix quieter as the slider rises.
+    #[test]
+    fn mux_audio_tracks_writes_three_named_tracks_and_ducking() {
+        if proc::command(proc::exe_name("ffmpeg"))
+            .arg("-version")
+            .output()
+            .is_err()
+        {
+            return;
+        }
+        let dir = std::env::temp_dir().join(format!("capptivo-tracks-{}", uuid::Uuid::new_v4()));
+        fs::create_dir_all(&dir).unwrap();
+
+        // 2s video-only file (the fragment a capture leaves before audio mux).
+        let video = dir.join("video.mp4");
+        let v = proc::command(ffmpeg_path())
+            .args([
+                "-hide_banner",
+                "-loglevel",
+                "error",
+                "-y",
+                "-f",
+                "lavfi",
+                "-i",
+                "testsrc=size=160x120:rate=30:duration=2",
+                "-an",
+                "-c:v",
+                "libx264",
+                "-pix_fmt",
+                "yuv420p",
+            ])
+            .arg(&video)
+            .status()
+            .unwrap();
+        assert!(v.success(), "failed to synthesize video");
+
+        // Desktop = 440 Hz for the whole 2s. Mic = 1 kHz only in the middle 1s
+        // (both stereo f32le at 48 kHz, like the capture sidecars).
+        let sys = write_tone_pcm(&dir, "sys.pcm", 440.0, 2.0, 48_000, 2);
+        let mic = dir.join("mic.pcm");
+        let mut mic_buf: Vec<u8> = Vec::with_capacity(2 * 48_000 * 2 * 4);
+        for i in 0..2 * 48_000 {
+            let active = i >= 48_000 && i < 2 * 48_000;
+            let s = if active {
+                (2.0 * std::f64::consts::PI * 1000.0 * (i as f64) / 48_000.0).sin() as f32
+            } else {
+                0.0
+            };
+            for _ in 0..2 {
+                mic_buf.extend_from_slice(&s.to_ne_bytes());
+            }
+        }
+        fs::write(&mic, mic_buf).unwrap();
+
+        let out_low = dir.join("low.mp4");
+        let out_high = dir.join("high.mp4");
+        fs::copy(&video, &out_low).unwrap();
+        fs::copy(&video, &out_high).unwrap();
+
+        mux_audio_tracks(&out_low, Some((&sys, 48_000, 2)), Some((&mic, 48_000, 2)), 0.25).unwrap();
+        mux_audio_tracks(&out_high, Some((&sys, 48_000, 2)), Some((&mic, 48_000, 2)), 1.0).unwrap();
+
+        // 3 tracks, named, only the mix default.
+        for file in [&out_low, &out_high] {
+            let tracks = probe_audio_tracks(file);
+            assert_eq!(tracks.len(), 3, "expected 3 audio tracks in {:?}: {tracks:?}", file);
+            assert_eq!(&tracks[0], &("true".to_string(), "Mix".to_string()), "{:?}", tracks);
+            assert_eq!(&tracks[1], &("false".to_string(), "System".to_string()), "{:?}", tracks);
+            assert_eq!(&tracks[2], &("false".to_string(), "Mic".to_string()), "{:?}", tracks);
+        }
+
+        // Ducking: during the middle second the mic is present, so more
+        // ducking → a quieter mix. The mic itself is identical in both files,
+        // so the mix level difference isolates the desktop ducking.
+        let level = |f: &Path| -> f64 {
+            // volumedetect reports at `info`, so keep that level for this pass.
+            let out = proc::command(ffmpeg_path())
+                .args([
+                    "-hide_banner",
+                    "-loglevel",
+                    "info",
+                    "-i",
+                    f.to_str().unwrap(),
+                    "-map",
+                    "0:a:0",
+                    "-af",
+                    "atrim=start=0.5:end=1.5,volumedetect",
+                    "-f",
+                    "null",
+                    "-",
+                ])
+                .output()
+                .unwrap();
+            let text = String::from_utf8_lossy(&out.stderr).to_string();
+            text.lines()
+                .find_map(|l| {
+                    // FFmpeg ≥ 7 renamed `mean_level` → `mean_volume`.
+                    let rest = l
+                        .find("mean_level:")
+                        .or_else(|| l.find("mean_volume:"))
+                        .map(|i| &l[i..]);
+                    rest.and_then(|r| {
+                        r.trim()
+                            .split_whitespace()
+                            .skip(1)
+                            .next()
+                            .and_then(|n| n.parse::<f64>().ok())
+                    })
+                })
+                .unwrap_or(-91.0)
+        };
+        assert!(
+            level(&out_low) > level(&out_high),
+            "mix should be quieter at 100% ducking than at 25% (low={:.1} high={:.1} dB)",
+            level(&out_low),
+            level(&out_high)
+        );
+
         let _ = fs::remove_dir_all(&dir);
     }
 
@@ -1441,7 +1876,7 @@ mod tests {
         fs::create_dir_all(&dir).unwrap();
         let out = dir.join("screen.mp4");
         let mut enc =
-            Encoder::spawn(&out, 64, 64, 30, QualityPreset::Balanced, true, false).unwrap();
+            Encoder::spawn(&out, 64, 64, 30, QualityPreset::Balanced, true, false, 0.5).unwrap();
         enc.write_audio(&[0u8; 8], 48_000, 2).unwrap();
         enc.write_audio(&[0u8; 8], 24_000, 1).unwrap();
         assert_eq!(enc.pcm_rate, 48_000);
@@ -1476,7 +1911,7 @@ mod tests {
             let out = dir.join("screen.mp4");
 
             let mut enc =
-                Encoder::spawn(&out, W, EVEN_H, 30, QualityPreset::Balanced, false, false).unwrap();
+                Encoder::spawn(&out, W, EVEN_H, 30, QualityPreset::Balanced, false, false, 0.5).unwrap();
             let frame = vec![120u8; (stride * ODD_H) as usize];
             for _ in 0..10 {
                 enc.write_frame(&frame, stride).unwrap();
@@ -1538,6 +1973,76 @@ mod tests {
 
         // A missing file is not fragmented (callers treat it as nothing to do).
         assert!(!is_fragmented_mp4(&dir.join("nope.mp4")));
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// Regression test for the 3-track layout surviving the post-capture
+    /// finalize remux. `mux_audio_tracks` leaves a *fragmented* file with
+    /// `Mix` (default) / `System` / `Mic`; `finalize_recording_mp4` then
+    /// stream-copies it to a progressive MP4. A bare `-c copy` applies default
+    /// stream selection and would keep only the default track, silently
+    /// dropping `System` and `Mic`. The fix maps every stream (`-map 0`) so all
+    /// three survive.
+    #[test]
+    fn finalize_keeps_all_three_audio_tracks() {
+        if proc::command(proc::exe_name("ffmpeg"))
+            .arg("-version")
+            .output()
+            .is_err()
+        {
+            return;
+        }
+        let dir = std::env::temp_dir().join(format!("capptivo-finalize-tracks-{}", uuid::Uuid::new_v4()));
+        fs::create_dir_all(&dir).unwrap();
+
+        // Video-only fragment, the shape capture leaves before the audio mux.
+        let video = dir.join("screen.mp4");
+        let v = proc::command(ffmpeg_path())
+            .args([
+                "-hide_banner",
+                "-loglevel",
+                "error",
+                "-y",
+                "-f",
+                "lavfi",
+                "-i",
+                "testsrc=size=160x120:rate=30:duration=2",
+                "-an",
+                "-c:v",
+                "libx264",
+                "-pix_fmt",
+                "yuv420p",
+                "-movflags",
+                "+frag_keyframe+empty_moov+default_base_moof",
+            ])
+            .arg(&video)
+            .status()
+            .unwrap();
+        assert!(v.success(), "failed to synthesize the video fragment");
+
+        // Desktop + mic stereo f32le tones, like the capture sidecars.
+        let sys = write_tone_pcm(&dir, "sys.pcm", 440.0, 2.0, 48_000, 2);
+        let mic = write_tone_pcm(&dir, "mic.pcm", 900.0, 2.0, 48_000, 2);
+
+        // Mux the 3-track layout into the fragment, then finalize it.
+        mux_audio_tracks(&video, Some((&sys, 48_000, 2)), Some((&mic, 48_000, 2)), 0.5).unwrap();
+        finalize_recording_mp4(&video).unwrap();
+
+        // All three tracks must survive the fragment → progressive remux.
+        let tracks = probe_audio_tracks(&video);
+        assert_eq!(
+            tracks.len(),
+            3,
+            "finalize dropped audio tracks; expected 3, got {tracks:?}"
+        );
+        // The mix stays first and is the only default track.
+        assert_eq!(&tracks[0], &("true".to_string(), tracks[0].1.clone()));
+        assert_eq!(
+            tracks[0].0,
+            "true",
+            "the mix must remain the default audio track"
+        );
 
         let _ = fs::remove_dir_all(&dir);
     }

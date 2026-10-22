@@ -345,6 +345,7 @@ export const ru: Record<TranslationKey, string> = {
   "recorder.audio.off": "Без звука",
   "recorder.audio.system": "Системный звук",
   "recorder.audio.none": "Без системного звука",
+  "recorder.audio.ducking": "Приглушать системный звук",
   "recorder.sources.displays": "Экраны",
   "recorder.sources.windows": "Окна",
   "recorder.sources.empty": "Источники не найдены.",

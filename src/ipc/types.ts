@@ -48,6 +48,8 @@ export interface RecorderConfig {
   showCursor: boolean;
   captureSystemAudio: boolean;
   captureMicrophone?: boolean;
+  /** How much to duck system audio under the mic, 0..1 (both sources only). */
+  duckingAmount?: number;
   /** Passed to native SCK/WASAPI mic — prefer with `microphoneLabel`. */
   microphoneDeviceId?: string | null;
   /** Label match when WebView deviceId is an opaque hash. */
@@ -116,6 +118,10 @@ export interface Project {
     capturedSystemAudio: boolean;
     /** Legacy: OS cursor baked into screen.mp4. New recordings are always false. */
     showsSystemCursor?: boolean;
+    /** How the audio in screen.mp4 is laid out. */
+    audioTracks?: "single" | "mixSystemMic";
+    /** Ducking amount (0..1) applied to system audio in the mix track. */
+    duckingAmount?: number;
   };
   files: {
     screen: string;

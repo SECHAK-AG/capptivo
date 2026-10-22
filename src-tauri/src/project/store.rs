@@ -2,7 +2,9 @@
 //! and S3. One directory per recording under the app data dir. All writes are
 //! atomic (write `.tmp`, fsync, rename) so a crash never corrupts a project.
 
-use super::model::{CaptureSnapshot, Meta, Project, ProjectFiles, ProjectSummary, SCHEMA_VERSION};
+use super::model::{
+    AudioTrackLayout, CaptureSnapshot, Meta, Project, ProjectFiles, ProjectSummary, SCHEMA_VERSION,
+};
 use crate::cursor::CursorTrack;
 use crate::error::{AppError, AppResult};
 use crate::recorder::types::RecorderConfig;
@@ -35,6 +37,25 @@ pub struct ProjectStore {
     /// Go through [`Self::update_project`] rather than taking this directly —
     /// one lock site is one place to get it right.
     manifest_write: Mutex<()>,
+}
+
+/// Build the [`CaptureSnapshot`] for a recording from its config. When both
+/// system audio and the microphone are captured the `screen.mp4` holds a
+/// 3-track layout (mix, system, mic); otherwise a single track.
+fn capture_snapshot(config: &RecorderConfig) -> CaptureSnapshot {
+    let multi = config.capture_system_audio && config.capture_microphone;
+    CaptureSnapshot {
+        source_title: config.source_id.clone(),
+        fps: config.fps,
+        captured_system_audio: config.capture_system_audio,
+        shows_system_cursor: false,
+        audio_tracks: if multi {
+            AudioTrackLayout::MixSystemMic
+        } else {
+            AudioTrackLayout::Single
+        },
+        ducking_amount: config.ducking_amount,
+    }
 }
 
 impl ProjectStore {
@@ -87,12 +108,7 @@ impl ProjectStore {
             id: id.to_string(),
             title: None,
             created_at: now_rfc3339(),
-            capture: CaptureSnapshot {
-                source_title: config.source_id.clone(),
-                fps: config.fps,
-                captured_system_audio: config.capture_system_audio,
-                shows_system_cursor: false,
-            },
+            capture: capture_snapshot(config),
             files: ProjectFiles::default(),
             editor_state: None,
         };
@@ -145,12 +161,7 @@ impl ProjectStore {
         // Going through `update_project` also takes `manifest_write`, which
         // serializes this against a concurrent `save_editor_state` and stops the
         // two of us from fighting over the shared `project.tmp` staging file.
-        let capture = CaptureSnapshot {
-            source_title: config.source_id.clone(),
-            fps: config.fps,
-            captured_system_audio: config.capture_system_audio,
-            shows_system_cursor: false,
-        };
+        let capture = capture_snapshot(config);
         let merged = self.update_project(id, {
             let capture = capture.clone();
             let files = files.clone();
@@ -463,6 +474,7 @@ mod tests {
             show_cursor: true,
             capture_system_audio: false,
             capture_microphone: false,
+            ducking_amount: 0.5,
             microphone_device_id: None,
             microphone_label: None,
             quality: QualityPreset::default(),

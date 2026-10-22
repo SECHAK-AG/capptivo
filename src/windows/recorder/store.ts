@@ -37,6 +37,8 @@ interface CaptureOptions {
   showCursor: boolean;
   captureSystemAudio: boolean;
   quality: QualityPreset;
+  /** How much to duck system audio under the mic, 0..1. */
+  duckingAmount: number;
 }
 
 interface MediaDeviceOption {
@@ -129,10 +131,31 @@ interface RecorderStore {
   togglePause: () => Promise<void>;
 }
 
+const DUCKING_STORAGE_KEY = "capptivo.recorder.duckingAmount";
+
+function storedDuckingAmount(): number {
+  try {
+    const raw = localStorage.getItem(DUCKING_STORAGE_KEY);
+    const n = raw === null ? NaN : Number(raw);
+    return Number.isFinite(n) ? Math.min(1, Math.max(0, n)) : 0.5;
+  } catch {
+    return 0.5;
+  }
+}
+
+function persistDuckingAmount(value: number): void {
+  try {
+    localStorage.setItem(DUCKING_STORAGE_KEY, String(value));
+  } catch {
+    /* non-fatal: privacy mode may block localStorage */
+  }
+}
+
 const DEFAULT_OPTIONS: CaptureOptions = {
   showCursor: true,
   captureSystemAudio: false,
   quality: "balanced",
+  duckingAmount: storedDuckingAmount(),
 };
 
 let subscribed = false;
@@ -557,6 +580,9 @@ export const useRecorderStore = create<RecorderStore>((set, get) => {
 
   setOption(key, value) {
     set((s) => ({ options: { ...s.options, [key]: value } }));
+    if (key === "duckingAmount") {
+      persistDuckingAmount(value as number);
+    }
   },
 
   setCameraEnabled(enabled) {

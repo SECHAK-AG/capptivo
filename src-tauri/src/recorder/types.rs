@@ -92,6 +92,10 @@ pub struct RecorderConfig {
     pub capture_system_audio: bool,
     #[serde(default)]
     pub capture_microphone: bool,
+    /// How much to duck (lower) system audio while the mic is loud, `0.0..=1.0`.
+    /// Only used when both system audio and the microphone are captured.
+    #[serde(default = "default_ducking_amount")]
+    pub ducking_amount: f32,
     /// WebView / OS mic device id — resolved to a native unique id on macOS.
     #[serde(default)]
     pub microphone_device_id: Option<String>,
@@ -108,6 +112,9 @@ fn default_fps() -> u32 {
 }
 fn default_true() -> bool {
     true
+}
+fn default_ducking_amount() -> f32 {
+    0.5
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]

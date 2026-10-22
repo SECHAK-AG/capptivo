@@ -332,6 +332,7 @@ export const zh: Record<TranslationKey, string> = {
   "recorder.audio.off": "无音频",
   "recorder.audio.system": "系统音频",
   "recorder.audio.none": "无系统音频",
+  "recorder.audio.ducking": "降低系统音量",
   "recorder.sources.displays": "显示器",
   "recorder.sources.windows": "窗口",
   "recorder.sources.empty": "未找到来源。",

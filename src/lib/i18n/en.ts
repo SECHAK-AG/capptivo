@@ -340,6 +340,7 @@ export const en = {
   "recorder.audio.off": "No audio",
   "recorder.audio.system": "System audio",
   "recorder.audio.none": "No system audio",
+  "recorder.audio.ducking": "Duck system audio",
   "recorder.sources.displays": "Displays",
   "recorder.sources.windows": "Windows",
   "recorder.sources.empty": "No sources found.",

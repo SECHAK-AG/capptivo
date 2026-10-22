@@ -345,6 +345,7 @@ export const pt: Record<TranslationKey, string> = {
   "recorder.audio.off": "Sem áudio",
   "recorder.audio.system": "Áudio do sistema",
   "recorder.audio.none": "Sem áudio do sistema",
+  "recorder.audio.ducking": "Reduzir áudio do sistema",
   "recorder.sources.displays": "Ecrãs",
   "recorder.sources.windows": "Janelas",
   "recorder.sources.empty": "Nenhuma fonte encontrada.",
