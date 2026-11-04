@@ -1,3 +1,5 @@
+import type { BlurRegion } from "./blurRegions";
+import type { CaptionCue, CaptionSettings } from "../captions/types";
 import type { TrimSegment } from "./trimSegments";
 import type { ZoomFragment } from "./zoomMotion";
 
@@ -39,6 +41,14 @@ export type PreviewInteraction =
   | null;
 
 export type TimelineSnapshot = {
+  recordingScale?: number;
+  recordingOffsetX?: number;
+  recordingOffsetY?: number;
+  blurRegions?: BlurRegion[];
+  selectedBlurRegionId?: string | null;
+  captions?: CaptionCue[];
+  captionSettings?: CaptionSettings;
+  selectedCaptionId?: string | null;
   segments: TrimSegment[];
   zoomFragments: ZoomFragment[];
   selectedSegmentId: string | null;

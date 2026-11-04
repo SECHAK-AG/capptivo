@@ -58,14 +58,15 @@ export function InspectorVideoPreview({
       }
     };
 
+    let timer: ReturnType<typeof setTimeout> | undefined;
     // Always paint once when the source loads; later seekTo updates scrub the frame.
     if (v.readyState >= 1) {
-      if (seekTo !== undefined || v.currentTime < 0.0005) paint();
+      if (seekTo !== undefined || v.currentTime < 0.0005) timer = setTimeout(paint, 80);
     } else {
       v.addEventListener("loadedmetadata", paint, { once: true });
     }
 
-    return () => v.removeEventListener("loadedmetadata", paint);
+    return () => { clearTimeout(timer); v.removeEventListener("loadedmetadata", paint); };
   }, [src, seekTo]);
 
   return (
@@ -77,7 +78,7 @@ export function InspectorVideoPreview({
       style={style}
       muted
       playsInline
-      preload="auto"
+      preload="metadata"
       crossOrigin="anonymous"
     />
   );

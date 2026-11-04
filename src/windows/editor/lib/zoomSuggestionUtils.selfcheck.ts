@@ -1,39 +1,35 @@
-/** Selfcheck: click clusters to suggested zoom windows. */
+/** Exercise the production click-to-zoom implementation. */
+import { buildClickZoomSuggestions } from './zoomSuggestionUtils.ts';
 
-function buildClickClusters(
-  clicks: { t: number; x: number; y: number }[],
-  mergeGapSec: number,
-): Array<{ first: number; last: number }> {
-  if (clicks.length === 0) return [];
-  const sorted = [...clicks].sort((a, b) => a.t - b.t);
-  const out: Array<{ first: number; last: number }> = [];
-  let first = sorted[0]!.t;
-  let last = sorted[0]!.t;
-  for (let i = 1; i < sorted.length; i++) {
-    const t = sorted[i]!.t;
-    if (t - last <= mergeGapSec) {
-      last = Math.max(last, t);
-    } else {
-      out.push({ first, last });
-      first = t;
-      last = t;
-    }
-  }
-  out.push({ first, last });
-  return out;
-}
+const assert = {
+  equal(actual: unknown, expected: unknown) {
+    if (actual !== expected) throw new Error(`Expected ${expected}, got ${actual}`);
+  },
+  deepEqual(actual: unknown, expected: unknown) {
+    this.equal(JSON.stringify(actual), JSON.stringify(expected));
+  },
+  ok(value: boolean) {
+    if (!value) throw new Error('Assertion failed');
+  },
+};
 
 const clicks = [
   { t: 1, x: 0.2, y: 0.3 },
   { t: 1.4, x: 0.21, y: 0.31 },
   { t: 8, x: 0.7, y: 0.6 },
 ];
-const clusters = buildClickClusters(clicks, 2.5);
-console.assert(clusters.length === 2, "two clusters");
-console.assert(clusters[0]!.first === 1 && clusters[0]!.last === 1.4, "cluster 0");
-console.assert(clusters[1]!.first === 8 && clusters[1]!.last === 8, "cluster 1");
-
-const lonely = buildClickClusters([{ t: 3, x: 0.5, y: 0.5 }], 2.5);
-console.assert(lonely.length === 1, "single click");
-
-console.log("zoomSuggestionUtils.selfcheck: ok");
+const result = buildClickZoomSuggestions({ clicks, duration: 10 });
+assert.equal(result.status, 'ok');
+assert.equal(result.suggestions.length, 2);
+assert.deepEqual(result.suggestions[0]?.focus, { x: 0.21, y: 0.31 });
+assert.deepEqual(result.suggestions[1]?.focus, { x: 0.7, y: 0.6 });
+for (const span of result.suggestions) {
+  assert.ok(span.start >= 0 && span.end <= 10);
+  assert.ok(span.end - span.start >= 1.2 - 1e-9);
+}
+assert.equal(buildClickZoomSuggestions({ clicks: [], duration: 10 }).status, 'no-clicks');
+assert.equal(buildClickZoomSuggestions({ clicks, duration: 0 }).status, 'no-duration');
+assert.equal(buildClickZoomSuggestions({
+  clicks, duration: 10, reservedSpans: [{ start: 0, end: 10 }],
+}).status, 'no-slots');
+console.log('zoomSuggestionUtils.selfcheck: ok');

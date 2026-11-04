@@ -1,3 +1,7 @@
+import { previewOutputSize } from "../lib/previewOutputSize";
+import { RecordingResizeOverlay } from "./RecordingResizeOverlay";
+import { previewCutAction, previewFrameReady } from "../lib/previewCutPlayback";
+import { CaptionPositionOverlay } from "./CaptionPositionOverlay";
 /**
  * Preview column matching the web editor: centered canvas + playback bar,
  * then a full-bleed timeline docked to the bottom of the column.
@@ -155,7 +159,7 @@ export function PreviewStage({
    * has none of those states — it changes once per thing that actually asked
    * for a new time.
    */
-  const currentTime = useEditorStore((s) => s.currentTime);
+  // The playback clock must not reconcile the entire preview React tree.
   const cameraOffsetMs = useEditorStore((s) => s.cameraOffsetMs);
   /** Previous synced timeline time; `null` = new source, so align outright. */
   const camSyncTimeRef = useRef<number | null>(null);
@@ -163,6 +167,7 @@ export function PreviewStage({
   const syncFaceCam = useCallback(() => {
     const camera = cameraRef.current;
     if (!camera) return;
+    const currentTime = useEditorStore.getState().currentTime;
     const frame = faceCamFrameAt(
       currentTime,
       cameraOffsetMs,
@@ -203,10 +208,13 @@ export function PreviewStage({
       frame.mediaTime,
     );
     void camera.play().catch(() => undefined);
-  }, [currentTime, cameraOffsetMs, isPlaying, videoRef]);
+  }, [cameraOffsetMs, isPlaying, videoRef]);
 
   useEffect(() => {
     syncFaceCam();
+    return useEditorStore.subscribe((next, prev) => {
+      if (next.currentTime !== prev.currentTime) syncFaceCam();
+    });
   }, [syncFaceCam]);
 
   const stage = useStageDimensions();
@@ -249,12 +257,23 @@ export function PreviewStage({
       host.replaceChildren(canvas);
     };
 
+    let previewResizeObserver: ResizeObserver | null = null;
     const attachCompositor = (comp: FrameCompositor) => {
       const { width, height } = stageRef.current;
-      comp.resize(width, height);
+      const output = previewOutputSize(width, height, host.clientWidth, host.clientHeight, window.devicePixelRatio);
+      comp.resize(width, height, output.width, output.height);
       compositor = comp;
       compositorRef.current = comp;
       mountCanvas(comp.canvas);
+      const observer = new ResizeObserver(() => {
+        if (compositor !== comp) return;
+        const current = stageRef.current;
+        const size = previewOutputSize(current.width, current.height, host.clientWidth, host.clientHeight, window.devicePixelRatio);
+        comp.resize(current.width, current.height, size.width, size.height);
+        requestPaintRef.current();
+      });
+      observer.observe(host);
+      previewResizeObserver?.disconnect(); previewResizeObserver = observer;
       detachContextLoss?.();
       detachContextLoss = attachContextLossHandlers(comp.canvas, () => {
         console.warn("[preview] webglcontextlost — remounting compositor");
@@ -266,6 +285,7 @@ export function PreviewStage({
     const compositorOptions = () => ({
       width: stageRef.current.width,
       height: stageRef.current.height,
+      interactivePreview: true,
       preserveDrawingBuffer: false,
       mipmaps: false,
       gpuPreference: ["webgl", "webgpu"] as const,
@@ -294,6 +314,9 @@ export function PreviewStage({
 
       const video = videoRef.current;
       const camera = cameraRef.current;
+      // During a cut seek the decoder can temporarily have no current pixels.
+      // Keep the entire previous composition instead of clearing its screen layer.
+      if (!previewFrameReady(video)) return;
       // One clock, one owner. A rolling element's own position is the truth —
       // it advances between store publishes. The moment it stops rolling that
       // position is stale (WKWebView reports the pre-seek time for as long as
@@ -322,6 +345,7 @@ export function PreviewStage({
         hasSelectedBackground,
         hasImageBackground,
         devicePadding: look.devicePadding,
+        recordingScale: look.recordingScale,
         screenContentCrop: crop,
       });
       const zoom = getZoomPanAtTime(
@@ -375,23 +399,19 @@ export function PreviewStage({
     };
 
     const advancePlayback = () => {
-      const { segments, duration } = useEditorStore.getState();
+      const { segments } = useEditorStore.getState();
       const video = videoRef.current;
-      if (!video || segments.length === 0) return;
-      if (findSegmentIndexAtTime(segments, video.currentTime) >= 0) return;
-
-      const next = getNextPlayableTime(segments, video.currentTime);
-      if (next != null && next < duration) {
-        video.currentTime = next;
-        publishPlaybackTime(next, { force: true });
+      if (!video) return;
+      const action = previewCutAction(segments, video.currentTime, video.seeking);
+      if (action.kind === "none") return;
+      if (action.kind === "seek") {
+        video.currentTime = action.time;
+        publishPlaybackTime(action.time, { force: true });
       } else {
         video.pause();
         useEditorStore.getState().setPlaying(false);
-        const last = segments[segments.length - 1];
-        if (last) {
-          video.currentTime = last.end;
-          publishPlaybackTime(last.end, { force: true });
-        }
+        video.currentTime = action.time;
+        publishPlaybackTime(action.time, { force: true });
       }
     };
 
@@ -452,6 +472,7 @@ export function PreviewStage({
       compositor = null;
       compositorRef.current = null;
       dead?.dispose();
+      previewResizeObserver?.disconnect();
       host.replaceChildren();
       // In-flight init still holds the gate until its then/catch runs.
       if (!remounting) releasePreviewGpu();
@@ -617,9 +638,15 @@ export function PreviewStage({
   useEffect(() => {
     const comp = compositorRef.current;
     if (!comp) return;
-    comp.resize(stage.width, stage.height);
-    requestPaintRef.current();
-  }, [stage.width, stage.height]);
+    const host = hostRef.current;
+    if (!host) return;
+    const resize = () => {
+      const size = previewOutputSize(stage.width, stage.height, host.clientWidth, host.clientHeight, window.devicePixelRatio);
+      comp.resize(stage.width, stage.height, size.width, size.height);
+      requestPaintRef.current();
+    };
+    resize();
+  }, [stage.width, stage.height, playbackUrl]);
 
   useEffect(() => {
     const video = videoRef.current;
@@ -709,6 +736,8 @@ export function PreviewStage({
             }}
           >
             <div ref={hostRef} className="block h-full w-full" />
+            <RecordingResizeOverlay width={stage.width} height={stage.height} />
+            <CaptionPositionOverlay width={stage.width} height={stage.height} />
             {playbackUrl === null && proxyPending ? (
               <div className="pointer-events-none absolute inset-0 flex items-center justify-center bg-black/60 text-sm text-white/80">
                 {translate("preview.preparing")}

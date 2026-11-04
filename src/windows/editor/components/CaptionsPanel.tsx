@@ -1,3 +1,4 @@
+import { ManualCaptionEditor } from "./ManualCaptionEditor";
 /**
  * Captions inspector — local Whisper + web-matching style controls.
  */
@@ -116,6 +117,8 @@ export function CaptionsPanel({ visible }: { visible: boolean }) {
       <p className="text-[11px] leading-snug text-muted-foreground">
         {t("captions.desc")}
       </p>
+
+      <ManualCaptionEditor />
 
       <section className="space-y-2">
         <SectionLabel>{t("captions.language")}</SectionLabel>

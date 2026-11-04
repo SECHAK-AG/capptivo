@@ -19,7 +19,7 @@ export type SmartFollowConfig = {
 export const SMART_FOLLOW_CONFIG: SmartFollowConfig = {
   // ~half of the visible half-span — matches a 0.25 edge-inset style deadzone.
   safeZoneInnerFraction: 0.5,
-  clickHoldSec: 0.4,
+  clickHoldSec: 0.2,
 };
 
 export type SmartFollowPlanner = {
@@ -162,19 +162,15 @@ function findActiveClick(
   time: number,
   holdSec: number,
 ): MappedPoint | null {
-  for (let i = clicks.length - 1; i >= 0; i -= 1) {
-    const click = clicks[i];
-    const elapsed = time - click.t;
-    if (elapsed < 0) {
-      continue;
-    }
-    if (elapsed <= holdSec) {
-      return click;
-    }
-    break;
+  // Upper bound preserves the last click at equal timestamps without scanning
+  // every future click at every 120 Hz integration step.
+  let lo = 0, hi = clicks.length;
+  while (lo < hi) {
+    const mid = (lo + hi) >>> 1;
+    if (clicks[mid].t <= time) lo = mid + 1; else hi = mid;
   }
-
-  return null;
+  const click = clicks[lo - 1];
+  return click && time - click.t <= holdSec ? click : null;
 }
 
 export function createSmartFollowPlanner(

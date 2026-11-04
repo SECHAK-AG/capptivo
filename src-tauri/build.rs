@@ -74,6 +74,8 @@ fn main() {
         // export
         "ensure_seekable_recording",
         "select_export_destination",
+        "get_export_folder",
+        "choose_export_folder",
         "begin_export",
         "write_export_chunk",
         "finish_export",

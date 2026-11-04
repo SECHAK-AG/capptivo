@@ -10,9 +10,6 @@
 
 import type { CursorClickSample } from "@/engine";
 
-/** Landscape-ish source required for auto-apply (portrait demos stay manual). */
-export const MIN_AUTO_ZOOM_SOURCE_ASPECT = 1.2;
-
 /** Consecutive clicks closer than this join the same cluster. */
 export const CLICK_CLUSTER_MERGE_GAP_SEC = 2.5;
 
@@ -42,24 +39,6 @@ export type ZoomSuggestionResult = {
   status: ZoomSuggestionStatus;
   suggestions: SuggestedZoomSpan[];
 };
-
-export function shouldAutoSuggestZoomsForSource(
-  sourceWidth?: number,
-  sourceHeight?: number,
-): boolean {
-  if (
-    !Number.isFinite(sourceWidth) ||
-    !Number.isFinite(sourceHeight) ||
-    (sourceWidth ?? 0) <= 0 ||
-    (sourceHeight ?? 0) <= 0
-  ) {
-    return true;
-  }
-  return (
-    (sourceWidth as number) / (sourceHeight as number) >=
-    MIN_AUTO_ZOOM_SOURCE_ASPECT
-  );
-}
 
 type ClickCandidate = {
   t: number;

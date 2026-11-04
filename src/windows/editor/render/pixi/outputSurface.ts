@@ -15,11 +15,13 @@
  * bilinear tap: a single bilinear step from 1920 → 800 samples 4 texels out of
  * every ~6, which aliases exactly where fine UI text lives.
  *
- * When output size == composition size (all video exports and the preview) the
+ * Interactive preview uses a direct display-sized render with a root transform.
+ * The export path retains the full composition and its downscale chain.
+ * When output size == composition size the
  * scene renders straight to the canvas and none of this runs.
  */
 
-import { Container, RenderTexture, Sprite, type Renderer } from "pixi.js";
+import { Container, Matrix, RenderTexture, Sprite, type Renderer } from "pixi.js";
 
 /** Never halve past this ratio — below it a direct bilinear step is exact enough. */
 const HALVING_STOP_RATIO = 1.6;
@@ -28,6 +30,7 @@ export class OutputSurface {
   private sceneTarget: RenderTexture | null = null;
   private steps: RenderTexture[] = [];
   private readonly blit = new Sprite();
+  private readonly previewTransform = new Matrix();
 
   constructor(
     private readonly renderer: Renderer,
@@ -35,6 +38,7 @@ export class OutputSurface {
     private compositionHeight: number,
     private outputWidth: number,
     private outputHeight: number,
+    private readonly directPreview = false,
   ) {
     this.rebuild();
   }
@@ -67,6 +71,12 @@ export class OutputSurface {
 
   /** Render `stage` (authored in composition pixels) to the output canvas. */
   present(stage: Container): void {
+    if (this.directPreview) {
+      this.renderer.render({ container: stage, clear: true,
+        transform: this.previewTransform.set(this.outputWidth / this.compositionWidth, 0, 0,
+          this.outputHeight / this.compositionHeight, 0, 0) });
+      return;
+    }
     const target = this.sceneTarget;
     if (!target) {
       this.renderer.render(stage);
@@ -97,6 +107,7 @@ export class OutputSurface {
   }
 
   private rebuild(): void {
+    if (this.directPreview) return;
     if (
       this.compositionWidth === this.outputWidth &&
       this.compositionHeight === this.outputHeight

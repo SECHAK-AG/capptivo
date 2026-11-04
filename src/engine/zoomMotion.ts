@@ -49,6 +49,7 @@ export type RecordingMetadata = {
   sourceHeight: number;
   cursorSamples: CursorSample[];
   cursorClickSamples?: CursorClickSample[];
+  cursorTypingSamples?: CursorClickSample[];
   /** Down→up hold windows, for the click press effect. Absent in old tracks. */
   cursorPressIntervals?: CursorPressInterval[];
   hasCamera?: boolean;
@@ -80,6 +81,8 @@ export type ZoomFragment = {
   start: number;
   end: number;
   mode: ZoomMode;
+  followSource?: "typing";
+  typingFocus?: { x: number; y: number };
   /** @deprecated Ignored; zoom always uses the camera (full stage). Kept for old editor_state. */
   scope?: "video" | "scene";
   fixedMode?: FixedZoomMode;
@@ -380,7 +383,7 @@ export const ZOOM_FOLLOW = {
   DAMPING: 0.9,
   MAX_VELOCITY: 3.4,
   /** Base follow τ at damping=4; actual τ = this × (damping / 4). */
-  FOLLOW_CENTER_TAU_SEC: 0.55,
+  FOLLOW_CENTER_TAU_SEC: 0.3,
   /** Overdamped spring ζ for follow-cursor pan. */
   FOLLOW_SPRING_ZETA: 1.05,
 } as const;
@@ -422,6 +425,7 @@ export function getZoomTarget(
     };
   }
 
+  if (fragment.followSource === "typing" && fragment.typingFocus) return fragment.typingFocus;
   const cursor = sampleCursorAtTime(metadata, time);
   return cursor ?? { x: 0.5, y: 0.5 };
 }
@@ -613,6 +617,14 @@ export function computeZoomKeyframes(
    */
   stageCenterToRecordingNdc?: ZoomContentSpaceMap,
 ): ZoomKeyframe[] {
+  // Keep the OS mouse track untouched. Typing fragments use a stable, recording-
+  // normalized field target through the same camera pipeline as preview/export.
+  if (fragment.followSource === "typing" && fragment.typingFocus && metadata) {
+    const focus = fragment.typingFocus;
+    metadata = { ...metadata, cursorSamples: [
+      { t: fragment.start, ...focus }, { t: fragment.end, ...focus },
+    ], cursorClickSamples: [], cursorPressIntervals: [] };
+  }
   const toContent = (p: { x: number; y: number }): { x: number; y: number } => {
     return fullNormToContentNdc ? fullNormToContentNdc(p) : p;
   };

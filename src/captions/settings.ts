@@ -13,6 +13,7 @@ export type CaptionSettings = {
   fontFamily: string;
   fontSizePx: number;
   bottomOffsetPx: number;
+  position: "top" | "center" | "bottom";
   /** Follow the spoken word with highlight (requires Whisper JSON word timings). */
   wordHighlight: boolean;
   /** Nudge karaoke vs playback (negative = highlight earlier). */
@@ -54,16 +55,17 @@ function normalizeCaptionFontFamily(raw: string): string {
 export const DEFAULT_CAPTION_SETTINGS: CaptionSettings = {
   enabled: false,
   language: "auto",
-  sentenceBackground: "rgba(8, 8, 10, 0.82)",
+  sentenceBackground: null,
   wordBackground: "rgba(255, 255, 255, 0.22)",
   wordTextColor: null,
   sentenceRadiusPx: 8,
   wordRadiusPx: 6,
   textColor: "#ffffff",
   fontFamily: "system-ui, -apple-system, sans-serif",
-  fontSizePx: 38,
-  bottomOffsetPx: 48,
-  wordHighlight: true,
+  fontSizePx: 72,
+  bottomOffsetPx: 180,
+  position: "top",
+  wordHighlight: false,
   timingOffsetMs: 0,
 };
 
@@ -160,6 +162,7 @@ export function parseCaptionSettings(raw: unknown): CaptionSettings {
       DEFAULT_CAPTION_SETTINGS.fontSizePx,
     ),
     bottomOffsetPx,
+    position: o.position === "top" || o.position === "center" ? o.position : "bottom",
     wordHighlight: o.wordHighlight !== false,
     timingOffsetMs: clampMs(o.timingOffsetMs, -1500, 1500, 0),
   };
@@ -184,4 +187,27 @@ export function captionSwatchColor(value: string | null | undefined, fallbackHex
   if (!v) return fallbackHex;
   if (v.startsWith("#") || v.startsWith("rgb")) return v;
   return captionColorPickerValue(v, fallbackHex);
+}
+
+/** Keep the full caption block inside the composition for every placement. */
+export function captionBlockTop(stageHeight: number, blockHeight: number, settings: CaptionSettings): number {
+  const requested = settings.position === "top" ? settings.bottomOffsetPx
+    : settings.position === "center" ? (stageHeight - blockHeight) / 2
+    : stageHeight - settings.bottomOffsetPx - blockHeight;
+  return Math.max(0, Math.min(Math.max(0, stageHeight - blockHeight), requested));
+}
+
+/** Preview and export share the exact same per-caption placement and clipping. */
+export function captionBlockBounds(
+  stageWidth: number, stageHeight: number, blockWidth: number, blockHeight: number,
+  settings: CaptionSettings, anchor?: { x: number; y: number },
+): { left: number; top: number; width: number; height: number } {
+  const custom = anchor && Number.isFinite(anchor.x) && Number.isFinite(anchor.y);
+  const left = custom ? anchor.x * stageWidth - blockWidth/2 : (stageWidth-blockWidth)/2;
+  const top = custom ? anchor.y * stageHeight - blockHeight/2 : captionBlockTop(stageHeight, blockHeight, settings);
+  return {
+    left: Math.max(0, Math.min(Math.max(0, stageWidth-blockWidth), left)),
+    top: Math.max(0, Math.min(Math.max(0, stageHeight-blockHeight), top)),
+    width: blockWidth, height: blockHeight,
+  };
 }

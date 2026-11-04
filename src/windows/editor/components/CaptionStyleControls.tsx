@@ -70,6 +70,9 @@ export function CaptionStyleControls({
 
   return (
     <div className="space-y-4 pt-1">
+      <Button type="button" variant="outline" size="sm" onClick={() => onChange({
+        ...DEFAULT_CAPTION_SETTINGS, enabled: true, language: captionSettings.language,
+      })}>Use video headline style</Button>
       <div className="flex items-center gap-2">
         <Switch
           id="captions-enabled"
@@ -280,15 +283,28 @@ export function CaptionStyleControls({
       </div>
 
       <div className="space-y-1">
+        <label htmlFor="cap-position" className="text-xs">Default text position</label>
+        <Select value={captionSettings.position} onValueChange={(value) => onChange({ position: value as CaptionSettings["position"] })}>
+          <SelectTrigger id="cap-position" className="h-9 w-full"><SelectValue /></SelectTrigger>
+          <SelectContent>
+            <SelectItem value="top">Top</SelectItem>
+            <SelectItem value="center">Center</SelectItem>
+            <SelectItem value="bottom">Bottom</SelectItem>
+          </SelectContent>
+        </Select>
+      </div>
+
+      <div className="space-y-1">
         <FieldLabelWithHint
           htmlFor="cap-bottom"
           className="text-xs"
-          hint="Distance from the bottom edge. Higher moves captions up."
+          hint="Distance from the selected top or bottom edge; center ignores this setting."
         >
-          Bottom offset (px)
+          Edge spacing (px)
         </FieldLabelWithHint>
         <Slider
           id="cap-bottom"
+          disabled={captionSettings.position === "center"}
           min={8}
           max={200}
           step={1}

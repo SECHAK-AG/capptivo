@@ -165,6 +165,8 @@ export const commands = {
     invoke<void>("delete_custom_background", { id }),
 
   /** Native save selection retained by Rust; the renderer receives no path. */
+  getExportFolder: () => invoke<string | null>("get_export_folder"),
+  chooseExportFolder: () => invoke<string | null>("choose_export_folder"),
   selectExportDestination: (args: {
     suggestedName: string;
     fileType: "mp4" | "webm" | "gif";

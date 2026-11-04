@@ -1,0 +1,23 @@
+import { createBlurRegion, clampBlurRegion, isBlurRegionActive } from './blurRegions.ts';
+import { compactTimeline, projectTimelineRange, timelineToSource } from '../windows/editor/lib/compactTimeline.ts';
+function assert(value: boolean, message: string) { if (!value) throw new Error(message); }
+const old = createBlurRegion();
+assert(isBlurRegionActive(old, 0) && isBlurRegionActive(old, 10000), 'existing blur remains active for entire recording');
+const timed = clampBlurRegion({ ...old, start: 2, end: 5, enabled: true });
+assert(!isBlurRegionActive(timed, 1.99), 'hidden before start');
+assert(isBlurRegionActive(timed, 2) && isBlurRegionActive(timed, 4.99), 'visible inside selected range');
+assert(!isBlurRegionActive(timed, 5), 'hidden at exclusive end');
+const disabled = clampBlurRegion({ ...timed, enabled: false, width: 0.5 });
+assert(!isBlurRegionActive(disabled, 3), 'off switch suppresses rendering');
+assert(disabled.start === 2 && disabled.end === 5 && disabled.enabled === false, 'resizing retains timing and off state');
+const restored = JSON.parse(JSON.stringify(disabled));
+assert(!isBlurRegionActive(restored, 3), 'off state survives save/load');
+assert(isBlurRegionActive({ ...restored, enabled: true }, 3), 'can re-enable without rebuilding region');
+const bad = clampBlurRegion({ ...old, start: NaN, end: 1 });
+assert(bad.start === 0 && bad.end === 1, 'invalid start normalized without poisoning end');
+const map = compactTimeline([{ id: 'a', start: 0, end: 3 }, { id: 'b', start: 7, end: 10 }], 10);
+const overlay = { ...old, start: 7.5, end: 9 };
+assert(projectTimelineRange(map.clips, overlay.start, overlay.end).start === 3.5, 'blur follows kept footage on compact timeline');
+assert(isBlurRegionActive(overlay, timelineToSource(map.clips, 4)), 'preview/export still evaluate original matching frame');
+assert(!isBlurRegionActive(overlay, timelineToSource(map.clips, 2)), 'does not blur earlier unrelated footage');
+console.log('blurTiming.selfcheck: ok');

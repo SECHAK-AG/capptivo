@@ -1,3 +1,4 @@
+import { isBlurRegionActive } from "@/engine/blurRegions";
 /**
  * GPU frame compositor (Pixi). Preview prefers WebGL on WKWebView.
  * Persistent scene graph with per-layer content keys to minimize per-frame work.
@@ -83,6 +84,7 @@ export async function createPixiFrameCompositor(
     height,
     outputWidth,
     outputHeight,
+    options.interactivePreview === true,
   );
   const stageLongEdge = Math.max(width, height);
   const mipmaps = options.mipmaps === true;
@@ -199,7 +201,10 @@ export async function createPixiFrameCompositor(
 
     setCameraTransform(CAMERA_IDENTITY);
 
+    const backgroundScale = options.interactivePreview
+      ? Math.min(1, outputWidth / w, outputHeight / h) : 1;
     background.update({
+      pixelScale: backgroundScale,
       key: backgroundImage
         ? `${imageId(backgroundImage)}|${w}x${h}|${look.backgroundBlur}|${look.backgroundDarkness}`
         : null,
@@ -207,15 +212,14 @@ export async function createPixiFrameCompositor(
       y: 0,
       width: w,
       height: h,
-      draw: (ctx) =>
-        drawBackgroundLayer(
-          ctx,
-          backgroundImage as CanvasImageSource,
-          w,
-          h,
-          look.backgroundBlur,
-          look.backgroundDarkness,
-        ),
+      draw: (ctx) => {
+        ctx.save();
+        ctx.scale(1 / backgroundScale, 1 / backgroundScale);
+        drawBackgroundLayer(ctx, backgroundImage as CanvasImageSource,
+          w * backgroundScale, h * backgroundScale,
+          look.backgroundBlur * backgroundScale, look.backgroundDarkness);
+        ctx.restore();
+      },
     });
     backdrop.visible = !backgroundImage;
     profiler.mark("background");
@@ -245,6 +249,7 @@ export async function createPixiFrameCompositor(
         w,
         h,
         basePadding,
+        look.recordingScale,
       );
       const radius = Math.max(
         0,
@@ -283,6 +288,8 @@ export async function createPixiFrameCompositor(
           focus: zoomFocus,
           scale: zoomScale,
           targetScale: zoomTargetScale,
+          recordingOffsetX: look.recordingOffsetX,
+          recordingOffsetY: look.recordingOffsetY,
         }),
       );
     } else {
@@ -376,6 +383,7 @@ export async function createPixiFrameCompositor(
   ): void {
     const textureSource = screenSprite.texture.source;
     const placements = (inputs.blurRegions ?? [])
+      .filter(region => isBlurRegionActive(region, inputs.cursorTime ?? 0))
       .map((region) =>
         blurRegionPlacement(
           region,

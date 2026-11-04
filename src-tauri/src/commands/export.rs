@@ -15,7 +15,7 @@ use crate::state::{
 };
 use std::io::{Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
-use tauri::{AppHandle, State, WebviewWindow};
+use tauri::{AppHandle, Manager, State, WebviewWindow};
 use tauri_plugin_dialog::DialogExt;
 use tauri_plugin_opener::OpenerExt;
 
@@ -222,6 +222,29 @@ pub async fn ensure_seekable_recording(
     .map_err(|e| AppError::Other(format!("finalize task failed: {e}")))?
 }
 
+/// Read-only display of the native folder selected by this user.
+#[tauri::command]
+pub fn get_export_folder(window: WebviewWindow) -> AppResult<Option<String>> {
+    let root = window.app_handle().path().app_data_dir().map_err(|e| AppError::Other(e.to_string()))?;
+    Ok(crate::export_preferences::load(&root).map(|p| p.to_string_lossy().into_owned()))
+}
+
+#[tauri::command]
+pub async fn choose_export_folder(window: WebviewWindow) -> AppResult<Option<String>> {
+    let root = window.app_handle().path().app_data_dir().map_err(|e| AppError::Other(e.to_string()))?;
+    let (send, receive) = std::sync::mpsc::sync_channel(1);
+    let mut dialog = window.dialog().file().set_parent(&window);
+    if let Some(folder) = crate::export_preferences::load(&root) { dialog = dialog.set_directory(folder); }
+    dialog.pick_folder(move |selection| { let _ = send.send(selection); });
+    let selection = tauri::async_runtime::spawn_blocking(move || receive.recv()).await
+        .map_err(|e| AppError::Other(format!("folder picker failed: {e}")))?
+        .map_err(|_| AppError::Other("folder picker closed unexpectedly".into()))?;
+    let Some(selection) = selection else { return Ok(None); };
+    let folder = selection.into_path().map_err(|e| AppError::Other(e.to_string()))?;
+    crate::export_preferences::save(&root, &folder).map_err(|e| AppError::Other(format!("could not remember export folder: {e}")))?;
+    Ok(Some(folder.to_string_lossy().into_owned()))
+}
+
 /// Ask the native save dialog for a destination and retain its path in Rust.
 /// The renderer receives only an opaque capability and a filename for display.
 #[tauri::command]
@@ -235,15 +258,11 @@ pub async fn select_export_destination(
     validate_suggested_name(&suggested_name)?;
     let (filter_name, extension) = file_type.filter();
     let (send, receive) = std::sync::mpsc::sync_channel(1);
-    window
-        .dialog()
-        .file()
-        .set_parent(&window)
-        .set_file_name(suggested_name)
-        .add_filter(filter_name, &[extension])
-        .save_file(move |selection| {
-            let _ = send.send(selection);
-        });
+    let root = window.app_handle().path().app_data_dir().map_err(|e| AppError::Other(e.to_string()))?;
+    let mut dialog = window.dialog().file().set_parent(&window)
+        .set_file_name(suggested_name).add_filter(filter_name, &[extension]);
+    if let Some(folder) = crate::export_preferences::load(&root) { dialog = dialog.set_directory(folder); }
+    dialog.save_file(move |selection| { let _ = send.send(selection); });
 
     let selection = tauri::async_runtime::spawn_blocking(move || receive.recv())
         .await
@@ -273,6 +292,14 @@ pub async fn select_export_destination(
         .to_string_lossy()
         .into_owned();
     let handle = uuid::Uuid::new_v4().simple().to_string();
+    // A one-off save elsewhere must not replace the explicitly chosen default.
+    if crate::export_preferences::load(&root).is_none() {
+        if let Some(folder) = path.parent() {
+            if let Err(e) = crate::export_preferences::save(&root, folder) {
+                tracing::warn!(%e, "could not remember export folder");
+            }
+        }
+    }
     reserve_destination(&state.export_destinations, handle.clone(), path)?;
 
     Ok(Some(ExportDestinationSelection {

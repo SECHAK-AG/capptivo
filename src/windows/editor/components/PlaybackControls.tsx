@@ -3,7 +3,8 @@
  * play / ±30s / scrubber / time / mute / volume.
  */
 
-import type { RefObject } from "react";
+import { useMemo, type RefObject } from "react";
+import { compactTimeline, sourceToTimeline, timelineToSource } from "../lib/compactTimeline";
 import {
   Pause,
   Play,
@@ -12,7 +13,6 @@ import {
   Volume2,
   VolumeX,
 } from "lucide-react";
-import { snapTimeToKeptRange } from "@/engine";
 
 import { Button } from "@/components/ui/button";
 import { Slider } from "@/components/ui/slider";
@@ -37,9 +37,10 @@ export function PlaybackControls({
   const setMuted = useEditorStore((s) => s.setMuted);
   const setVolume = useEditorStore((s) => s.setVolume);
 
+  const compact = useMemo(() => compactTimeline(segments, duration), [segments, duration]);
+  const editedTime = sourceToTimeline(compact.clips, currentTime);
   const seek = (time: number) => {
-    const snapped =
-      segments.length > 0 ? snapTimeToKeptRange(segments, time) : time;
+    const snapped = timelineToSource(compact.clips, time);
     const video = videoRef.current;
     if (video) video.currentTime = presentableVideoTime(snapped, video.duration);
     useEditorStore.getState().setCurrentTime(snapped);
@@ -47,8 +48,8 @@ export function PlaybackControls({
 
   const skip = (delta: number) => {
     const video = videoRef.current;
-    const base = video?.currentTime ?? currentTime;
-    seek(Math.max(0, Math.min(duration, base + delta)));
+    const base = sourceToTimeline(compact.clips, video?.currentTime ?? currentTime);
+    seek(Math.max(0, Math.min(compact.duration, base + delta)));
   };
 
   const togglePlay = () => {
@@ -103,14 +104,14 @@ export function PlaybackControls({
       <Slider
         className={`min-w-0 flex-1 ${sliderTheme}`}
         min={0}
-        max={duration || 1}
+        max={compact.duration || 1}
         step={0.1}
-        value={[Math.min(currentTime, duration || 1)]}
+        value={[Math.min(editedTime, compact.duration || 1)]}
         onValueChange={([v]) => seek(v ?? 0)}
       />
 
       <span className="min-w-16 shrink-0 text-sm tabular-nums text-muted-foreground">
-        {formatTimelineTime(currentTime)} / {formatTimelineTime(duration)}
+        {formatTimelineTime(editedTime)} / {formatTimelineTime(compact.duration)}
       </span>
 
       <Button

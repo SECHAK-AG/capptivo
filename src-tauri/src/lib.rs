@@ -15,6 +15,7 @@ pub mod captions;
 mod commands;
 mod export_h264;
 mod export_rawvideo;
+mod export_preferences;
 mod proc;
 mod webview_gpu;
 #[cfg(not(any(

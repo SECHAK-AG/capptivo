@@ -15,7 +15,7 @@ type Props = {
 export function ZoomTimelineBlock({ fragment, selected, onResizePointerDown }: Props) {
   const { t } = useI18n();
   const isAuto = fragment.mode === "follow-cursor";
-  const modeLabel = isAuto ? t("timeline.zoomAuto") : t("timeline.zoomManual");
+  const modeLabel = fragment.followSource === "typing" ? "Typing" : isAuto ? t("timeline.zoomAuto") : t("timeline.zoomManual");
 
   return (
     <div

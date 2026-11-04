@@ -346,6 +346,7 @@ export async function createExportCompositorFromMedia(
       hasSelectedBackground,
       hasImageBackground,
       devicePadding: look.devicePadding,
+        recordingScale: look.recordingScale,
       screenContentCrop,
     });
     const zoom = getZoomPanAtTime(

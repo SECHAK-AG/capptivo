@@ -615,3 +615,21 @@ mod tests {
         assert_eq!((e.width, e.height), (1920.0, 1072.0));
     }
 }
+
+/// Scale only the recording, keeping its centre fixed and its aspect intact.
+/// Matches getCompositionLayout's recordingScale in the TypeScript compositor.
+pub fn scale_recording_rect(rect: Rect, scale: f64) -> Rect {
+    let scale = if scale.is_finite() {
+        scale.clamp(0.5, 3.0)
+    } else {
+        1.0
+    };
+    let width = rect.width * scale;
+    let height = rect.height * scale;
+    Rect::new(
+        rect.x + (rect.width - width) / 2.0,
+        rect.y + (rect.height - height) / 2.0,
+        width,
+        height,
+    )
+}

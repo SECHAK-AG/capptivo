@@ -174,6 +174,9 @@ impl CaptionTrack {
         let time_sec = time_ms / 1000.0;
         let cue_index = pick_cue_index(&self.cues, time_sec)?;
         let cue = &self.cues[cue_index];
+        if cue.manual && (time_ms < cue.start_ms || time_ms >= cue.end_ms) {
+            return None;
+        }
         match &self.preps[cue_index] {
             CuePrep::Empty => None,
             CuePrep::NoTimings => Some(ActiveCue {
@@ -190,4 +193,32 @@ impl CaptionTrack {
             }),
         }
     }
+}
+
+/// Same composition-space placement and edge clamping as captionBlockBounds.
+pub fn caption_block_origin(
+    stage: (f64, f64),
+    block: (f64, f64),
+    position: crate::document::CaptionPosition,
+    offset: f64,
+    anchor: Option<crate::document::Point>,
+) -> (f64, f64) {
+    use crate::document::CaptionPosition;
+    let (w, h) = stage;
+    let (bw, bh) = block;
+    let (left, top) = match anchor.filter(|p| p.x.is_finite() && p.y.is_finite()) {
+        Some(p) => (p.x * w - bw / 2.0, p.y * h - bh / 2.0),
+        None => (
+            (w - bw) / 2.0,
+            match position {
+                CaptionPosition::Top => offset,
+                CaptionPosition::Center => (h - bh) / 2.0,
+                CaptionPosition::Bottom => h - offset - bh,
+            },
+        ),
+    };
+    (
+        left.clamp(0.0, (w - bw).max(0.0)),
+        top.clamp(0.0, (h - bh).max(0.0)),
+    )
 }
