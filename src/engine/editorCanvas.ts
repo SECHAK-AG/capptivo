@@ -359,6 +359,7 @@ export function getCompositionLayout(
   width: number,
   height: number,
   devicePadding: number,
+  recordingScale = 1,
 ): { device: Rect; video: Rect } {
   const safeAspect =
     Number.isFinite(sourceAspect) && sourceAspect > 0 ? sourceAspect : 16 / 9;
@@ -382,6 +383,9 @@ export function getCompositionLayout(
     videoWidth = device.height * safeAspect;
   }
 
+  const scale = Number.isFinite(recordingScale) ? Math.max(0.5, Math.min(3, recordingScale)) : 1;
+  videoWidth *= scale;
+  videoHeight *= scale;
   const video: Rect = {
     x: device.x + (device.width - videoWidth) / 2,
     y: device.y + (device.height - videoHeight) / 2,

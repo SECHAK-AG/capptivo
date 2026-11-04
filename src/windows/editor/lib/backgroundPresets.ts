@@ -247,7 +247,7 @@ export function buildImageBackgroundPresets(): BackgroundPreset[] {
     label: toBackgroundLabel(fileName),
     type: "image",
     src: `/background-images/${fileName}`,
-    previewCss: `url(/background-images/${fileName})`,
+    previewCss: `url(/background-thumbnails/${fileName}.jpg)`,
   }));
 }
 

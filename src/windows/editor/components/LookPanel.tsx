@@ -39,6 +39,10 @@ const BG_TAB_LABEL_KEY: Record<BackgroundType, TranslationKey> = {
 
 export function LookPanel({ visible = true }: { visible?: boolean }) {
   const { t } = useI18n();
+  const [showCrop, setShowCrop] = useState(false);
+  const [showBlur, setShowBlur] = useState(false);
+  const playing = useEditorStore(s => s.isPlaying);
+  const exporting = useEditorStore(s => s.exporting);
   const blurRegions = useEditorStore((s) => s.blurRegions);
   const selectedBlurRegionId = useEditorStore(s => s.selectedBlurRegionId);
   const selectBlurRegion = useEditorStore(s => s.selectBlurRegion);
@@ -58,11 +62,12 @@ export function LookPanel({ visible = true }: { visible?: boolean }) {
   // Selector returns a stable `undefined` during play so clock ticks do not
   // re-render this panel.
   const cropPreviewTime = useEditorStore((s) =>
-    s.isPlaying ? undefined : s.currentTime,
+    !visible || s.isPlaying || !(showCrop || showBlur || selectedBlurRegionId) ? undefined : s.currentTime,
   );
 
+  if (!visible) return null;
   return (
-    <div className={cn("flex flex-col gap-7", !visible && "hidden")}>
+    <div className="flex flex-col gap-7">
       <div className="space-y-2">
         <SectionLabel>{t("look.background")}</SectionLabel>
 
@@ -89,7 +94,11 @@ export function LookPanel({ visible = true }: { visible?: boolean }) {
         {backgroundType === "color" && <ColorGrid />}
       </div>
 
-      {selectedBackground && previewUrl && (
+      {selectedBackground && previewUrl && <button type="button" aria-expanded={showCrop}
+        className="rounded-md border border-border px-3 py-2 text-left text-sm hover:bg-muted" onClick={() => setShowCrop(!showCrop)}>
+        {showCrop ? 'Close screen crop' : 'Screen crop…'} {screenContentCrop ? '· Active' : ''}
+      </button>}
+      {showCrop && !playing && !exporting && selectedBackground && previewUrl && (
         <ScreenContentCropPanel
           key="screen-content-crop"
           videoUrl={previewUrl}
@@ -101,7 +110,12 @@ export function LookPanel({ visible = true }: { visible?: boolean }) {
         />
       )}
 
-      {previewUrl && (
+      {previewUrl && <button type="button" aria-expanded={showBlur || !!selectedBlurRegionId}
+        className="rounded-md border border-border px-3 py-2 text-left text-sm hover:bg-muted" onClick={() => {
+          if (selectedBlurRegionId) selectBlurRegion(null);
+          setShowBlur(!(showBlur || !!selectedBlurRegionId));
+        }}>{showBlur || selectedBlurRegionId ? 'Close blur areas' : `Blur areas… (${blurRegions.length})`}</button>}
+      {(showBlur || selectedBlurRegionId) && !playing && !exporting && previewUrl && (
         <BlurRegionsPanel
           key="blur-regions"
           videoUrl={previewUrl}
@@ -116,6 +130,7 @@ export function LookPanel({ visible = true }: { visible?: boolean }) {
         />
       )}
 
+      <RecordingSize />
       {selectedBackground && <LookSliders />}
       {selectedBackground && <BackgroundEffects />}
     </div>
@@ -413,6 +428,34 @@ function ColorField({
         />
         <span className="absolute inset-0" style={{ backgroundColor: value }} />
       </label>
+    </div>
+  );
+}
+
+function RecordingSize() {
+  const scale = useEditorStore(s => s.look.recordingScale ?? 1);
+  const setLook = useEditorStore(s => s.setLook);
+  const percent = Math.round(scale * 100);
+  return (
+    <div className="space-y-2">
+      <div className="flex items-center justify-between">
+        <FieldLabelWithHint htmlFor="recording-size" hint="Enlarge the recording inside the video. Background and captions stay the same size. Edges outside the frame are cropped.">
+          Recording size
+        </FieldLabelWithHint>
+        <button type="button" className="text-xs text-muted-foreground hover:text-foreground" onClick={() => setLook("recordingScale", 1)}>Reset</button>
+      </div>
+      <div className="flex items-center gap-3">
+        <Slider id="recording-size" className="flex-1" min={50} max={300} step={1}
+          value={[percent]} onValueChange={([v]) => {
+            useEditorStore.getState().beginTimelineEdit(); setLook("recordingScale", (v ?? 100) / 100);
+          }} onValueCommit={() => useEditorStore.getState().endTimelineEdit()} />
+        <span className="w-12 text-right text-xs tabular-nums">{percent}%</span>
+      </div>
+      <div className="flex gap-2">
+        {[100, 125, 150, 200].map(value => <button key={value} type="button"
+          className={cn("rounded border px-2 py-1 text-xs", percent === value ? "border-primary text-primary" : "border-border text-muted-foreground")}
+          onClick={() => setLook("recordingScale", value / 100)}>{value}%</button>)}
+      </div>
     </div>
   );
 }

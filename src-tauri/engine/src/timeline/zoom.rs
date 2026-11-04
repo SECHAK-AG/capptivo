@@ -12,7 +12,7 @@ use crate::math::{clamp, js_max, js_min, Rect};
 /// Offline integration rate for zoom keyframes.
 pub const ZOOM_MOTION_SAMPLE_FPS: f64 = 120.0;
 
-const FOLLOW_CENTER_TAU_SEC: f64 = 0.55;
+const FOLLOW_CENTER_TAU_SEC: f64 = 0.3;
 const FOLLOW_SPRING_ZETA: f64 = 1.05;
 const FOLLOW_MAX_VELOCITY: f64 = 3.4;
 
@@ -22,7 +22,7 @@ const MAX_FACE_CAM_ZOOM_PRESENCE_SCALE: f64 = 1.0;
 
 /// Smart-follow tuning (`SMART_FOLLOW_CONFIG`).
 const SAFE_ZONE_INNER_FRACTION: f64 = 0.5;
-const CLICK_HOLD_SEC: f64 = 0.4;
+const CLICK_HOLD_SEC: f64 = 0.2;
 const FOLLOW_PAN_SNAP_EPS: f64 = 2e-5;
 const FOLLOW_VELOCITY_SNAP_EPS: f64 = 0.028;
 
@@ -301,17 +301,9 @@ impl SmartFollowPlanner {
     }
 
     fn active_click(&self, time: f64) -> Option<TimedPoint> {
-        for click in self.clicks.iter().rev() {
-            let elapsed = time - click.t;
-            if elapsed < 0.0 {
-                continue;
-            }
-            if elapsed <= CLICK_HOLD_SEC {
-                return Some(*click);
-            }
-            break;
-        }
-        None
+        let index = self.clicks.partition_point(|click| click.t <= time);
+        let click = index.checked_sub(1).and_then(|i| self.clicks.get(i))?;
+        (time - click.t <= CLICK_HOLD_SEC).then_some(*click)
     }
 }
 
@@ -438,6 +430,28 @@ pub fn compute_zoom_keyframes(
     crop: Option<CropNorm>,
     recording: Option<Rect>,
 ) -> Vec<ZoomKeyframe> {
+    // A typing zoom follows the recorded field, while the visible cursor keeps
+    // its original track. Mirror the TypeScript keyframe integration input.
+    let typing_metadata = metadata.and_then(|original| {
+        let focus = fragment.typing_focus?;
+        if fragment.follow_source.as_deref() != Some("typing") {
+            return None;
+        }
+        let mut copy = original.clone();
+        copy.cursor_samples = [fragment.start, fragment.end]
+            .into_iter()
+            .map(|t| crate::document::CursorSample {
+                t,
+                x: focus.x,
+                y: focus.y,
+                shape: None,
+            })
+            .collect();
+        copy.cursor_click_samples.clear();
+        copy.cursor_press_intervals.clear();
+        Some(copy)
+    });
+    let metadata = typing_metadata.as_ref().or(metadata);
     let duration = fragment.end - fragment.start;
     // `for (i = 0; i <= ceil(duration * fps); …)` — no samples at all when the
     // bound is negative or NaN.

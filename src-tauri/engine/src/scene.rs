@@ -181,8 +181,16 @@ impl SceneBuilder {
         media: MediaSizes,
     ) -> Self {
         let layout_input = Self::layout_input(&doc, has_background, &media);
-        let recording_rect = layout::recording_rect(&layout_input, width, height);
-        let recording_fraction = layout::recording_rect_fraction(&layout_input, width, height);
+        let recording_rect = layout::scale_recording_rect(
+            layout::recording_rect(&layout_input, width, height),
+            doc.look.recording_scale,
+        );
+        let recording_fraction = Rect::new(
+            recording_rect.x / width,
+            recording_rect.y / height,
+            recording_rect.width / width,
+            recording_rect.height / height,
+        );
         let segments = doc.kept_segments();
         let zoom = ZoomTimeline::new(
             &doc.zoom_fragments,
@@ -268,7 +276,7 @@ impl SceneBuilder {
         );
 
         let zoom = self.zoom.sample(t);
-        let camera = camera_transform(
+        let mut camera = camera_transform(
             w,
             h,
             rect,
@@ -276,6 +284,16 @@ impl SceneBuilder {
             zoom.scale,
             zoom.reactive.target_scale,
         );
+
+        let offset = |v: f64| {
+            if v.is_finite() {
+                v.clamp(-1.0, 1.0)
+            } else {
+                0.0
+            }
+        };
+        camera.x += offset(doc.look.recording_offset_x) * w;
+        camera.y += offset(doc.look.recording_offset_y) * h;
 
         let recording_shadow = (self.has_background && doc.look.recording_shadow_intensity > 0.0)
             .then(|| ShadowDraw {
@@ -290,6 +308,7 @@ impl SceneBuilder {
         let blur_regions = doc
             .blur_regions
             .iter()
+            .filter(|region| region.active_at(t))
             .filter_map(|region| blur_region_placement(region, sw, sh, content, rect))
             .map(|(source, dest)| BlurDraw { source, dest })
             .collect();
@@ -576,5 +595,19 @@ mod tests {
             "lag {lag} vs {expected_lag}"
         );
         assert!((head.alpha - 0.95).abs() < 1e-9);
+    }
+    #[test]
+    fn recording_placement_translates_camera_but_keeps_captions_and_backdrop_independent() {
+        let base = SceneBuilder::new(doc(), true, 1080.0, 1920.0, media()).frame(1.0, &Square);
+        let mut moved_doc = doc();
+        moved_doc.look.recording_offset_x = 0.1;
+        moved_doc.look.recording_offset_y = -0.2;
+        let moved = SceneBuilder::new(moved_doc, true, 1080.0, 1920.0, media()).frame(1.0, &Square);
+        assert_eq!(moved.camera.x - base.camera.x, 108.0);
+        assert_eq!(moved.camera.y - base.camera.y, -384.0);
+        assert_eq!(moved.camera.scale, base.camera.scale);
+        assert_eq!(moved.screen, base.screen);
+        assert_eq!(moved.captions, base.captions);
+        assert_eq!(moved.background_darkness, base.background_darkness);
     }
 }

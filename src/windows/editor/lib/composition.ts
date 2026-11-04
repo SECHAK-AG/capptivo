@@ -43,6 +43,9 @@ export function recordingShadowPasses(
 
 /** Default look values, matching the web editor's initial store state. */
 export const DEFAULT_LOOK = {
+  recordingScale: 1,
+  recordingOffsetX: 0,
+  recordingOffsetY: 0,
   devicePadding: EXPORT_COMPOSITION.devicePadding,
   cornerRadius: 18,
   recordingShadowIntensity: 75,
@@ -279,6 +282,7 @@ export function resolveZoomCompositionLayout(params: {
   hasSelectedBackground: boolean;
   hasImageBackground: boolean;
   devicePadding: number;
+  recordingScale?: number;
   screenContentCrop?: ScreenContentCropNorm | null;
 }): ZoomCompositionLayout {
   const { sourceAspect, devicePadding } = resolveRecordingLayoutParams(params);
@@ -287,6 +291,7 @@ export function resolveZoomCompositionLayout(params: {
     params.stageWidth,
     params.stageHeight,
     devicePadding,
+    params.recordingScale,
   );
   return {
     video: videoRectToLayoutFrac(video, params.stageWidth, params.stageHeight),

@@ -19,6 +19,9 @@ import type { AspectRatioPresetId } from "../lib/composition";
 import type { FaceCamParams } from "../store";
 
 export interface LookState {
+  recordingScale?: number;
+  recordingOffsetX?: number;
+  recordingOffsetY?: number;
   devicePadding: number;
   cornerRadius: number;
   recordingShadowIntensity: number;

@@ -36,6 +36,9 @@ export type ComputeCameraTransformInput = {
    * Omit (or pass === scale) for plateau / fixed-rect: classic scale-about-focus.
    */
   targetScale?: number;
+  /** Global recording placement, in fractions of the composition stage. */
+  recordingOffsetX?: number;
+  recordingOffsetY?: number;
 };
 
 function clamp01(value: number): number {
@@ -52,6 +55,9 @@ export function computeCameraTransform(
 ): CameraTransform {
   const { stageWidth, stageHeight, videoRect, focus } = input;
   const scale = Math.max(1, input.scale);
+  const offset = (v: number | undefined) => Number.isFinite(v) ? Math.max(-1, Math.min(1, v!)) : 0;
+  const offsetX = offset(input.recordingOffsetX) * stageWidth;
+  const offsetY = offset(input.recordingOffsetY) * stageHeight;
 
   if (
     stageWidth <= 0 ||
@@ -60,7 +66,7 @@ export function computeCameraTransform(
     videoRect.height <= 0 ||
     scale <= 1 + 1e-6
   ) {
-    return CAMERA_IDENTITY;
+    return offsetX === 0 && offsetY === 0 ? CAMERA_IDENTITY : { scale: 1, x: offsetX, y: offsetY };
   }
 
   const focusStageX = videoRect.x + focus.x * videoRect.width;
@@ -77,8 +83,8 @@ export function computeCameraTransform(
 
   return {
     scale,
-    x: progress * (stageCenterX - focusStageX * targetScale),
-    y: progress * (stageCenterY - focusStageY * targetScale),
+    x: progress * (stageCenterX - focusStageX * targetScale) + offsetX,
+    y: progress * (stageCenterY - focusStageY * targetScale) + offsetY,
   };
 }
 

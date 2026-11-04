@@ -112,6 +112,9 @@ export function customBackgroundPreset(info: CustomBackgroundInfo): BackgroundPr
 }
 
 export interface LookParams {
+  recordingScale?: number;
+  recordingOffsetX?: number;
+  recordingOffsetY?: number;
   devicePadding: number;
   cornerRadius: number;
   recordingShadowIntensity: number;
@@ -411,6 +414,7 @@ export interface EditorStore {
   deleteCustomBackground: (id: string) => Promise<void>;
   setCustomColor: (color: string) => void;
   applyCustomGradient: (angle: number, start: string, end: string) => void;
+  setRecordingPosition: (x: number, y: number) => void;
   setLook: <K extends keyof LookParams>(key: K, value: number) => void;
   setAspectRatioPreset: (id: AspectRatioPresetId) => void;
   setCursorSettings: (patch: Partial<CursorSettings>) => void;
@@ -534,6 +538,9 @@ function extensionFromFileName(name: string): string {
 
 function snapshotOf(s: EditorStore): TimelineSnapshot {
   return {
+    recordingScale: s.look.recordingScale ?? 1,
+    recordingOffsetX: s.look.recordingOffsetX ?? 0,
+    recordingOffsetY: s.look.recordingOffsetY ?? 0,
     blurRegions: s.blurRegions.map(region => ({ ...region })),
     selectedBlurRegionId: s.selectedBlurRegionId,
     captions: s.captions.map(c => ({ ...c, words: c.words?.map(w => ({ ...w })) })),
@@ -581,6 +588,9 @@ function arraysEqual(a: object[], b: object[]): boolean {
 
 function timelineChanged(a: TimelineSnapshot, b: TimelineSnapshot): boolean {
   return (
+    (a.recordingScale ?? 1) !== (b.recordingScale ?? 1) ||
+    (a.recordingOffsetX ?? 0) !== (b.recordingOffsetX ?? 0) ||
+    (a.recordingOffsetY ?? 0) !== (b.recordingOffsetY ?? 0) ||
     !arraysEqual(a.blurRegions ?? [], b.blurRegions ?? []) ||
     !arraysEqual(a.captions ?? [], b.captions ?? []) ||
     !recordsEqual(a.captionSettings ?? {}, b.captionSettings ?? {}) ||
@@ -705,6 +715,8 @@ function scheduleAutoSuggestZooms(get: () => EditorStore) {
 function applySnapshot(set: (p: Partial<EditorStore>) => void, snap: TimelineSnapshot) {
   invalidateZoomKeyframesCache();
   set({
+    look: { ...useEditorStore.getState().look, recordingScale: snap.recordingScale ?? 1,
+      recordingOffsetX: snap.recordingOffsetX ?? 0, recordingOffsetY: snap.recordingOffsetY ?? 0 },
     ...(snap.blurRegions ? { blurRegions: snap.blurRegions } : {}),
     selectedBlurRegionId: snap.selectedBlurRegionId ?? null,
     ...(snap.captions ? { captions: snap.captions } : {}),
@@ -1164,8 +1176,25 @@ export const useEditorStore = create<EditorStore>((set, get) => ({
     loadImage(src).then((img) => token === bgLoadToken && set({ backgroundImage: img }));
   },
 
+  setRecordingPosition(x, y) {
+    if (![x, y].every(Number.isFinite)) return;
+    const s = get();
+    x = Math.max(-1, Math.min(1, x)); y = Math.max(-1, Math.min(1, y));
+    if (x === (s.look.recordingOffsetX ?? 0) && y === (s.look.recordingOffsetY ?? 0)) return;
+    const before = editSnapshot ? null : snapshotOf(s);
+    set({ look: { ...s.look, recordingOffsetX: x, recordingOffsetY: y } });
+    if (before) pushHistory(get, set, before);
+    schedulePersist(get);
+  },
   setLook(key, value) {
+    if (!Number.isFinite(value)) return;
+    const positioning = ['recordingScale', 'recordingOffsetX', 'recordingOffsetY'].includes(key);
+    const before = positioning && !editSnapshot ? snapshotOf(get()) : null;
+    if (key === 'recordingOffsetX' || key === 'recordingOffsetY') value = Math.max(-1, Math.min(1, value));
+    if (key === 'recordingScale') value = Math.max(0.5, Math.min(3, value));
+    if (get().look[key] === value) return;
     set((s) => ({ look: { ...s.look, [key]: value } }));
+    if (before) pushHistory(get, set, before);
     schedulePersist(get);
   },
   setAspectRatioPreset(id) {
@@ -1218,13 +1247,20 @@ export const useEditorStore = create<EditorStore>((set, get) => ({
     pushHistory(get, set, before); schedulePersist(get);
   },
   selectBlurRegion(id) {
+    const s = get();
+    const region = s.blurRegions.find(r => r.id === id);
+    const compact = compactTimeline(s.segments, s.duration);
+    const time = region ? timelineToSource(compact.clips, sourceToTimeline(compact.clips, region.start ?? 0)) : null;
     set({ selectedBlurRegionId: id, selectedCaptionId: null, selectedZoomFragmentId: null,
-      selectedSegmentId: null, selectedGapIndex: null, inspectorPanel: "look", isPlaying: false });
+      selectedSegmentId: null, selectedGapIndex: null, inspectorPanel: "look", isPlaying: false,
+      ...(time !== null ? { currentTime: time } : {}) });
   },
   retimeBlurRegion(id, start, end) {
     const duration = get().duration;
-    const left = Math.max(0, Math.min(duration-0.2, start));
-    const right = Math.max(left+0.2, Math.min(duration, end));
+    if (!(duration > 0) || ![start, end].every(Number.isFinite)) return;
+    const minimum = Math.min(0.2, duration);
+    const left = Math.max(0, Math.min(duration-minimum, start));
+    const right = Math.max(left+minimum, Math.min(duration, end));
     get().updateBlurRegion(id, { start: left, end: right });
   },
   updateBlurRegion(id, patch) {

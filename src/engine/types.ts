@@ -41,6 +41,9 @@ export type PreviewInteraction =
   | null;
 
 export type TimelineSnapshot = {
+  recordingScale?: number;
+  recordingOffsetX?: number;
+  recordingOffsetY?: number;
   blurRegions?: BlurRegion[];
   selectedBlurRegionId?: string | null;
   captions?: CaptionCue[];

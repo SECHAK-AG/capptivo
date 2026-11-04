@@ -32,6 +32,8 @@ export type FrameCompositorOptions = {
    * off so pixels stay on the GPU.
    */
   cpuReadback?: boolean;
+  /** Preview only: render directly at display resolution, preserving stage coordinates. */
+  interactivePreview?: boolean;
   /**
    * Retain the GPU drawing buffer past `compose()`. Required whenever the
    * canvas is handed to something else (the WebCodecs encoder) after the

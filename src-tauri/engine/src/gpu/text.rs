@@ -63,6 +63,7 @@ struct Style {
     sentence_radius: f64,
     word_radius: f64,
     bottom_offset: f64,
+    position: crate::document::CaptionPosition,
     word_highlight: bool,
 }
 
@@ -170,6 +171,7 @@ impl CaptionRenderer {
             sentence_radius: js_max(0.0, settings.sentence_radius_px),
             word_radius: js_max(0.0, settings.word_radius_px),
             bottom_offset: settings.bottom_offset_px,
+            position: settings.position,
             word_highlight: settings.word_highlight,
         };
         if style.font_size <= 0.0 || !style.font_size.is_finite() {
@@ -198,7 +200,7 @@ impl CaptionRenderer {
     fn attrs(&self) -> Attrs<'static> {
         Attrs::new()
             .family(self.style.family.family())
-            .weight(Weight::SEMIBOLD)
+            .weight(Weight::BOLD)
     }
 
     fn metrics(&self) -> Metrics {
@@ -368,8 +370,13 @@ impl CaptionRenderer {
         let n = layout.lines.len() as f64;
         let block_w = layout.block_inner_width + pad_x * 2.0;
         let block_h = n * line_height + (n - 1.0) * line_gap + pad_y * 2.0;
-        let block_left = (self.stage.0 - block_w) / 2.0;
-        let block_top = self.stage.1 - style.bottom_offset - block_h;
+        let (block_left, block_top) = crate::timeline::captions::caption_block_origin(
+            self.stage,
+            (block_w, block_h),
+            style.position,
+            style.bottom_offset,
+            cue.anchor,
+        );
 
         if let Some(bg) = style.sentence_background {
             draws.push(DrawUniform::solid(

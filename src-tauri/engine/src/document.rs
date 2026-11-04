@@ -76,6 +76,9 @@ pub enum BackgroundType {
 #[derive(Debug, Clone, Copy, PartialEq, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", default)]
 pub struct Look {
+    pub recording_scale: f64,
+    pub recording_offset_x: f64,
+    pub recording_offset_y: f64,
     pub device_padding: f64,
     pub corner_radius: f64,
     pub recording_shadow_intensity: f64,
@@ -87,6 +90,9 @@ impl Default for Look {
     /// `DEFAULT_LOOK` in `lib/composition.ts`.
     fn default() -> Self {
         Self {
+            recording_scale: 1.0,
+            recording_offset_x: 0.0,
+            recording_offset_y: 0.0,
             device_padding: 120.0,
             corner_radius: 18.0,
             recording_shadow_intensity: 75.0,
@@ -118,6 +124,10 @@ pub enum ZoomMode {
 #[serde(rename_all = "camelCase")]
 pub struct ZoomFragment {
     #[serde(default)]
+    pub follow_source: Option<String>,
+    #[serde(default)]
+    pub typing_focus: Option<Point>,
+    #[serde(default)]
     pub id: String,
     pub start: f64,
     pub end: f64,
@@ -144,11 +154,25 @@ pub struct ZoomFragment {
 #[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
 pub struct BlurRegion {
     #[serde(default)]
+    pub enabled: Option<bool>,
+    #[serde(default)]
+    pub start: Option<f64>,
+    #[serde(default)]
+    pub end: Option<f64>,
+    #[serde(default)]
     pub id: String,
     pub x: f64,
     pub y: f64,
     pub width: f64,
     pub height: f64,
+}
+
+impl BlurRegion {
+    pub fn active_at(&self, time: f64) -> bool {
+        self.enabled != Some(false)
+            && time >= self.start.unwrap_or(0.0)
+            && time < self.end.unwrap_or(f64::INFINITY)
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize, Default)]
@@ -351,6 +375,19 @@ pub struct CaptionCue {
     pub text: String,
     #[serde(default)]
     pub words: Option<Vec<CaptionWord>>,
+    #[serde(default)]
+    pub manual: bool,
+    #[serde(default)]
+    pub anchor: Option<Point>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum CaptionPosition {
+    Top,
+    Center,
+    #[default]
+    Bottom,
 }
 
 /// Caption style (`CaptionSettings` in `captions/settings.ts`), already
@@ -368,6 +405,7 @@ pub struct CaptionSettings {
     pub font_family: String,
     pub font_size_px: f64,
     pub bottom_offset_px: f64,
+    pub position: CaptionPosition,
     pub word_highlight: bool,
     pub timing_offset_ms: f64,
 }
@@ -386,6 +424,7 @@ impl Default for CaptionSettings {
             font_family: "system-ui, -apple-system, sans-serif".into(),
             font_size_px: 38.0,
             bottom_offset_px: 48.0,
+            position: CaptionPosition::Bottom,
             word_highlight: true,
             timing_offset_ms: 0.0,
         }

@@ -383,7 +383,7 @@ export const ZOOM_FOLLOW = {
   DAMPING: 0.9,
   MAX_VELOCITY: 3.4,
   /** Base follow τ at damping=4; actual τ = this × (damping / 4). */
-  FOLLOW_CENTER_TAU_SEC: 0.55,
+  FOLLOW_CENTER_TAU_SEC: 0.3,
   /** Overdamped spring ζ for follow-cursor pan. */
   FOLLOW_SPRING_ZETA: 1.05,
 } as const;

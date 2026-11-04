@@ -136,7 +136,7 @@ export function ZoomPanel({
       devicePadding: look.devicePadding,
       screenContentCrop,
     });
-    const { video } = getCompositionLayout(layoutAspect, compW, compH, devicePadding);
+    const { video } = getCompositionLayout(layoutAspect, compW, compH, devicePadding, look.recordingScale);
     const frac: VideoLayoutFrac = {
       x: video.x / compW,
       y: video.y / compH,
@@ -158,6 +158,7 @@ export function ZoomPanel({
     hasSelectedBackground,
     hasImageBackground,
     look.devicePadding,
+    look.recordingScale,
     look.cornerRadius,
     screenContentCrop,
     compW,
@@ -484,7 +485,7 @@ export function ZoomPanel({
             </div>
           )}
 
-          {selectedZoomFragment.mode === "fixed-rect" && selectedZoomFixedRect && (
+          {visible && selectedZoomFragment.mode === "fixed-rect" && selectedZoomFixedRect && (
             <div className="space-y-2">
               <FieldLabelWithHint
                 className="text-xs font-medium tracking-wider text-muted-foreground uppercase"
@@ -643,8 +644,14 @@ export function ZoomPanel({
                       }))
                     }
                   />
+                  <div className="flex gap-2">
+                    {[{ label: 'Fast', damping: 2 }, { label: 'Balanced', damping: 4 }, { label: 'Smooth', damping: 8 }].map(preset =>
+                      <button key={preset.label} type="button" className="rounded border border-border px-2 py-1 text-xs hover:bg-muted"
+                        aria-pressed={Math.round(selectedZoomFragment.damping ?? 4) === preset.damping}
+                        onClick={() => updateSelectedZoomFragment(fragment => ({ ...fragment, damping: preset.damping }))}>{preset.label}</button>)}
+                  </div>
                   <div className="text-xs text-muted-foreground tabular-nums">
-                    {Math.round(selectedZoomFragment.damping ?? 4)}
+                    Lower = faster follow · {Math.round(selectedZoomFragment.damping ?? 4)}
                   </div>
                 </div>
               </div>

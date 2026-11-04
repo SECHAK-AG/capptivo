@@ -238,3 +238,14 @@ for (const scale of [1.5, 2, 3]) {
 }
 
 console.log("cameraTransform.selfcheck: ok");
+
+// Placement translates the whole recording after camera motion, so auto-zoom
+// does not silently cancel the user's placement or separate cursor and screen.
+for (const scale of [1, 1.5, 2]) {
+  const input = { stageWidth: 1080, stageHeight: 1920, videoRect: {x:120,y:700,width:840,height:472.5}, focus:{x:0.7,y:0.4}, scale };
+  const base = computeCameraTransform(input);
+  const moved = computeCameraTransform({...input, recordingOffsetX:0.1, recordingOffsetY:-0.2});
+  assert(Math.abs(moved.x-base.x-108)<1e-9, 'placement survives active zoom horizontally');
+  assert(Math.abs(moved.y-base.y+384)<1e-9, 'placement survives active zoom vertically');
+  assert(moved.scale===base.scale, 'placement never changes zoom level');
+}

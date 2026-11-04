@@ -10,7 +10,6 @@ export function ManualCaptionEditor() {
   const selected = captions.find(c => c.id === selectedCaptionId);
   const selectCaption = useEditorStore(s => s.selectCaption);
   const duration = useEditorStore(s => s.duration);
-  const currentTime = useEditorStore(s => s.currentTime);
   const generating = useEditorStore(s => s.captionGenerating);
   const save = useEditorStore(s => s.saveManualCaption);
   const remove = useEditorStore(s => s.removeManualCaption);
@@ -27,13 +26,15 @@ export function ManualCaptionEditor() {
     setError(null);
     if (selectedCaptionId) { textRef.current?.focus(); textRef.current?.select(); }
   }, [selectedCaptionId]);
+  useEffect(() => { if (selected) setText(selected.text); }, [selected?.text]);
   useEffect(() => {
     if (!selected) return;
     setStart(String(selected.startMs / 1000)); setEnd(String(selected.endMs / 1000));
   }, [selected?.startMs, selected?.endMs]);
   const field = 'w-full rounded-md border border-border bg-background p-2 text-xs';
-  const reset = () => { setEditingId(null); setText(''); setError(null); };
+  const reset = () => { selectCaption(null, false); setEditingId(null); setText(''); setError(null); };
   const usePlayhead = () => {
+    const currentTime = useEditorStore.getState().currentTime;
     setStart(currentTime.toFixed(2));
     setEnd(Math.min(duration, currentTime + 3).toFixed(2));
   };

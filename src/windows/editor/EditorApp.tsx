@@ -267,19 +267,19 @@ export function EditorApp() {
             hasFaceCam={!!cameraUrl}
             onOpenRecordings={openRecordings}
           >
-            <LookPanel visible={inspectorPanel === "look"} />
-            <CursorPanel visible={inspectorPanel === "cursor"} />
-            <CameraPanel visible={inspectorPanel === "camera"} />
-            <ZoomPanel
+            {inspectorPanel === "look" && <LookPanel />}
+            {inspectorPanel === "cursor" && <CursorPanel />}
+            {inspectorPanel === "camera" && <CameraPanel />}
+            {inspectorPanel === "zoom" && <ZoomPanel
               visible={inspectorPanel === "zoom"}
               recordingMetadata={recordingMetadata}
               zoomFragments={zoomFragments}
               selectedZoomFragmentId={selectedZoomFragmentId}
               onSelectZoomFragmentId={selectZoomFragment}
               updateSelectedZoomFragment={updateSelectedZoomFragment}
-            />
+            />}
             <CaptionsPanel visible={inspectorPanel === "captions"} />
-            <ConfigPanel visible={inspectorPanel === "config"} />
+            {inspectorPanel === "config" && <ConfigPanel />}
           </InspectorChrome>
 
           <div className="flex min-w-0 flex-1 flex-col">

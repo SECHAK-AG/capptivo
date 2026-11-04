@@ -12,10 +12,11 @@ export function CaptionPositionOverlay({ width, height }: { width: number; heigh
   const context = useMemo(() => document.createElement('canvas').getContext('2d'), []);
   const cues = useEditorStore(s => s.captions);
   const settings = useEditorStore(s => s.captionSettings);
-  const currentTime = useEditorStore(s => s.currentTime);
+  const currentTime = useEditorStore(s => s.isPlaying ? 0 : s.currentTime);
   const playing = useEditorStore(s => s.isPlaying);
   const exporting = useEditorStore(s => s.exporting);
   const selected = useEditorStore(s => s.selectedCaptionId);
+  if (playing || exporting || !settings.enabled || !context) return null;
   const resolved = resolveActiveCueWords(cues, playbackTimeMs(currentTime*1000, settings.timingOffsetMs));
   const cue = resolved?.cue;
   if (playing || exporting || !settings.enabled || !cue || !context || !cue.text.trim()) return null;
