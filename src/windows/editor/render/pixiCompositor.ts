@@ -1,3 +1,4 @@
+import { isBlurRegionActive } from "@/engine/blurRegions";
 /**
  * GPU frame compositor (Pixi). Preview prefers WebGL on WKWebView.
  * Persistent scene graph with per-layer content keys to minimize per-frame work.
@@ -376,6 +377,7 @@ export async function createPixiFrameCompositor(
   ): void {
     const textureSource = screenSprite.texture.source;
     const placements = (inputs.blurRegions ?? [])
+      .filter(region => isBlurRegionActive(region, inputs.cursorTime ?? 0))
       .map((region) =>
         blurRegionPlacement(
           region,

@@ -8,6 +8,10 @@ export interface CaptionCueWord {
 }
 
 export interface CaptionCue {
+  /** Optional per-caption centre in normalized composition coordinates. */
+  anchor?: { x: number; y: number };
+  /** User-authored text uses exact start/end boundaries, without speech hold. */
+  manual?: boolean;
   id: string;
   startMs: number;
   endMs: number;

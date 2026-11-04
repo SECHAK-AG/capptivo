@@ -1,5 +1,8 @@
 export type BlurRegion = {
   id: string;
+  enabled?: boolean;
+  start?: number;
+  end?: number;
   x: number;
   y: number;
   width: number;
@@ -41,8 +44,12 @@ export function clampBlurRegion(region: BlurRegion): BlurRegion {
     BLUR_REGION_MIN_SIZE,
     1,
   );
+  const start = Number.isFinite(region.start) ? Math.max(0, region.start!) : 0;
   return {
     id: region.id,
+    enabled: region.enabled !== false,
+    start,
+    ...(Number.isFinite(region.end) ? { end: Math.max(start + 0.2, region.end!) } : {}),
     x: clamp(Number.isFinite(region.x) ? region.x : 0, 0, 1 - width),
     y: clamp(Number.isFinite(region.y) ? region.y : 0, 0, 1 - height),
     width,
@@ -106,4 +113,10 @@ export function blurRegionPlacement(
       height: (bottom - top) * scaleY,
     },
   };
+}
+
+/** Legacy regions with no timing cover the whole recording. End is exclusive. */
+export function isBlurRegionActive(region: BlurRegion, sourceTime: number): boolean {
+  return region.enabled !== false && sourceTime >= (region.start ?? 0)
+    && sourceTime < (region.end ?? Infinity);
 }

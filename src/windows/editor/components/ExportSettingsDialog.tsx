@@ -1,3 +1,4 @@
+import { commands } from "@/ipc/bindings";
 import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { Clapperboard, Download, ImageIcon } from "lucide-react";
 
@@ -78,6 +79,23 @@ export function ExportSettingsDialog({
 }: ExportSettingsDialogProps) {
   const { t } = useI18n();
   const [settings, setSettings] = useState<ExportSettings>(() => loadLastExportSettings());
+  const [exportFolder, setExportFolder] = useState<string | null>(null);
+  const [folderBusy, setFolderBusy] = useState(false);
+  const [folderError, setFolderError] = useState<string | null>(null);
+  useEffect(() => {
+    if (!open) return;
+    let active = true;
+    setFolderError(null);
+    void commands.getExportFolder().then(folder => { if (active) setExportFolder(folder); })
+      .catch(e => { if (active) setFolderError(String(e)); });
+    return () => { active = false; };
+  }, [open]);
+  const chooseFolder = async () => {
+    setFolderBusy(true); setFolderError(null);
+    try { const folder = await commands.chooseExportFolder(); if (folder) setExportFolder(folder); }
+    catch (e) { setFolderError(String(e)); }
+    finally { setFolderBusy(false); }
+  };
 
   useEffect(() => {
     if (open) setSettings(loadLastExportSettings());
@@ -122,7 +140,7 @@ export function ExportSettingsDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="gap-6 border-border bg-card p-5 sm:max-w-md">
+      <DialogContent className="max-h-[90vh] overflow-y-auto gap-6 border-border bg-card p-5 sm:max-w-md">
         <DialogHeader className="pr-8">
           <DialogTitle className="text-xs font-medium tracking-wider text-muted-foreground uppercase">
             {t("export.dialog.title")}
@@ -131,6 +149,14 @@ export function ExportSettingsDialog({
             {t("export.dialog.description")}
           </DialogDescription>
         </DialogHeader>
+
+        <section className="space-y-2 rounded-lg border border-border p-3">
+          <SectionLabel>Export folder</SectionLabel>
+          <p className="break-all text-xs text-muted-foreground">{exportFolder ?? "Choose a folder, or use the system save dialog."}</p>
+          <Button type="button" size="sm" variant="outline" disabled={folderBusy || exporting} onClick={() => void chooseFolder()}>{folderBusy ? "Opening…" : "Choose folder"}</Button>
+          <p className="text-[11px] text-muted-foreground">Remembered for all projects, including after restart. The save dialog opens here so you can choose a filename.</p>
+          {folderError && <p role="alert" className="text-xs text-amber-600">{folderError}</p>}
+        </section>
 
         <div className="space-y-2">
           <SectionLabel>{t("export.format")}</SectionLabel>

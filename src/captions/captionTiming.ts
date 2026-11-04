@@ -164,6 +164,7 @@ export function resolveActiveCueWords(
   const cueIndex = pickCueIndexAtTimeSec(cues, timeSec);
   const cue = cues[cueIndex];
   if (!cue) return null;
+  if (cue.manual && (timeMs < cue.startMs || timeMs >= cue.endMs)) return null;
 
   const prep = preparedCue(cue);
   if (prep.kind === "empty") return null;

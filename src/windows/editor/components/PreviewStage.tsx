@@ -1,3 +1,5 @@
+import { previewCutAction, previewFrameReady } from "../lib/previewCutPlayback";
+import { CaptionPositionOverlay } from "./CaptionPositionOverlay";
 /**
  * Preview column matching the web editor: centered canvas + playback bar,
  * then a full-bleed timeline docked to the bottom of the column.
@@ -294,6 +296,9 @@ export function PreviewStage({
 
       const video = videoRef.current;
       const camera = cameraRef.current;
+      // During a cut seek the decoder can temporarily have no current pixels.
+      // Keep the entire previous composition instead of clearing its screen layer.
+      if (!previewFrameReady(video)) return;
       // One clock, one owner. A rolling element's own position is the truth —
       // it advances between store publishes. The moment it stops rolling that
       // position is stale (WKWebView reports the pre-seek time for as long as
@@ -375,23 +380,19 @@ export function PreviewStage({
     };
 
     const advancePlayback = () => {
-      const { segments, duration } = useEditorStore.getState();
+      const { segments } = useEditorStore.getState();
       const video = videoRef.current;
-      if (!video || segments.length === 0) return;
-      if (findSegmentIndexAtTime(segments, video.currentTime) >= 0) return;
-
-      const next = getNextPlayableTime(segments, video.currentTime);
-      if (next != null && next < duration) {
-        video.currentTime = next;
-        publishPlaybackTime(next, { force: true });
+      if (!video) return;
+      const action = previewCutAction(segments, video.currentTime, video.seeking);
+      if (action.kind === "none") return;
+      if (action.kind === "seek") {
+        video.currentTime = action.time;
+        publishPlaybackTime(action.time, { force: true });
       } else {
         video.pause();
         useEditorStore.getState().setPlaying(false);
-        const last = segments[segments.length - 1];
-        if (last) {
-          video.currentTime = last.end;
-          publishPlaybackTime(last.end, { force: true });
-        }
+        video.currentTime = action.time;
+        publishPlaybackTime(action.time, { force: true });
       }
     };
 
@@ -709,6 +710,7 @@ export function PreviewStage({
             }}
           >
             <div ref={hostRef} className="block h-full w-full" />
+            <CaptionPositionOverlay width={stage.width} height={stage.height} />
             {playbackUrl === null && proxyPending ? (
               <div className="pointer-events-none absolute inset-0 flex items-center justify-center bg-black/60 text-sm text-white/80">
                 {translate("preview.preparing")}

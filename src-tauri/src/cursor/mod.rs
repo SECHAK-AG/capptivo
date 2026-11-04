@@ -2,15 +2,18 @@
 //! writes `cursor.json`, whose schema is a superset of what the editor engine's
 //! `smartFollowCursor` / `zoomMotion` already consume.
 //!
-//! Position polling via Core Graphics needs **no** TCC permission. Click *events*
-//! would need an event tap (Input Monitoring), so v1 records movement only and
-//! degrades gracefully — zoom-follow works from motion alone (§11).
+//! Records cursor motion, shape and click edges. On Windows, coarse typing-focus
+//! points are recorded separately from mouse motion for automatic writing zooms.
+//! No key identities or field contents are persisted in the metadata.
 
 use serde::{Deserialize, Serialize};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::thread::JoinHandle;
 use std::time::Instant;
+
+#[cfg(target_os = "windows")]
+mod windows_typing;
 
 /// One cursor sample, normalized to the captured source rect (0..1) so the editor
 /// is resolution-independent. `t` is seconds since record-start (`t0`), shared
@@ -33,6 +36,7 @@ pub enum CursorKind {
     Move,
     Down,
     Up,
+    Typing,
 }
 
 /// The *system* cursor shape shown on screen, captured per sample so the editor
@@ -193,6 +197,8 @@ struct ButtonSample {
 /// A per-tick view of the global pointer, in the same coordinate space as the
 /// backend's `capture_rect` (points on macOS, physical pixels elsewhere).
 trait PointerProbe {
+    /// Active text-field/caret location on typing; never the characters typed.
+    fn typing_focus(&mut self) -> Option<(f64, f64)> { None }
     fn location(&mut self) -> Option<(f64, f64)>;
     /// Poll the button once for this tick (state + between-tick tap count).
     fn button(&mut self) -> ButtonSample;
@@ -245,6 +251,16 @@ impl ShapeDebouncer {
         }
         self.settled
     }
+}
+
+/// Unlike cursor replay, typing outside the captured area must not be clamped in.
+fn normalize_typing_focus(rect: CaptureRect, x: f64, y: f64) -> Option<(f64, f64)> {
+    if rect.width <= 0.0 || rect.height <= 0.0 { return None; }
+    let nx = (x - rect.x) / rect.width;
+    let ny = (y - rect.y) / rect.height;
+    if nx.is_finite() && ny.is_finite() && (0.0..=1.0).contains(&nx) && (0.0..=1.0).contains(&ny) {
+        Some((nx, ny))
+    } else { None }
 }
 
 fn spawn_sampler(
@@ -377,6 +393,13 @@ fn run_sampler_loop(
                     last_shape = shape;
                     last_button = button;
                 }
+            }
+        }
+
+        if let Some((x, y)) = probe.typing_focus() {
+            if let Some((x, y)) = normalize_typing_focus(rect, x, y) {
+                samples.push(CursorSample { t: t0.elapsed().as_secs_f64(), x, y,
+                    kind: CursorKind::Typing, shape: CursorShape::Default });
             }
         }
 
@@ -699,6 +722,7 @@ mod win_probe {
         /// back to `Default`, same as unknown cursors on macOS.
         known: Vec<(HCURSOR, CursorShape)>,
         prev_held: bool,
+        typing: super::windows_typing::TypingProbe,
     }
 
     impl WinProbe {
@@ -722,11 +746,13 @@ mod win_probe {
             Self {
                 known,
                 prev_held: false,
+                typing: super::windows_typing::TypingProbe::new(),
             }
         }
     }
 
     impl PointerProbe for WinProbe {
+        fn typing_focus(&mut self) -> Option<(f64, f64)> { self.typing.sample() }
         fn location(&mut self) -> Option<(f64, f64)> {
             let mut p = POINT::default();
             unsafe { GetCursorPos(&mut p) }.ok()?;
@@ -890,6 +916,15 @@ mod x11_probe {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn typing_is_normalized_and_never_clamped_into_capture() {
+        let rect = CaptureRect { x: 100.0, y: 200.0, width: 800.0, height: 600.0 };
+        assert_eq!(normalize_typing_focus(rect, 500.0, 500.0), Some((0.5, 0.5)));
+        assert_eq!(normalize_typing_focus(rect, 10.0, 500.0), None);
+        assert_eq!(normalize_typing_focus(rect, f64::NAN, 500.0), None);
+        assert_eq!(normalize_typing_focus(CaptureRect::default(), 1.0, 1.0), None);
+    }
+
     use std::sync::atomic::Ordering;
     use std::time::Instant;
 

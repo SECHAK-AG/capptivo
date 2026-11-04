@@ -1,3 +1,4 @@
+import { Button } from "@/components/ui/button";
 /**
  * Zoom inspector panel — desktop analog of the web editor's `EditorZoomPanel`.
  */
@@ -73,6 +74,9 @@ export function ZoomPanel({
   updateSelectedZoomFragment,
 }: ZoomPanelProps) {
   const { t } = useI18n();
+  const autoTypingZoom = useEditorStore(s => s.autoTypingZoom);
+  const setAutoTypingZoom = useEditorStore(s => s.setAutoTypingZoom);
+  const suggestTypingZooms = useEditorStore(s => s.suggestTypingZooms);
   const previewUrl = useEditorStore((s) =>
     screenPreviewUrl(s.proxyUrl, s.screenUrl),
   );
@@ -336,6 +340,15 @@ export function ZoomPanel({
 
   return (
     <div className={cn("flex flex-col gap-4", !visible && "hidden")}>
+      <section className="space-y-2 rounded-lg border border-border p-3">
+        <div className="flex items-center justify-between gap-2">
+          <Label htmlFor="auto-typing-zoom">Auto typing zoom</Label>
+          <Switch id="auto-typing-zoom" checked={autoTypingZoom} onCheckedChange={setAutoTypingZoom} />
+        </div>
+        <p className="text-[11px] text-muted-foreground">New Windows recordings can zoom to the field you type in. Keystrokes and field contents are not stored in metadata. Existing zoom edits are kept.</p>
+        <Button type="button" size="sm" variant="outline" onClick={suggestTypingZooms}>Suggest typing zooms</Button>
+        {selectedZoomFragment?.followSource === "typing" && <p className="text-xs text-sky-500">Selected zoom follows the typing field, not the mouse.</p>}
+      </section>
       {zoomFragments.length === 0 && (
         <p className="text-sm leading-relaxed text-muted-foreground">{t("zoom.empty.body")}</p>
       )}
@@ -382,7 +395,7 @@ export function ZoomPanel({
                       ? "bg-background text-foreground shadow-sm"
                       : "text-muted-foreground hover:text-foreground",
                   )}
-                  onClick={() => updateSelectedZoomFragment((fragment) => ({ ...fragment, mode: "follow-cursor" }))}
+                  onClick={() => updateSelectedZoomFragment((fragment) => ({ ...fragment, mode: "follow-cursor", followSource: undefined, typingFocus: undefined }))}
                 >
                   {t("zoom.tag.follow")}
                 </button>

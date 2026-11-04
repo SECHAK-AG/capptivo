@@ -1,3 +1,8 @@
+import { compactTimeline, sourceToTimeline, timelineToSource, projectTimelineRange } from "./lib/compactTimeline";
+import { removeVideoClip } from "./lib/clipEditing";
+import { buildAutomaticZoomSuggestions, buildTypingZoomSuggestions } from "./lib/typingZoomSuggestions";
+import { freeCaptionRange, retimeCaption } from "@/captions/timelineCues";
+import { saveManualCue } from "@/captions/manualCues";
 /**
  * Editor store — look params + playback + trim/zoom timeline (web-compatible shapes).
  * Zoom keyframes live in `lib/zoomCache.ts` so the rAF loop never rebuilds springs.
@@ -21,7 +26,6 @@ import {
   getNextPlayableTime,
   normalizeSegments,
   parseCursorSettings,
-  removeSegmentById,
   resizeTrimGapAtIndex,
   segmentsFromTrimGaps,
   splitSegmentAtTime,
@@ -75,8 +79,6 @@ import {
 import { invalidateZoomKeyframesCache } from "./lib/zoomCache";
 import {
   AUTO_ZOOM_TARGET_SCALE,
-  buildClickZoomSuggestions,
-  shouldAutoSuggestZoomsForSource,
   type ZoomSuggestionStatus,
 } from "./lib/zoomSuggestionUtils";
 import type { InspectorPanelId } from "./components/InspectorChrome";
@@ -371,11 +373,16 @@ export interface EditorStore {
   segments: TrimSegment[];
   zoomFragments: ZoomFragment[];
   blurRegions: BlurRegion[];
+  selectedBlurRegionId: string | null;
   selectedSegmentId: string | null;
   selectedZoomFragmentId: string | null;
   selectedGapIndex: number | null;
   historyPast: TimelineSnapshot[];
   historyFuture: TimelineSnapshot[];
+
+  autoTypingZoom: boolean;
+  setAutoTypingZoom: (enabled: boolean) => void;
+  suggestTypingZooms: () => void;
 
   exporting: boolean;
   exportProgress: number;
@@ -383,6 +390,7 @@ export interface EditorStore {
   exportError: string | null;
 
   captions: CaptionCue[];
+  selectedCaptionId: string | null;
   captionSettings: CaptionSettings;
   captionGenerating: boolean;
   captionError: string | null;
@@ -409,12 +417,20 @@ export interface EditorStore {
   setFaceCam: (patch: Partial<FaceCamParams>) => void;
   setScreenContentCrop: (crop: ScreenContentCropNorm | null) => void;
   addBlurRegion: () => void;
+  selectBlurRegion: (id: string | null) => void;
+  retimeBlurRegion: (id: string, start: number, end: number) => void;
   updateBlurRegion: (id: string, patch: Partial<Omit<BlurRegion, "id">>) => void;
   removeBlurRegion: (id: string) => void;
   setInspectorPanel: (panel: InspectorPanelId) => void;
   setCaptionSettings: (patch: Partial<CaptionSettings>) => void;
   generateCaptions: () => Promise<void>;
   clearCaptions: () => void;
+  saveManualCaption: (draft: { id: string; text: string; startMs: number; endMs: number }) => string | null;
+  removeManualCaption: (id: string) => void;
+  addTimelineCaption: (at?: number) => void;
+  selectCaption: (id: string | null, seek?: boolean) => void;
+  setCaptionAnchor: (id: string, anchor?: { x: number; y: number }) => void;
+  retimeTimelineCaption: (id: string, start: number, end: number, mode: "move" | "start" | "end") => void;
   /** Fix Whisper typos; timings kept when token count still matches. */
   updateCaptionText: (cueId: string, text: string) => void;
   /** Batch edits from the caption sheet — one persist. */
@@ -518,6 +534,11 @@ function extensionFromFileName(name: string): string {
 
 function snapshotOf(s: EditorStore): TimelineSnapshot {
   return {
+    blurRegions: s.blurRegions.map(region => ({ ...region })),
+    selectedBlurRegionId: s.selectedBlurRegionId,
+    captions: s.captions.map(c => ({ ...c, words: c.words?.map(w => ({ ...w })) })),
+    captionSettings: { ...s.captionSettings },
+    selectedCaptionId: s.selectedCaptionId,
     segments: s.segments.map((seg) => ({ ...seg })),
     zoomFragments: s.zoomFragments.map((z) => ({ ...z, fixedRect: z.fixedRect ? { ...z.fixedRect } : undefined })),
     selectedSegmentId: s.selectedSegmentId,
@@ -560,6 +581,9 @@ function arraysEqual(a: object[], b: object[]): boolean {
 
 function timelineChanged(a: TimelineSnapshot, b: TimelineSnapshot): boolean {
   return (
+    !arraysEqual(a.blurRegions ?? [], b.blurRegions ?? []) ||
+    !arraysEqual(a.captions ?? [], b.captions ?? []) ||
+    !recordsEqual(a.captionSettings ?? {}, b.captionSettings ?? {}) ||
     !arraysEqual(a.segments, b.segments) ||
     !arraysEqual(a.zoomFragments, b.zoomFragments) ||
     a.selectedSegmentId !== b.selectedSegmentId ||
@@ -669,13 +693,8 @@ function scheduleAutoSuggestZooms(get: () => EditorStore) {
     }
     if (!s.recordingMetadata) return;
 
-    const w = s.sourceVideoSize?.width ?? s.recordingMetadata.sourceWidth;
-    const h = s.sourceVideoSize?.height ?? s.recordingMetadata.sourceHeight;
-    if (!shouldAutoSuggestZoomsForSource(w, h)) {
-      autoSuggestDoneForProject = s.projectId;
-      return;
-    }
-
+    // Click tracking works for display, window and area captures, including
+    // portrait sources. Do not suppress suggestions based on source aspect.
     const status = get().suggestZoomsFromClicks({ force: false, selectPanel: false });
     if (status !== "no-duration") {
       autoSuggestDoneForProject = s.projectId;
@@ -686,6 +705,11 @@ function scheduleAutoSuggestZooms(get: () => EditorStore) {
 function applySnapshot(set: (p: Partial<EditorStore>) => void, snap: TimelineSnapshot) {
   invalidateZoomKeyframesCache();
   set({
+    ...(snap.blurRegions ? { blurRegions: snap.blurRegions } : {}),
+    selectedBlurRegionId: snap.selectedBlurRegionId ?? null,
+    ...(snap.captions ? { captions: snap.captions } : {}),
+    ...(snap.captionSettings ? { captionSettings: snap.captionSettings } : {}),
+    selectedCaptionId: snap.selectedCaptionId ?? null,
     segments: snap.segments.map((s) => ({ ...s })),
     zoomFragments: snap.zoomFragments.map((z) => ({ ...z, fixedRect: z.fixedRect ? { ...z.fixedRect } : undefined })),
     selectedSegmentId: snap.selectedSegmentId,
@@ -799,18 +823,21 @@ export const useEditorStore = create<EditorStore>((set, get) => ({
   segments: [],
   zoomFragments: [],
   blurRegions: [],
+  selectedBlurRegionId: null,
   selectedSegmentId: null,
   selectedZoomFragmentId: null,
   selectedGapIndex: null,
   historyPast: [],
   historyFuture: [],
 
+  autoTypingZoom: (() => { try { return localStorage.getItem("capptivo-auto-typing-zoom") !== "false"; } catch { return true; } })(),
   exporting: false,
   exportProgress: 0,
   exportStatus: null,
   exportError: null,
 
   captions: [],
+  selectedCaptionId: null,
   captionSettings: { ...DEFAULT_CAPTION_SETTINGS },
   captionGenerating: false,
   captionError: null,
@@ -845,12 +872,14 @@ export const useEditorStore = create<EditorStore>((set, get) => ({
       segments: [],
       zoomFragments: [],
       blurRegions: [],
+      selectedBlurRegionId: null,
       selectedSegmentId: null,
       selectedZoomFragmentId: null,
       selectedGapIndex: null,
       historyPast: [],
       historyFuture: [],
       captions: [],
+      selectedCaptionId: null,
       captionSettings: { ...DEFAULT_CAPTION_SETTINGS },
       captionGenerating: false,
       captionError: null,
@@ -1176,22 +1205,39 @@ export const useEditorStore = create<EditorStore>((set, get) => ({
     schedulePersist(get);
   },
   addBlurRegion() {
-    set((s) => ({ blurRegions: [...s.blurRegions, createBlurRegion()] }));
-    schedulePersist(get);
+    const s = get(); if (!(s.duration > 0)) return;
+    const map = compactTimeline(s.segments, s.duration);
+    const at = Math.max(0, Math.min(map.duration - 0.2, sourceToTimeline(map.clips, s.currentTime)));
+    const region = { ...createBlurRegion(), enabled: true,
+      start: timelineToSource(map.clips, at),
+      end: timelineToSource(map.clips, Math.min(map.duration, at+3), "end") };
+    const before = snapshotOf(s);
+    set({ blurRegions: [...s.blurRegions, region], selectedBlurRegionId: region.id,
+      selectedCaptionId: null, selectedZoomFragmentId: null, selectedSegmentId: null,
+      selectedGapIndex: null, inspectorPanel: "look", isPlaying: false, currentTime: region.start });
+    pushHistory(get, set, before); schedulePersist(get);
+  },
+  selectBlurRegion(id) {
+    set({ selectedBlurRegionId: id, selectedCaptionId: null, selectedZoomFragmentId: null,
+      selectedSegmentId: null, selectedGapIndex: null, inspectorPanel: "look", isPlaying: false });
+  },
+  retimeBlurRegion(id, start, end) {
+    const duration = get().duration;
+    const left = Math.max(0, Math.min(duration-0.2, start));
+    const right = Math.max(left+0.2, Math.min(duration, end));
+    get().updateBlurRegion(id, { start: left, end: right });
   },
   updateBlurRegion(id, patch) {
-    set((s) => ({
-      blurRegions: s.blurRegions.map((region) =>
-        region.id === id ? clampBlurRegion({ ...region, ...patch }) : region,
-      ),
-    }));
+    const before = editSnapshot ? null : snapshotOf(get());
+    set((s) => ({ blurRegions: s.blurRegions.map(region =>
+      region.id === id ? clampBlurRegion({ ...region, ...patch }) : region) }));
+    if (before) pushHistory(get, set, before);
     schedulePersist(get);
   },
   removeBlurRegion(id) {
-    set((s) => ({
-      blurRegions: s.blurRegions.filter((region) => region.id !== id),
-    }));
-    schedulePersist(get);
+    const before = snapshotOf(get());
+    set((s) => ({ blurRegions: s.blurRegions.filter(region => region.id !== id), selectedBlurRegionId: null }));
+    pushHistory(get, set, before); schedulePersist(get);
   },
   setInspectorPanel(inspectorPanel) {
     set({ inspectorPanel });
@@ -1235,12 +1281,86 @@ export const useEditorStore = create<EditorStore>((set, get) => ({
     }
   },
 
+  addTimelineCaption(at) {
+    const s = get();
+    if (s.captionGenerating) return;
+    const compact = compactTimeline(s.segments, s.duration);
+    const visibleCaptions = s.captions.map(cue => {
+      const range = projectTimelineRange(compact.clips, cue.startMs/1000, cue.endMs/1000);
+      return { ...cue, startMs: range.start*1000, endMs: range.end*1000 };
+    }).filter(cue => cue.endMs > cue.startMs);
+    const range = freeCaptionRange(visibleCaptions, sourceToTimeline(compact.clips, at ?? s.currentTime)*1000, compact.duration*1000);
+    if (!range) { showWarning("No free space for another caption."); return; }
+    const before = snapshotOf(s);
+    const cue: CaptionCue = { id: crypto.randomUUID(), text: "Write your caption…", manual: true,
+      startMs: Math.round(timelineToSource(compact.clips, range.startMs/1000)*1000),
+      endMs: Math.round(timelineToSource(compact.clips, range.endMs/1000, "end")*1000) };
+    set({ captions: [...s.captions, cue].sort((a,b) => a.startMs-b.startMs),
+      captionSettings: { ...s.captionSettings, enabled: true },
+      selectedCaptionId: cue.id, selectedBlurRegionId: null, selectedZoomFragmentId: null, selectedGapIndex: null,
+      selectedSegmentId: null, inspectorPanel: "captions", isPlaying: false,
+      currentTime: cue.startMs / 1000 });
+    pushHistory(get, set, before);
+    schedulePersist(get);
+  },
+
+  selectCaption(id, seek = true) {
+    const s = get();
+    const cue = s.captions.find(c => c.id === id);
+    const compact = compactTimeline(s.segments, s.duration);
+    const time = cue ? timelineToSource(compact.clips, sourceToTimeline(compact.clips, cue.startMs/1000)) : null;
+    set({ selectedBlurRegionId: null, selectedCaptionId: id, selectedZoomFragmentId: null, selectedGapIndex: null,
+      selectedSegmentId: null, inspectorPanel: "captions", isPlaying: false,
+      ...(seek && time !== null ? { currentTime: time } : {}) });
+  },
+
+  setCaptionAnchor(id, anchor) {
+    if (anchor && ![anchor.x, anchor.y].every(Number.isFinite)) return;
+    set({ captions: get().captions.map(cue => cue.id === id ? { ...cue,
+      anchor: anchor ? { x: Math.max(0, Math.min(1, anchor.x)), y: Math.max(0, Math.min(1, anchor.y)) } : undefined,
+    } : cue) });
+    schedulePersist(get);
+  },
+
+  retimeTimelineCaption(id, start, end, mode) {
+    const s = get();
+    if (s.captionGenerating) return;
+    const captions = retimeCaption(s.captions, id, start * 1000, end * 1000, s.duration * 1000, mode);
+    if (captions === s.captions) return;
+    set({ captions });
+    schedulePersist(get);
+  },
+
+  saveManualCaption(draft) {
+    const s = get();
+    if (s.captionGenerating) return "Wait until caption generation finishes.";
+    const before = snapshotOf(s);
+    const result = saveManualCue(s.captions, draft, s.duration * 1000);
+    if (result.error) return result.error;
+    set({ captions: result.cues, captionError: null,
+      captionSettings: { ...s.captionSettings, enabled: true } });
+    pushHistory(get, set, before);
+    schedulePersist(get);
+    return null;
+  },
+
+  removeManualCaption(id) {
+    if (get().captionGenerating) return;
+    const before = snapshotOf(get());
+    set({ captions: get().captions.filter(c => c.id !== id), selectedCaptionId: null });
+    pushHistory(get, set, before);
+    schedulePersist(get);
+  },
+
   clearCaptions() {
+    const before = snapshotOf(get());
     set({
       captions: [],
+      selectedCaptionId: null,
       captionSettings: { ...get().captionSettings, enabled: false },
       captionError: null,
     });
+    pushHistory(get, set, before);
     schedulePersist(get);
   },
 
@@ -1294,14 +1414,16 @@ export const useEditorStore = create<EditorStore>((set, get) => ({
   },
 
   selectGap(index) {
-    set({
+    set({ selectedBlurRegionId: null,
+      selectedCaptionId: null,
       selectedGapIndex: index,
       selectedSegmentId: null,
       selectedZoomFragmentId: null,
     });
   },
   selectZoomFragment(id) {
-    set({
+    set({ selectedBlurRegionId: null,
+      selectedCaptionId: null,
       selectedZoomFragmentId: id,
       selectedGapIndex: null,
       selectedSegmentId: null,
@@ -1309,7 +1431,8 @@ export const useEditorStore = create<EditorStore>((set, get) => ({
     });
   },
   selectSegment(id) {
-    set({
+    set({ selectedBlurRegionId: null,
+      selectedCaptionId: null,
       selectedSegmentId: id,
       selectedGapIndex: null,
       selectedZoomFragmentId: null,
@@ -1333,6 +1456,7 @@ export const useEditorStore = create<EditorStore>((set, get) => ({
       const fragment = createDefaultZoomFragment(start, end, recordingMetadata);
       invalidateZoomKeyframesCache();
       set({
+        selectedCaptionId: null, selectedBlurRegionId: null,
         zoomFragments: [...get().zoomFragments, fragment],
         selectedZoomFragmentId: fragment.id,
         selectedGapIndex: null,
@@ -1364,6 +1488,24 @@ export const useEditorStore = create<EditorStore>((set, get) => ({
     schedulePersist(get);
   },
 
+  setAutoTypingZoom(enabled) {
+    set({ autoTypingZoom: enabled });
+    try { localStorage.setItem("capptivo-auto-typing-zoom", String(enabled)); } catch { /* optional preference */ }
+  },
+
+  suggestTypingZooms() {
+    const s = get();
+    const typing = s.recordingMetadata?.cursorTypingSamples ?? [];
+    if (!typing.length) { showWarning("No typing data in this recording. Make a new Windows recording with this version."); return; }
+    const spans = buildTypingZoomSuggestions(typing, s.duration, s.zoomFragments);
+    if (!spans.length) { showWarning("No free typing sections. Existing zooms are preserved."); return; }
+    const before = snapshotOf(s);
+    const added = spans.map(span => ({ ...createSuggestedZoomFragment(span.start, span.end, s.recordingMetadata, 1.65), followSource: "typing" as const, typingFocus: span.focus }));
+    invalidateZoomKeyframesCache();
+    set({ zoomFragments: [...s.zoomFragments, ...added].sort((a,b) => a.start-b.start), selectedZoomFragmentId: added[0].id, selectedBlurRegionId: null, selectedCaptionId: null, selectedSegmentId: null, inspectorPanel: "zoom" });
+    pushHistory(get, set, before); schedulePersist(get);
+  },
+
   suggestZoomsFromClicks(opts) {
     const force = opts?.force === true;
     const selectPanel = opts?.selectPanel === true;
@@ -1373,10 +1515,11 @@ export const useEditorStore = create<EditorStore>((set, get) => ({
     if (!force && zoomFragments.length > 0) return "no-slots";
 
     const clicks = recordingMetadata?.cursorClickSamples ?? [];
-    const result = buildClickZoomSuggestions({
+    const result = buildAutomaticZoomSuggestions({
       clicks,
+      typing: get().autoTypingZoom ? recordingMetadata?.cursorTypingSamples ?? [] : [],
       duration,
-      reservedSpans: force
+      reserved: force
         ? zoomFragments.map((z) => ({ start: z.start, end: z.end }))
         : [],
     });
@@ -1386,14 +1529,11 @@ export const useEditorStore = create<EditorStore>((set, get) => ({
     }
 
     const before = snapshotOf(get());
-    const added = result.suggestions.map((span) =>
-      createSuggestedZoomFragment(
-        span.start,
-        span.end,
-        recordingMetadata,
-        AUTO_ZOOM_TARGET_SCALE,
-      ),
-    );
+    const added = result.suggestions.map(span => ({
+      ...createSuggestedZoomFragment(span.start, span.end, recordingMetadata,
+        span.typing ? 1.65 : AUTO_ZOOM_TARGET_SCALE),
+      ...(span.typing ? { followSource: "typing" as const, typingFocus: span.focus } : {}),
+    }));
 
     invalidateZoomKeyframesCache();
     set({
@@ -1409,6 +1549,8 @@ export const useEditorStore = create<EditorStore>((set, get) => ({
   },
 
   deleteSelected() {
+    if (get().selectedBlurRegionId) { get().removeBlurRegion(get().selectedBlurRegionId!); return; }
+    if (get().selectedCaptionId) { get().removeManualCaption(get().selectedCaptionId!); return; }
     const before = snapshotOf(get());
     const { selectedGapIndex, duration, segments, selectedZoomFragmentId, selectedSegmentId } =
       get();
@@ -1447,9 +1589,9 @@ export const useEditorStore = create<EditorStore>((set, get) => ({
     }
 
     if (selectedSegmentId) {
-      const next = removeSegmentById(segments, selectedSegmentId);
-      if (next.length === segments.length) return;
-      set({ segments: next, selectedSegmentId: null });
+      const result = removeVideoClip(segments, selectedSegmentId, get().currentTime);
+      if (!result) { showWarning("Keep at least one video clip. Split the clip first (S), then delete the unwanted piece."); return; }
+      set({ segments: result.segments, selectedSegmentId: null, currentTime: result.currentTime, isPlaying: false });
       pushHistory(get, set, before);
       schedulePersist(get);
     }
@@ -1539,9 +1681,11 @@ export const useEditorStore = create<EditorStore>((set, get) => ({
       if (next.length === segments.length) return false;
       set({
         segments: next,
-        selectedSegmentId: null,
+        selectedSegmentId: next.find(segment => segment.start >= t)?.id ?? null,
         selectedZoomFragmentId: null,
+        selectedCaptionId: null, selectedBlurRegionId: null,
         selectedGapIndex: null,
+        currentTime: t, isPlaying: false,
       });
       pushHistory(get, set, before);
       schedulePersist(get);

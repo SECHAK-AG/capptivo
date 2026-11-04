@@ -92,7 +92,7 @@ export async function loadRecordingMetadata(
       sourceWidth: sourceSize?.width ?? data.captureRect?.width ?? 1920,
       sourceHeight: sourceSize?.height ?? data.captureRect?.height ?? 1080,
       cursorSamples: suppressShapeBlips(
-        samples.map((s) => ({
+        samples.filter(s => s.kind !== "typing").map((s) => ({
           t: Number(s.t) || 0,
           x: Number(s.x) || 0,
           y: Number(s.y) || 0,
@@ -106,6 +106,9 @@ export async function loadRecordingMetadata(
           x: Number(s.x) || 0,
           y: Number(s.y) || 0,
         })),
+      cursorTypingSamples: samples.filter(s => s.kind === "typing")
+        .map(s => ({ t: Number(s.t), x: Number(s.x), y: Number(s.y) }))
+        .filter(s => [s.t, s.x, s.y].every(Number.isFinite)),
       cursorPressIntervals: buildPressIntervals(samples),
     };
   } catch {

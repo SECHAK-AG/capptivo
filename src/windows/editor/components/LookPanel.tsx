@@ -40,6 +40,8 @@ const BG_TAB_LABEL_KEY: Record<BackgroundType, TranslationKey> = {
 export function LookPanel({ visible = true }: { visible?: boolean }) {
   const { t } = useI18n();
   const blurRegions = useEditorStore((s) => s.blurRegions);
+  const selectedBlurRegionId = useEditorStore(s => s.selectedBlurRegionId);
+  const selectBlurRegion = useEditorStore(s => s.selectBlurRegion);
   const addBlurRegion = useEditorStore((s) => s.addBlurRegion);
   const updateBlurRegion = useEditorStore((s) => s.updateBlurRegion);
   const removeBlurRegion = useEditorStore((s) => s.removeBlurRegion);
@@ -105,6 +107,8 @@ export function LookPanel({ visible = true }: { visible?: boolean }) {
           videoUrl={previewUrl}
           fileAspect={sourceAspect}
           regions={blurRegions}
+          selectedRegionId={selectedBlurRegionId}
+          onSelect={selectBlurRegion}
           onAdd={addBlurRegion}
           onChange={updateBlurRegion}
           onRemove={removeBlurRegion}

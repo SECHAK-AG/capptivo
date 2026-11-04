@@ -1,3 +1,4 @@
+import { captionBlockBounds } from "./settings.ts";
 import type { CaptionCue } from "./types";
 import type { CaptionSettings } from "./settings";
 import {
@@ -164,6 +165,23 @@ export function captionFrameKey(
   return `${cueId(resolved.cue)}|${resolved.activeWordIndex}|${stageWidth}x${stageHeight}|${JSON.stringify(settings)}`;
 }
 
+/** Canvas-measured hitbox used by the draggable preview overlay. */
+export function measureCaptionBounds(ctx: CanvasRenderingContext2D, cue: CaptionCue,
+  settings: CaptionSettings, stageWidth: number, stageHeight: number) {
+  const resolved = resolveActiveCueWords([cue], cue.startMs);
+  const words = resolved?.words.length ? resolved.words : fallbackWordsFromText(cue);
+  ctx.save(); ctx.font = `700 ${settings.fontSizePx}px ${settings.fontFamily}`;
+  const layout = getCaptionLayout(ctx, cue, words, settings.fontSizePx, settings.fontFamily,
+    Math.max(120, Math.min(stageWidth*0.86, stageWidth-32)));
+  ctx.restore();
+  const font = settings.fontSizePx;
+  const height = layout.lines.length * Math.round(font*1.28)
+    + Math.max(0, layout.lines.length-1) * Math.round(font*0.2)
+    + Math.max(10, Math.round(font*0.32))*2;
+  const width = layout.blockInnerW + Math.max(14, Math.round(font*0.42))*2;
+  return captionBlockBounds(stageWidth, stageHeight, width, height, settings, cue.anchor);
+}
+
 /** Draw subtitles + karaoke word highlight (Whisper timings only; no synthetic word clock). */
 export function drawCaptions(
   ctx: CanvasRenderingContext2D,
@@ -190,7 +208,7 @@ export function drawCaptions(
     phraseWords.length > 0 &&
     activeWordIndex >= 0;
 
-  const fontWeight = 600;
+  const fontWeight = 700;
   const fontSize = settings.fontSizePx;
   const font = `${fontWeight} ${fontSize}px ${settings.fontFamily}`;
 
@@ -219,8 +237,9 @@ export function drawCaptions(
   const blockW = blockInnerW + blockPadX * 2;
   const blockH = lines.length * lineHeight + (lines.length - 1) * lineGap + blockPadY * 2;
 
-  const blockLeft = (stageWidth - blockW) / 2;
-  const blockTop = stageHeight - settings.bottomOffsetPx - blockH;
+  const bounds = captionBlockBounds(stageWidth, stageHeight, blockW, blockH, settings, resolved.cue.anchor);
+  const blockLeft = bounds.left;
+  const blockTop = bounds.top;
 
   const sentBg = settings.sentenceBackground;
   const wordBg = settings.wordBackground;
@@ -264,6 +283,12 @@ export function drawCaptions(
       ctx.fillStyle = isActive
         ? (settings.wordTextColor ?? settings.textColor)
         : settings.textColor;
+      // A subtle shadow keeps white headlines readable without a caption box.
+      if (!settings.sentenceBackground) {
+        ctx.shadowColor = "rgba(0, 0, 0, 0.45)";
+        ctx.shadowBlur = 4;
+        ctx.shadowOffsetY = 2;
+      }
       ctx.fillText(segment, x, textMidY);
       ctx.restore();
 

@@ -1,6 +1,6 @@
 import { useCallback, useRef, useState } from "react";
 import { Trash2 } from "lucide-react";
-import { clampBlurRegion, type BlurRegion } from "@/engine";
+import { isBlurRegionActive, type BlurRegion } from "@/engine";
 
 import { Button } from "@/components/ui/button";
 import { FieldLabelWithHint } from "@/components/ui/field-label-with-hint";
@@ -25,6 +25,8 @@ type BlurRegionsPanelProps = {
   onChange: (id: string, patch: Partial<Omit<BlurRegion, "id">>) => void;
   onRemove: (id: string) => void;
   seekTo?: number;
+  selectedRegionId?: string | null;
+  onSelect?: (id: string | null) => void;
   className?: string;
 };
 
@@ -37,11 +39,13 @@ export function BlurRegionsPanel({
   onChange,
   onRemove,
   seekTo,
-  className,
+  className, selectedRegionId, onSelect,
 }: BlurRegionsPanelProps) {
   const { t } = useI18n();
   const stageRef = useRef<HTMLDivElement>(null);
-  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [localSelectedId, setLocalSelectedId] = useState<string | null>(null);
+  const selectedId = selectedRegionId === undefined ? localSelectedId : selectedRegionId;
+  const setSelectedId = (id: string | null) => { setLocalSelectedId(id); onSelect?.(id); };
   const [measuredAspect, setMeasuredAspect] = useState<number | null>(null);
 
   const stageAspect = fileAspect ?? measuredAspect ?? 16 / 9;
@@ -66,7 +70,7 @@ export function BlurRegionsPanel({
     disabled,
     pick,
     onPick: setSelectedId,
-    onChange: (id, next) => onChange(id, clampBlurRegion({ id, ...next })),
+    onChange: (id, next) => onChange(id, next),
   });
 
   return (
@@ -105,6 +109,12 @@ export function BlurRegionsPanel({
         )}
       </div>
 
+      <p className="text-[11px] text-muted-foreground">Set position and size here. Move or stretch the amber block on the timeline to choose when it appears. Use its eye button to turn it off without deleting it.</p>
+      {regions.map((region, index) => <div key={region.id} className="flex items-center justify-between gap-2 text-xs">
+        <button type="button" className="underline" onClick={() => setSelectedId(region.id)}>Blur {index+1}</button>
+        <label className="flex items-center gap-2">Enabled<input type="checkbox" checked={region.enabled !== false} onChange={e => onChange(region.id, { enabled: e.target.checked })} /></label>
+      </div>)}
+
       {regions.length > 0 && (
         <div
           ref={stageRef}
@@ -133,7 +143,7 @@ export function BlurRegionsPanel({
                   top: `${region.y * 100}%`,
                   width: `${region.width * 100}%`,
                   height: `${region.height * 100}%`,
-                  backdropFilter: "blur(6px)",
+                  backdropFilter: isBlurRegionActive(region, seekTo ?? 0) ? "blur(6px)" : "none",
                 }}
               />
             ))}

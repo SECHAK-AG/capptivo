@@ -1,3 +1,6 @@
+import { BlurTimelineBlock } from "./BlurTimelineBlock";
+import { compactTimeline, sourceToTimeline, timelineToSource, projectTimelineRange } from "../lib/compactTimeline";
+import { CaptionTimelineBlock } from "./CaptionTimelineBlock";
 /**
  * Dual-lane timeline under the preview — trim gaps (rose) + zoom fragments (violet).
  * Pointer drags update the store; playhead seeks source time. The playhead itself
@@ -32,7 +35,6 @@ import { ASPECT_RATIO_PRESETS, type AspectRatioPresetId } from "../lib/compositi
 import { formatTimelineTime, MIN_SEGMENT_LENGTH } from "../lib/timelineMath";
 import { buildTimelineRuler } from "../lib/timelineRuler";
 import { useEditorStore } from "../store";
-import { TrimTimelineBlock } from "./TrimTimelineBlock";
 import { ZoomTimelineBlock } from "./ZoomTimelineBlock";
 
 /** Per-preset hint copy shown in the ratio dropdown ("YouTube / Desktop", …). */
@@ -56,7 +58,9 @@ const BLOCK_INSET = 4;
 const BLOCK_H = LANE_H - BLOCK_INSET * 2;
 const TRIM_TOP = RULER_H;
 const ZOOM_TOP = RULER_H + LANE_H;
-const TRACK_H = RULER_H + LANE_H * 2;
+const BLUR_TOP = RULER_H + LANE_H * 2;
+const CAPTION_TOP = RULER_H + LANE_H * 3;
+const TRACK_H = RULER_H + LANE_H * 4;
 const CLICK_DRAG_PX = 3;
 
 /**
@@ -87,7 +91,11 @@ type DragState =
       length: number;
       startX: number;
     }
-  | { kind: "zoom-edge"; fragmentId: string; edge: "start" | "end" };
+  | { kind: "zoom-edge"; fragmentId: string; edge: "start" | "end" }
+  | { kind: "caption-move"; cueId: string; offset: number; length: number; startX: number }
+  | { kind: "caption-edge"; cueId: string; edge: "start" | "end" }
+  | { kind: "blur-move"; id: string; offset: number; length: number; startX: number }
+  | { kind: "blur-edge"; id: string; edge: "start" | "end" };
 
 export function Timeline({
   onSeek,
@@ -100,9 +108,21 @@ export function Timeline({
 }) {
   const { t } = useI18n();
   const duration = useEditorStore((s) => s.duration);
+  const blurRegions = useEditorStore(s => s.blurRegions);
+  const selectedBlurRegionId = useEditorStore(s => s.selectedBlurRegionId);
+  const addBlurRegion = useEditorStore(s => s.addBlurRegion);
+  const selectBlurRegion = useEditorStore(s => s.selectBlurRegion);
+  const retimeBlurRegion = useEditorStore(s => s.retimeBlurRegion);
+  const updateBlurRegion = useEditorStore(s => s.updateBlurRegion);
+  const captions = useEditorStore(s => s.captions);
+  const selectedCaptionId = useEditorStore(s => s.selectedCaptionId);
+  const addTimelineCaption = useEditorStore(s => s.addTimelineCaption);
+  const selectCaption = useEditorStore(s => s.selectCaption);
+  const retimeTimelineCaption = useEditorStore(s => s.retimeTimelineCaption);
   const segments = useEditorStore((s) => s.segments);
   const zoomFragments = useEditorStore((s) => s.zoomFragments);
   const selectedGapIndex = useEditorStore((s) => s.selectedGapIndex);
+  const selectedSegmentId = useEditorStore(s => s.selectedSegmentId);
   const selectedZoomFragmentId = useEditorStore((s) => s.selectedZoomFragmentId);
   const historyPast = useEditorStore((s) => s.historyPast);
   const historyFuture = useEditorStore((s) => s.historyFuture);
@@ -149,7 +169,8 @@ export function Timeline({
   const targetZoomRef = useRef(MIN_ZOOM);
   const pendingScrollRef = useRef<number | null>(null);
 
-  const safeDuration = duration > 0 ? duration : 1;
+  const compact = useMemo(() => compactTimeline(segments, duration), [segments, duration]);
+  const safeDuration = compact.duration > 0 ? compact.duration : 1;
   const ready = duration > 0;
   const trackWidth = Math.max(1, Math.round(containerWidth * uiZoom));
 
@@ -218,22 +239,21 @@ export function Timeline({
   }, [ready, zoomToValue]);
 
   const gaps = useMemo(
-    () => computeTrimGaps(segments, safeDuration),
-    [segments, safeDuration],
+    () => computeTrimGaps(segments, duration),
+    [segments, duration],
   );
 
-  const clientToTime = useCallback(
-    (clientX: number) => {
-      const el = trackRef.current;
-      if (!el || duration <= 0) return 0;
-      const rect = el.getBoundingClientRect();
-      const x = Math.min(Math.max(0, clientX - rect.left), rect.width);
-      return (x / rect.width) * duration;
-    },
-    [duration],
-  );
+  const clientToEditTime = useCallback((clientX: number) => {
+    const el = trackRef.current;
+    if (!el || compact.duration <= 0) return 0;
+    const rect = el.getBoundingClientRect();
+    return Math.max(0, Math.min(rect.width, clientX-rect.left)) / Math.max(1, rect.width) * compact.duration;
+  }, [compact]);
+  const clientToTime = useCallback((clientX: number, edge: "start" | "end" = "start") =>
+    timelineToSource(compact.clips, clientToEditTime(clientX), edge), [compact, clientToEditTime]);
 
   const selectedExists =
+    !!selectedBlurRegionId || !!selectedCaptionId || !!selectedSegmentId ||
     selectedGapIndex !== null ||
     (!!selectedZoomFragmentId &&
       zoomFragments.some((f) => f.id === selectedZoomFragmentId));
@@ -258,10 +278,13 @@ export function Timeline({
         setAddOpen(false);
         return;
       }
-      if (e.key === "t" || e.key === "T") {
+      if (e.key.toLowerCase() === "s" && !e.ctrlKey && !e.metaKey && !e.altKey) {
         e.preventDefault();
-        addFragment("trim");
+        splitAt({ kind: "trim", time: useEditorStore.getState().currentTime });
         return;
+      }
+      if (e.key.toLowerCase() === "c" && !e.ctrlKey && !e.metaKey && !e.altKey) {
+        e.preventDefault(); setSplitTool(v => !v); return;
       }
       if (e.key === "z" || e.key === "Z") {
         if (e.metaKey || e.ctrlKey) return;
@@ -278,13 +301,41 @@ export function Timeline({
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [addFragment, deleteSelected, redo, selectedExists, undo]);
+  }, [addFragment, deleteSelected, redo, selectedExists, undo, splitAt]);
 
   const onPointerMove = useCallback(
     (e: React.PointerEvent) => {
       const active = dragRef.current;
       if (!active) return;
       const t = clientToTime(e.clientX);
+
+      if (active.kind === "blur-edge" || active.kind === "blur-move") {
+        const region = useEditorStore.getState().blurRegions.find(r => r.id === active.id);
+        if (!region) return;
+        if (active.kind === "blur-edge") {
+          retimeBlurRegion(region.id, active.edge === "start" ? t : region.start ?? 0,
+            active.edge === "end" ? clientToTime(e.clientX, "end") : region.end ?? duration);
+        } else if (Math.abs(e.clientX-active.startX) >= CLICK_DRAG_PX) {
+          const start = Math.max(0, Math.min(compact.duration-active.length, clientToEditTime(e.clientX)-active.offset));
+          retimeBlurRegion(region.id, timelineToSource(compact.clips, start),
+            timelineToSource(compact.clips, start+active.length, "end"));
+        }
+        return;
+      }
+
+      if (active.kind === "caption-edge" || active.kind === "caption-move") {
+        const cue = useEditorStore.getState().captions.find(c => c.id === active.cueId);
+        if (!cue) return;
+        if (active.kind === "caption-edge") {
+          retimeTimelineCaption(cue.id, active.edge === "start" ? t : cue.startMs / 1000,
+            active.edge === "end" ? clientToTime(e.clientX, "end") : cue.endMs / 1000, active.edge);
+        } else if (Math.abs(e.clientX - active.startX) >= CLICK_DRAG_PX) {
+          const start = Math.max(0, Math.min(compact.duration-active.length, clientToEditTime(e.clientX)-active.offset));
+          retimeTimelineCaption(cue.id, timelineToSource(compact.clips, start),
+            timelineToSource(compact.clips, start+active.length, "end"), "move");
+        }
+        return;
+      }
 
       if (active.kind === "playhead") {
         onSeek(t);
@@ -316,28 +367,20 @@ export function Timeline({
         if (active.edge === "start") {
           moveZoomFragment(frag.id, t, frag.end);
         } else {
-          moveZoomFragment(frag.id, frag.start, t);
+          moveZoomFragment(frag.id, frag.start, clientToTime(e.clientX, "end"));
         }
         return;
       }
       if (active.kind === "zoom-move") {
         if (Math.abs(e.clientX - active.startX) < CLICK_DRAG_PX) return;
-        let nextStart = t - active.offset;
-        let nextEnd = nextStart + active.length;
-        if (nextStart < 0) {
-          nextEnd -= nextStart;
-          nextStart = 0;
-        }
-        if (nextEnd > duration) {
-          const over = nextEnd - duration;
-          nextStart = Math.max(0, nextStart - over);
-          nextEnd = duration;
-        }
-        moveZoomFragment(active.fragmentId, nextStart, nextEnd);
+        const nextStart = Math.max(0, Math.min(compact.duration-active.length, clientToEditTime(e.clientX)-active.offset));
+        moveZoomFragment(active.fragmentId, timelineToSource(compact.clips, nextStart),
+          timelineToSource(compact.clips, nextStart+active.length, "end"));
       }
     },
     [
-      clientToTime,
+      clientToTime, clientToEditTime, compact,
+      retimeTimelineCaption, retimeBlurRegion,
       duration,
       moveTrimGap,
       moveZoomFragment,
@@ -373,6 +416,10 @@ export function Timeline({
   const startDrag = (e: React.PointerEvent, state: DragState) => {
     e.stopPropagation();
     e.preventDefault();
+    if (state.kind === "blur-move" || state.kind === "blur-edge") selectBlurRegion(state.id);
+    else if (state.kind === "caption-move" || state.kind === "caption-edge") selectCaption(state.cueId);
+    else if (state.kind === "zoom-move" || state.kind === "zoom-edge") selectZoomFragment(state.fragmentId);
+    else if (state.kind === "gap-move" || state.kind === "gap-edge") selectGap(state.gapIndex);
     dragRef.current = state;
     (e.currentTarget as HTMLElement).setPointerCapture?.(e.pointerId);
     if (state.kind !== "playhead") {
@@ -390,12 +437,7 @@ export function Timeline({
     const t = clientToTime(e.clientX);
 
     if (splitTool) {
-      const zoomHit = zoomFragments.find((f) => t >= f.start && t <= f.end);
-      if (zoomHit) {
-        if (splitAt({ kind: "zoom", fragmentId: zoomHit.id, time: t })) setSplitTool(false);
-        return;
-      }
-      if (splitAt({ kind: "trim", time: t })) setSplitTool(false);
+      splitAt({ kind: "trim", time: t });
       return;
     }
 
@@ -410,7 +452,7 @@ export function Timeline({
     const apply = (time: number) => {
       const el = playheadRef.current;
       if (!el) return;
-      const pct = Math.min(100, Math.max(0, (time / safeDuration) * 100));
+      const pct = Math.min(100, Math.max(0, (sourceToTimeline(compact.clips, time) / safeDuration) * 100));
       el.style.transform = `translate3d(${pct}%, 0, 0)`;
     };
 
@@ -449,7 +491,7 @@ export function Timeline({
       unsub();
       if (raf) cancelAnimationFrame(raf);
     };
-  }, [safeDuration, videoRef]);
+  }, [safeDuration, videoRef, compact]);
 
   const pixelsPerSecond = trackWidth / safeDuration;
   const rulerTicks = useMemo(
@@ -489,19 +531,24 @@ export function Timeline({
                 <ZoomIn className="size-4 text-muted-foreground" />
                 {t("timeline.zoom")}
               </DropdownMenuItem>
-              <DropdownMenuItem onClick={() => addFragment("trim")}>
-                <Scissors className="size-4 text-muted-foreground" />
-                {t("timeline.trim")}
+              <DropdownMenuItem onClick={() => addTimelineCaption()}>T · Caption</DropdownMenuItem>
+              <DropdownMenuItem onClick={addBlurRegion}>Blur area</DropdownMenuItem>
+              <DropdownMenuItem onClick={() => splitAt({ kind: "trim", time: useEditorStore.getState().currentTime })}>
+                <Scissors className="size-4 text-muted-foreground" />Split video at playhead (S)
               </DropdownMenuItem>
             </DropdownMenuContent>
           </DropdownMenu>
         </div>
 
+        <Button type="button" variant="outline" size="sm" onClick={() => addTimelineCaption()}>+ Text</Button>
+        <Button type="button" variant="outline" size="sm" onClick={addBlurRegion}>+ Blur</Button>
+        <Button type="button" variant="outline" size="sm" onClick={() => splitAt({ kind: "trim", time: useEditorStore.getState().currentTime })}>Split (S)</Button>
+
         <div className="flex h-9 shrink-0 items-center overflow-hidden rounded-lg border border-border bg-muted">
           <button
             type="button"
             aria-pressed={splitTool}
-            title={splitTool ? t("timeline.split.on") : t("timeline.split.off")}
+            title={splitTool ? "Cut tool active (C) · Click a video clip to split · Esc to exit" : "Cut tool (C) · Click a video clip to split"}
             onClick={() => setSplitTool((v) => !v)}
             disabled={duration <= 0}
             className={cn(
@@ -638,6 +685,7 @@ export function Timeline({
         </div>
       </div>
 
+      <p className="px-4 pb-2 text-[11px] text-muted-foreground">Edited video · {formatTimelineTime(compact.duration)} · Clips join automatically. Zoom and text stay attached to the recording. Ctrl+Z restores a cut.</p>
       <div className="w-full max-w-full min-w-0 px-4 pb-4">
         <div className="flex w-full min-w-0 items-stretch">
           <div
@@ -657,6 +705,7 @@ export function Timeline({
               style={{ width: trackWidth, minWidth: "100%", height: TRACK_H }}
               onPointerMove={onPointerMove}
               onPointerUp={onPointerUp}
+              onPointerCancel={onPointerUp}
               onPointerDown={(e) => {
                 if ((e.target as HTMLElement).closest("[data-block]")) return;
                 startDrag(e, { kind: "playhead" });
@@ -710,14 +759,6 @@ export function Timeline({
             className="pointer-events-none absolute inset-x-0 bg-foreground/2"
             style={{ top: ZOOM_TOP, height: LANE_H }}
           />
-          {gaps.length === 0 && (
-            <div
-              className="pointer-events-none absolute inset-x-0 z-1 flex items-center justify-center text-[11px] text-muted-foreground"
-              style={{ top: TRIM_TOP, height: LANE_H }}
-            >
-              {t("timeline.pressT")}
-            </div>
-          )}
           {zoomFragments.length === 0 && (
             <div
               className="pointer-events-none absolute inset-x-0 z-1 flex items-center justify-center text-[11px] text-muted-foreground"
@@ -727,46 +768,27 @@ export function Timeline({
             </div>
           )}
 
-          {/* Trim gaps */}
-          {gaps.map((gap, idx) => {
-            const selected = selectedGapIndex === idx;
-            return (
-              <div
-                key={`g-${gap.start.toFixed(3)}-${gap.end.toFixed(3)}`}
-                data-block
-                className="absolute z-10 cursor-pointer"
-                style={{
-                  top: TRIM_TOP + BLOCK_INSET,
-                  height: BLOCK_H,
-                  left: `${(gap.start / safeDuration) * 100}%`,
-                  width: `${((gap.end - gap.start) / safeDuration) * 100}%`,
-                }}
-                onPointerDown={(e) => {
-                  if ((e.target as HTMLElement).closest("[data-handle]")) return;
-                  const pointerTime = clientToTime(e.clientX);
-                  startDrag(e, {
-                    kind: "gap-move",
-                    gapIndex: idx,
-                    offset: Math.max(0, pointerTime - gap.start),
-                    length: Math.max(MIN_SEGMENT_LENGTH, gap.end - gap.start),
-                    startX: e.clientX,
-                  });
-                }}
-              >
-                <TrimTimelineBlock
-                  start={gap.start}
-                  end={gap.end}
-                  selected={selected}
-                  onResizePointerDown={(edge, e) =>
-                    startDrag(e, { kind: "gap-edge", gapIndex: idx, edge })
-                  }
-                />
-              </div>
-            );
-          })}
+          {/* Kept clips meet directly at each cut. All layers stay in source time internally. */}
+          {compact.clips.map((clip, index) => <button key={clip.id} data-block type="button"
+            className={cn('absolute z-10 flex items-center justify-center overflow-hidden rounded-md border px-2 text-[11px] text-white',
+              selectedSegmentId === clip.id ? 'border-emerald-200 bg-emerald-600' : 'border-emerald-500/50 bg-emerald-900 hover:bg-emerald-800',
+              splitTool ? 'cursor-crosshair' : 'cursor-pointer')}
+            style={{ top: TRIM_TOP + BLOCK_INSET, height: BLOCK_H,
+              left: `${clip.timelineStart / safeDuration * 100}%`, width: `${(clip.end-clip.start) / safeDuration * 100}%` }}
+            title={`Video ${index+1} · ${formatTimelineTime(clip.start)}–${formatTimelineTime(clip.end)} · Select and press Delete; double-click to split`}
+            onPointerDown={e => {
+              e.stopPropagation(); e.preventDefault();
+              if (splitTool) { splitAt({ kind: "trim", time: clientToTime(e.clientX) }); return; }
+              selectSegment(clip.id); onSeek(clientToTime(e.clientX));
+            }}
+            onDoubleClick={e => { e.stopPropagation(); splitAt({ kind: "trim", time: clientToTime(e.clientX) }); }}>
+            <span className="truncate">Video {index+1} · {(clip.end-clip.start).toFixed(1)} s</span>
+          </button>)}
 
           {/* Zoom fragments */}
           {zoomFragments.map((frag) => {
+            const range = projectTimelineRange(compact.clips, frag.start, frag.end);
+            if (range.duration <= 0) return null;
             const selected = frag.id === selectedZoomFragmentId;
             return (
               <div
@@ -776,17 +798,17 @@ export function Timeline({
                 style={{
                   top: ZOOM_TOP + BLOCK_INSET,
                   height: BLOCK_H,
-                  left: `${(frag.start / safeDuration) * 100}%`,
-                  width: `${((frag.end - frag.start) / safeDuration) * 100}%`,
+                  left: `${(range.start / safeDuration) * 100}%`,
+                  width: `${(range.duration / safeDuration) * 100}%`,
                 }}
                 onPointerDown={(e) => {
                   if ((e.target as HTMLElement).closest("[data-handle]")) return;
-                  const pointerTime = clientToTime(e.clientX);
+                  const pointerTime = clientToEditTime(e.clientX);
                   startDrag(e, {
                     kind: "zoom-move",
                     fragmentId: frag.id,
-                    offset: Math.max(0, pointerTime - frag.start),
-                    length: Math.max(MIN_SEGMENT_LENGTH, frag.end - frag.start),
+                    offset: Math.max(0, pointerTime - range.start),
+                    length: range.duration,
                     startX: e.clientX,
                   });
                 }}
@@ -804,6 +826,50 @@ export function Timeline({
                 />
               </div>
             );
+          })}
+
+          <div className="pointer-events-none absolute inset-x-0 bg-amber-500/5" style={{ top: BLUR_TOP, height: LANE_H }}>
+            {blurRegions.length === 0 && <span className="flex h-full items-center justify-center text-[11px] text-muted-foreground">Blur areas · + Blur to add · Drag edges to set when it is visible</span>}
+          </div>
+          {blurRegions.map((region, index) => {
+            const range = projectTimelineRange(compact.clips, region.start ?? 0, region.end ?? duration);
+            if (range.duration <= 0) return null;
+            return <div key={region.id} data-block className="absolute z-10 cursor-grab touch-none"
+              style={{ top: BLUR_TOP+BLOCK_INSET, height: BLOCK_H, left: `${range.start/safeDuration*100}%`, width: `${range.duration/safeDuration*100}%` }}
+              onPointerDown={e => {
+                if ((e.target as HTMLElement).closest('[data-handle]')) return;
+                startDrag(e, { kind: "blur-move", id: region.id, offset: Math.max(0, clientToEditTime(e.clientX)-range.start), length: range.duration, startX: e.clientX });
+              }}>
+              <BlurTimelineBlock enabled={region.enabled !== false} selected={selectedBlurRegionId === region.id} index={index}
+                onToggle={() => updateBlurRegion(region.id, { enabled: region.enabled === false })}
+                onResize={(edge, e) => startDrag(e, { kind: "blur-edge", id: region.id, edge })} />
+            </div>;
+          })}
+
+          <div data-block className="absolute inset-x-0 bg-sky-500/5" style={{ top: CAPTION_TOP, height: LANE_H }}
+            onDoubleClick={e => { e.stopPropagation(); addTimelineCaption(clientToTime(e.clientX)); }}
+            onPointerDown={e => { if (e.target === e.currentTarget) e.stopPropagation(); }}
+            title="Double-click to add text here">
+            {captions.length === 0 && <span className="pointer-events-none flex h-full items-center justify-center text-[11px] text-muted-foreground">Captions · Double-click to add text, then drag its edges</span>}
+          </div>
+          {captions.map(cue => {
+            const range = projectTimelineRange(compact.clips, cue.startMs/1000, cue.endMs/1000);
+            if (range.duration <= 0) return null;
+            return <div key={cue.id} data-block
+            className="absolute z-10 cursor-grab touch-none"
+            style={{ top: CAPTION_TOP + BLOCK_INSET, height: BLOCK_H,
+              left: `${range.start / safeDuration * 100}%`,
+              width: `${range.duration / safeDuration * 100}%` }}
+            onDoubleClick={e => { e.stopPropagation(); selectCaption(cue.id); }}
+            onPointerDown={e => {
+              if ((e.target as HTMLElement).closest('[data-handle]')) return;
+              startDrag(e, { kind: "caption-move", cueId: cue.id,
+                offset: Math.max(0, clientToEditTime(e.clientX)-range.start),
+                length: range.duration, startX: e.clientX });
+            }}>
+            <CaptionTimelineBlock cue={cue} selected={selectedCaptionId === cue.id}
+              onResizePointerDown={(edge, e) => startDrag(e, { kind: "caption-edge", cueId: cue.id, edge })} />
+          </div>;
           })}
 
           {/* Playhead — full-width transform layer so % is of the track. */}
